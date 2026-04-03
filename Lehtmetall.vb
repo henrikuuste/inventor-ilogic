@@ -1,28 +1,30 @@
-' Lehtmetall - Teisenda tahke detail lehtmetalliks
-' Teisendab aktiivse detaili lehtmetalliks, ekspordib Thickness iProperty'na,
-' seab Width/Length kohandatud omadused lehtmetalli avaldistega
-' ja loob sirge mustri peale A-külje pinna valimist.
+' Lehtmetall - Convert solid part to sheet metal
+' Converts the active part to sheet metal, measures thickness from geometry,
+' exports Thickness as iProperty, sets Width/Length custom properties
+' with sheet metal expressions, and creates flat pattern.
 
 Sub Main()
     Dim app As Inventor.Application = ThisApplication
     Dim doc As Document = ThisDoc.Document
     
-    ' Kontrolli dokumendi tüüpi
+    Logger.Info("Lehtmetall: Starting conversion...")
+    
+    ' Validate document type
     If doc.DocumentType <> DocumentTypeEnum.kPartDocumentObject Then
-        MessageBox.Show("Seda reeglit saab käivitada ainult detaili dokumendil.", "Lehtmetall")
+        Logger.Error("Lehtmetall: This rule can only be run on a part document.")
         Exit Sub
     End If
     
     Dim partDoc As PartDocument = CType(doc, PartDocument)
     Dim compDef As PartComponentDefinition = partDoc.ComponentDefinition
     
-    ' Kontrolli, kas on olemas tahke keha
+    ' Check if solid body exists
     If compDef.SurfaceBodies.Count = 0 Then
-        MessageBox.Show("Detailil puudub tahke keha. Veendu, et detail sisaldab geomeetriat enne lehtmetalliks teisendamist.", "Lehtmetall")
+        Logger.Error("Lehtmetall: Part has no solid body. Ensure the part contains geometry before converting to sheet metal.")
         Exit Sub
     End If
     
-    ' Kontrolli, kas tahke keha on olemas (mitte ainult pinnad)
+    ' Check if solid body exists (not just surfaces)
     Dim hasSolidBody As Boolean = False
     For Each body As SurfaceBody In compDef.SurfaceBodies
         If body.IsSolid Then
@@ -32,34 +34,145 @@ Sub Main()
     Next
     
     If Not hasSolidBody Then
-        MessageBox.Show("Detailil puudub tahke keha. Leitud on ainult pinnad, mis ei sobi lehtmetalliks teisendamiseks.", "Lehtmetall")
+        Logger.Error("Lehtmetall: Part has no solid body. Only surfaces found, which are not suitable for sheet metal conversion.")
         Exit Sub
     End If
     
-    ' Kontrolli, kas on juba lehtmetall
+    ' Check if already sheet metal
     Const SHEET_METAL_GUID As String = "{9C464203-9BAE-11D3-8BAD-0060B0CE6BB4}"
     If partDoc.SubType = SHEET_METAL_GUID Then
-        MessageBox.Show("See detail on juba lehtmetall.", "Lehtmetall")
+        Logger.Warn("Lehtmetall: This part is already sheet metal.")
         Exit Sub
     End If
     
-    ' Teisenda lehtmetalliks
+    ' Pick A-side face BEFORE conversion (to measure thickness)
+    Dim aSideFace As Face = PickASideFace(app)
+    If aSideFace Is Nothing Then
+        Exit Sub
+    End If
+    
+    ' Measure thickness along normal
+    Dim thickness As Double = MeasureThicknessAlongNormal(app, aSideFace)
+    Logger.Info("Lehtmetall: Measured thickness = " & FormatNumber(thickness * 10, 2) & " mm")
+    
+    If thickness <= 0 Then
+        Logger.Error("Lehtmetall: Could not measure thickness. Check that the selected face has an opposite face.")
+        Exit Sub
+    End If
+    
+    ' Convert to sheet metal
+    Logger.Info("Lehtmetall: Converting to sheet metal...")
     partDoc.SubType = SHEET_METAL_GUID
     partDoc.Update()
     
-    ' Hangi lehtmetalli komponendi definitsioon
+    ' Get sheet metal component definition
     Dim smCompDef As SheetMetalComponentDefinition = partDoc.ComponentDefinition
     
-    ' Ekspordi Thickness parameeter iProperty'na
+    ' Set active sheet metal style to Default_mm
+    SetSheetMetalStyle(smCompDef, "Default_mm")
+    Logger.Info("Lehtmetall: Set style to Default_mm")
+    
+    ' Set measured thickness
+    SetMeasuredThickness(smCompDef, thickness)
+    
+    ' Export Thickness parameter as iProperty (in mm)
     ExportThicknessAsProperty(smCompDef)
+    Logger.Info("Lehtmetall: Exported Thickness as iProperty")
     
-    ' Sea Width ja Length kohandatud omadused avaldistega
+    ' Set Width and Length custom properties with expressions
     SetSheetMetalProperties(partDoc)
+    Logger.Info("Lehtmetall: Set Width and Length properties")
     
-    ' Küsi kasutajalt A-külje pinna valik ja loo sirge muster
-    CreateFlatPattern(app, smCompDef)
+    ' Create flat pattern using the already selected A-side face
+    CreateFlatPattern(smCompDef, aSideFace)
     
     partDoc.Update()
+    
+    Logger.Info("Lehtmetall: Conversion complete! Thickness: " & FormatNumber(thickness * 10, 2) & " mm")
+End Sub
+
+Function PickASideFace(app As Inventor.Application) As Face
+    Dim aSideFace As Face = Nothing
+    
+    Try
+        aSideFace = app.CommandManager.Pick(SelectionFilterEnum.kPartFacePlanarFilter, _
+            "Vali A-külje pind (ülemine pind) - ESC tühistamiseks")
+    Catch
+        Logger.Warn("Lehtmetall: Face selection cancelled.")
+        Return Nothing
+    End Try
+    
+    If aSideFace Is Nothing Then
+        Logger.Error("Lehtmetall: No face selected.")
+        Return Nothing
+    End If
+    
+    Return aSideFace
+End Function
+
+Function MeasureThicknessAlongNormal(app As Inventor.Application, aSideFace As Face) As Double
+    ' Get face normal at center point
+    Dim evaluator As SurfaceEvaluator = aSideFace.Evaluator
+    Dim paramRange As Box2d = evaluator.ParamRangeRect
+    Dim centerU As Double = (paramRange.MinPoint.X + paramRange.MaxPoint.X) / 2
+    Dim centerV As Double = (paramRange.MinPoint.Y + paramRange.MaxPoint.Y) / 2
+    
+    ' GetNormal takes params array and returns normals array
+    Dim paramsArr() As Double = {centerU, centerV}
+    Dim normalArr() As Double = {}
+    Call evaluator.GetNormal(paramsArr, normalArr)
+    
+    ' Find opposite face - search all faces for parallel face with max distance
+    Dim body As SurfaceBody = aSideFace.Parent
+    Dim maxDistance As Double = 0
+    
+    For Each face As Face In body.Faces
+        If face Is aSideFace Then Continue For
+        If face.SurfaceType <> SurfaceTypeEnum.kPlaneSurface Then Continue For
+        
+        ' Check if parallel (normals are opposite)
+        Dim otherEval As SurfaceEvaluator = face.Evaluator
+        Dim otherRange As Box2d = otherEval.ParamRangeRect
+        Dim otherCenterU As Double = (otherRange.MinPoint.X + otherRange.MaxPoint.X) / 2
+        Dim otherCenterV As Double = (otherRange.MinPoint.Y + otherRange.MaxPoint.Y) / 2
+        
+        Dim otherParamsArr() As Double = {otherCenterU, otherCenterV}
+        Dim otherNormalArr() As Double = {}
+        Call otherEval.GetNormal(otherParamsArr, otherNormalArr)
+        
+        ' Check if anti-parallel (dot product ~ -1)
+        Dim dot As Double = normalArr(0) * otherNormalArr(0) + _
+                            normalArr(1) * otherNormalArr(1) + _
+                            normalArr(2) * otherNormalArr(2)
+        
+        If Math.Abs(dot + 1) < 0.01 Then
+            ' Measure distance between faces
+            Dim dist As Double = app.MeasureTools.GetMinimumDistance(aSideFace, face)
+            If dist > maxDistance Then
+                maxDistance = dist
+            End If
+        End If
+    Next
+    
+    Return maxDistance
+End Function
+
+Sub SetSheetMetalStyle(smCompDef As SheetMetalComponentDefinition, styleName As String)
+    Try
+        Dim mmStyle As SheetMetalStyle = smCompDef.SheetMetalStyles.Item(styleName)
+        mmStyle.Activate()
+    Catch
+        ' Style not found, continue with default
+    End Try
+End Sub
+
+Sub SetMeasuredThickness(smCompDef As SheetMetalComponentDefinition, thickness As Double)
+    Try
+        smCompDef.UseSheetMetalStyleThickness = False
+        smCompDef.Thickness.Value = thickness
+    Catch ex As Exception
+        Logger.Warn("Lehtmetall: Could not set thickness. " & ex.Message)
+    End Try
 End Sub
 
 Sub ExportThicknessAsProperty(smCompDef As SheetMetalComponentDefinition)
@@ -68,8 +181,9 @@ Sub ExportThicknessAsProperty(smCompDef As SheetMetalComponentDefinition)
         thicknessParam.ExposedAsProperty = True
         thicknessParam.CustomPropertyFormat.PropertyType = CustomPropertyTypeEnum.kTextPropertyType
         thicknessParam.CustomPropertyFormat.ShowUnitsString = True
+        thicknessParam.CustomPropertyFormat.Units = "mm"
     Catch ex As Exception
-        MessageBox.Show("Hoiatus: Thickness parameetrit ei õnnestunud iProperty'na eksportida. " & ex.Message, "Lehtmetall")
+        Logger.Warn("Lehtmetall: Could not export Thickness as iProperty. " & ex.Message)
     End Try
 End Sub
 
@@ -77,13 +191,13 @@ Sub SetSheetMetalProperties(partDoc As PartDocument)
     Try
         Dim propSet As PropertySet = partDoc.PropertySets.Item("Inventor User Defined Properties")
         
-        ' Sea Width omadus avaldisega, mis viitab Sheet Metal Width parameetrile
+        ' Set Width property with expression linking to Sheet Metal Width parameter
         SetOrAddProperty(propSet, "Width", "=<Sheet Metal Width>")
         
-        ' Sea Length omadus avaldisega, mis viitab Sheet Metal Length parameetrile
+        ' Set Length property with expression linking to Sheet Metal Length parameter
         SetOrAddProperty(propSet, "Length", "=<Sheet Metal Length>")
     Catch ex As Exception
-        MessageBox.Show("Hoiatus: Width/Length omadusi ei õnnestunud seada. " & ex.Message, "Lehtmetall")
+        Logger.Warn("Lehtmetall: Could not set Width/Length properties. " & ex.Message)
     End Try
 End Sub
 
@@ -98,27 +212,12 @@ Sub SetOrAddProperty(propSet As PropertySet, propName As String, propValue As St
     End Try
 End Sub
 
-Sub CreateFlatPattern(app As Inventor.Application, smCompDef As SheetMetalComponentDefinition)
-    Dim aSideFace As Face = Nothing
-    
-    Try
-        aSideFace = app.CommandManager.Pick(SelectionFilterEnum.kPartFacePlanarFilter, _
-            "Vali A-külje pind sirgeks mustriks (ESC tühistamiseks)")
-    Catch
-        ' Kasutaja tühistas
-        MessageBox.Show("Pinna valik tühistatud. Sirget mustrit ei loodud.", "Lehtmetall")
-        Exit Sub
-    End Try
-    
-    If aSideFace Is Nothing Then
-        MessageBox.Show("Pinda ei valitud. Sirget mustrit ei loodud.", "Lehtmetall")
-        Exit Sub
-    End If
-    
+Sub CreateFlatPattern(smCompDef As SheetMetalComponentDefinition, aSideFace As Face)
     Try
         smCompDef.ASideFace = aSideFace
         smCompDef.Unfold()
+        Logger.Info("Lehtmetall: Flat pattern created")
     Catch ex As Exception
-        MessageBox.Show("Sirget mustrit ei õnnestunud luua: " & ex.Message, "Lehtmetall")
+        Logger.Error("Lehtmetall: Could not create flat pattern: " & ex.Message)
     End Try
 End Sub
