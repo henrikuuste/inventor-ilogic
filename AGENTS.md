@@ -4,6 +4,37 @@ This document captures constraints and best practices for writing Autodesk Inven
 
 - Use the 2026 iLogic API for reference https://help.autodesk.com/view/INVNTOR/2026/ENU/?guid=110f3019-404c-4fc4-8b5d-7a3143f129da
 
+## Language and Logging Conventions
+
+### Language
+
+- **User-facing messages** (prompts, selection instructions) should be in **Estonian**
+- **Script/rule file names** should be in **Estonian**
+- **Everything else** should be in **English**:
+  - Code comments
+  - Log messages
+  - Variable names
+  - Function names
+
+### Logging
+
+- Use `Logger.Info()`, `Logger.Warn()`, `Logger.Error()` to log to the iLogic log window
+- **Do NOT use MessageBox.Show()** for informational summaries or progress updates
+- MessageBox is acceptable only for critical errors that require user acknowledgment before continuing
+- Prefix log messages with the rule name for easy filtering, e.g., `Logger.Info("Lehtmetall: Starting conversion...")`
+
+```vb
+' BAD - blocks user with popup for information
+MessageBox.Show("Conversion complete. Thickness: 2.5 mm", "Lehtmetall")
+
+' GOOD - logs to iLogic log without blocking
+Logger.Info("Lehtmetall: Conversion complete. Thickness: 2.5 mm")
+
+' GOOD - user-facing prompt in Estonian
+aSideFace = app.CommandManager.Pick(SelectionFilterEnum.kPartFacePlanarFilter, _
+    "Vali A-külje pind (ülemine pind) - ESC tühistamiseks")
+```
+
 ## File Structure
 
 ### Runnable Rules vs Library Modules
