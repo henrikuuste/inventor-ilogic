@@ -36,7 +36,7 @@ Public Module BoundingBoxStockLib
             Return "SKIP" ' User skipped this part
         End If
 
-        ' Parse the axis config (format: "T:Z,W:X,L:Y")
+        ' Parse the axis config (format: "T:Z|W:X|L:Y" or "T:V:x,y,z|W:V:x,y,z|L:V:x,y,z")
         Dim thicknessAxis As String = ""
         Dim widthAxis As String = ""
         Dim lengthAxis As String = ""
@@ -68,8 +68,22 @@ Public Module BoundingBoxStockLib
         If thicknessAxis = "" Then
             thicknessAxis = "Z"
             AssignWidthLength(thicknessAxis, xSize, ySize, zSize, widthAxis, lengthAxis)
+        ElseIf IsVectorFormat(thicknessAxis) Then
+            ' Vector format - compute perpendicular vectors for width/length
+            Dim tx As Double = 0, ty As Double = 0, tz As Double = 0
+            Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
+            Dim lx As Double = 0, ly As Double = 0, lz As Double = 0
+            If ParseVectorComponents(thicknessAxis, tx, ty, tz) Then
+                ComputePerpendicularVectors(tx, ty, tz, wx, wy, wz, lx, ly, lz)
+                widthAxis = VectorToString(wx, wy, wz)
+                lengthAxis = VectorToString(lx, ly, lz)
+                customAxisDesc = "Custom (" & FormatVectorDesc(tx, ty, tz) & ")"
+            Else
+                thicknessAxis = "Z"
+                AssignWidthLength(thicknessAxis, xSize, ySize, zSize, widthAxis, lengthAxis)
+            End If
         Else
-            ' Length is the remaining axis (determined by thickness and width)
+            ' Simple axis format - length is the remaining axis
             lengthAxis = GetRemainingAxis(thicknessAxis, widthAxis)
         End If
 
@@ -83,11 +97,28 @@ Public Module BoundingBoxStockLib
             If result = DialogResult.Cancel Then
                 Return ""
             ElseIf result = DialogResult.OK Then
-                Return "T:" & thicknessAxis & ",W:" & widthAxis & ",L:" & lengthAxis
+                Return "T:" & thicknessAxis & "|W:" & widthAxis & "|L:" & lengthAxis
             ElseIf result = DialogResult.No Then
                 ' Skip button pressed (using No for skip)
                 Return "SKIP"
+            ElseIf action = "PICK_PLANE" Then
+                ' Pick face/work plane for thickness direction
+                Dim planeDesc As String = ""
+                Dim pickedVector As String = PickPlaneForThickness(app, planeDesc)
+                If pickedVector <> "" Then
+                    thicknessAxis = pickedVector
+                    customAxisDesc = planeDesc
+                    ' Compute perpendicular vectors for width/length
+                    Dim tx As Double = 0, ty As Double = 0, tz As Double = 0
+                    Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
+                    Dim lx As Double = 0, ly As Double = 0, lz As Double = 0
+                    ParseVectorComponents(pickedVector, tx, ty, tz)
+                    ComputePerpendicularVectors(tx, ty, tz, wx, wy, wz, lx, ly, lz)
+                    widthAxis = VectorToString(wx, wy, wz)
+                    lengthAxis = VectorToString(lx, ly, lz)
+                End If
             ElseIf action = "PICK_THICKNESS" Then
+                ' Legacy: pick edge/axis (maps to principal axis)
                 Dim pickedAxis As String = PickAxisWithDescription(app, customAxisDesc)
                 If pickedAxis <> "" Then
                     thicknessAxis = pickedAxis
@@ -141,15 +172,25 @@ Public Module BoundingBoxStockLib
         action = ""
         Dim uom As UnitsOfMeasure = partDoc.UnitsOfMeasure
 
-        Dim thicknessValue As Double = GetAxisSize(thicknessAxis, xSize, ySize, zSize)
-        Dim widthValue As Double = GetAxisSize(widthAxis, xSize, ySize, zSize)
-        Dim lengthValue As Double = GetAxisSize(lengthAxis, xSize, ySize, zSize)
+        ' Calculate display values - use OBB for vector format
+        Dim thicknessValue As Double = 0
+        Dim widthValue As Double = 0
+        Dim lengthValue As Double = 0
+
+        If IsVectorFormat(thicknessAxis) Then
+            GetOrientedSizes(partDoc, thicknessAxis, widthAxis, lengthAxis, thicknessValue, widthValue, lengthValue)
+        Else
+            thicknessValue = GetAxisSize(thicknessAxis, xSize, ySize, zSize)
+            widthValue = GetAxisSize(widthAxis, xSize, ySize, zSize)
+            lengthValue = GetAxisSize(lengthAxis, xSize, ySize, zSize)
+        End If
 
         Dim thicknessStr As String = uom.GetStringFromValue(thicknessValue, uom.LengthUnits)
         Dim widthStr As String = uom.GetStringFromValue(widthValue, uom.LengthUnits)
         Dim lengthStr As String = uom.GetStringFromValue(lengthValue, uom.LengthUnits)
 
-        Dim isCustomPick As Boolean = (customAxisDesc <> "")
+        ' Determine if we have a custom pick (either from description or from vector format)
+        Dim isCustomPick As Boolean = (customAxisDesc <> "") OrElse IsVectorFormat(thicknessAxis)
 
         Dim frm As New System.Windows.Forms.Form()
         If formTitle <> "" Then
@@ -217,7 +258,11 @@ Public Module BoundingBoxStockLib
         frm.Controls.Add(txtThickness)
 
         Dim lblWidth As New System.Windows.Forms.Label()
-        lblWidth.Text = "Width (" & widthAxis & " axis):"
+        If IsVectorFormat(widthAxis) Then
+            lblWidth.Text = "Width (custom):"
+        Else
+            lblWidth.Text = "Width (" & widthAxis & " axis):"
+        End If
         lblWidth.Left = 20
         lblWidth.Top = 100
         lblWidth.Width = 100
@@ -232,7 +277,11 @@ Public Module BoundingBoxStockLib
         frm.Controls.Add(txtWidth)
 
         Dim lblLength As New System.Windows.Forms.Label()
-        lblLength.Text = "Length (" & lengthAxis & " axis):"
+        If IsVectorFormat(lengthAxis) Then
+            lblLength.Text = "Length (custom):"
+        Else
+            lblLength.Text = "Length (" & lengthAxis & " axis):"
+        End If
         lblLength.Left = 20
         lblLength.Top = 140
         lblLength.Width = 100
@@ -297,6 +346,8 @@ Public Module BoundingBoxStockLib
         ElseIf result = DialogResult.Yes Then
             thicknessAxis = selectedAxis
             action = "SELECT_AXIS"
+        ElseIf result = DialogResult.Abort Then
+            action = "PICK_PLANE"
         ElseIf result = DialogResult.Retry Then
             action = "PICK_THICKNESS"
         End If
@@ -310,7 +361,8 @@ Public Module BoundingBoxStockLib
         Dim selected As String = CStr(cbo.SelectedItem)
 
         If selected = "Custom" Then
-            frm.DialogResult = DialogResult.Retry
+            ' Use Abort for PICK_PLANE action (face/work plane selection)
+            frm.DialogResult = DialogResult.Abort
             frm.Close()
         ElseIf selected = "X" OrElse selected = "Y" OrElse selected = "Z" Then
             frm.DialogResult = DialogResult.Yes
@@ -322,6 +374,59 @@ Public Module BoundingBoxStockLib
         If axis = "X" Then Return xSize
         If axis = "Y" Then Return ySize
         Return zSize
+    End Function
+
+    ' ============================================================================
+    ' Calculate oriented bounding box sizes for vector-based axes
+    ' ============================================================================
+    Public Sub GetOrientedSizes(ByVal partDoc As PartDocument, ByVal thicknessAxis As String, ByVal widthAxis As String, ByVal lengthAxis As String, _
+                                ByRef thicknessSize As Double, ByRef widthSize As Double, ByRef lengthSize As Double)
+        Dim tx As Double = 0, ty As Double = 0, tz As Double = 0
+        Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
+        Dim lx As Double = 0, ly As Double = 0, lz As Double = 0
+
+        ' Parse thickness vector
+        If Not ParseVectorComponents(thicknessAxis, tx, ty, tz) Then
+            thicknessSize = 0 : widthSize = 0 : lengthSize = 0
+            Return
+        End If
+
+        ' Parse or compute width/length vectors
+        If IsVectorFormat(widthAxis) Then
+            ParseVectorComponents(widthAxis, wx, wy, wz)
+            ' Length = cross(thickness, width)
+            lx = ty * wz - tz * wy
+            ly = tz * wx - tx * wz
+            lz = tx * wy - ty * wx
+        Else
+            ' Compute perpendicular vectors
+            ComputePerpendicularVectors(tx, ty, tz, wx, wy, wz, lx, ly, lz)
+        End If
+
+        ' Calculate extents by projecting all vertices
+        thicknessSize = GetOrientedExtent(partDoc, tx, ty, tz)
+        widthSize = GetOrientedExtent(partDoc, wx, wy, wz)
+        lengthSize = GetOrientedExtent(partDoc, lx, ly, lz)
+    End Sub
+
+    Public Function GetOrientedExtent(ByVal partDoc As PartDocument, ByVal dirX As Double, ByVal dirY As Double, ByVal dirZ As Double) As Double
+        Dim minProj As Double = Double.MaxValue
+        Dim maxProj As Double = Double.MinValue
+
+        Try
+            For Each body As SurfaceBody In partDoc.ComponentDefinition.SurfaceBodies
+                For Each vertex As Vertex In body.Vertices
+                    Dim pt As Point = vertex.Point
+                    Dim proj As Double = pt.X * dirX + pt.Y * dirY + pt.Z * dirZ
+                    If proj < minProj Then minProj = proj
+                    If proj > maxProj Then maxProj = proj
+                Next
+            Next
+        Catch
+        End Try
+
+        If minProj = Double.MaxValue Then Return 0
+        Return maxProj - minProj
     End Function
 
     Public Function PickAxisWithDescription(ByVal app As Inventor.Application, ByRef axisDesc As String) As String
@@ -370,6 +475,94 @@ Public Module BoundingBoxStockLib
         axisDesc = principalAxis & " axis (from " & objName & ")"
         
         Return principalAxis
+    End Function
+
+    ' ============================================================================
+    ' Pick a face or work plane for thickness direction (returns vector format)
+    ' Returns: "V:x,y,z" string or "" if cancelled
+    ' ============================================================================
+    Public Function PickPlaneForThickness(ByVal app As Inventor.Application, ByRef planeDesc As String) As String
+        planeDesc = ""
+        
+        Dim selFilter As SelectionFilterEnum = SelectionFilterEnum.kAllPlanarEntities
+        Dim selectedObj As Object = Nothing
+
+        Try
+            selectedObj = app.CommandManager.Pick( _
+                selFilter, _
+                "Select a face or work plane to define the thickness direction:")
+        Catch
+            Return ""
+        End Try
+
+        If selectedObj Is Nothing Then
+            Return ""
+        End If
+
+        Dim normalX As Double = 0, normalY As Double = 0, normalZ As Double = 0
+        Dim objName As String = ""
+
+        If TypeOf selectedObj Is Face Then
+            Dim face As Face = CType(selectedObj, Face)
+            If Not GetFaceNormal(face, normalX, normalY, normalZ) Then
+                MessageBox.Show("Could not get normal from selected face. Please select a planar face.", "Bounding Box Stock")
+                Return ""
+            End If
+            objName = "Face"
+        ElseIf TypeOf selectedObj Is WorkPlane Then
+            Dim workPlane As WorkPlane = CType(selectedObj, WorkPlane)
+            If Not GetWorkPlaneNormal(workPlane, normalX, normalY, normalZ) Then
+                MessageBox.Show("Could not get normal from selected work plane.", "Bounding Box Stock")
+                Return ""
+            End If
+            Try
+                objName = "WorkPlane: " & workPlane.Name
+            Catch
+                objName = "Work Plane"
+            End Try
+        Else
+            MessageBox.Show("Please select a face or work plane.", "Bounding Box Stock")
+            Return ""
+        End If
+
+        planeDesc = objName & " (" & FormatVectorDesc(normalX, normalY, normalZ) & ")"
+        Return VectorToString(normalX, normalY, normalZ)
+    End Function
+
+    Public Function GetFaceNormal(ByVal face As Face, ByRef nx As Double, ByRef ny As Double, ByRef nz As Double) As Boolean
+        Try
+            Dim geom As Object = face.Geometry
+            If TypeOf geom Is Plane Then
+                Dim plane As Plane = CType(geom, Plane)
+                Dim normal As UnitVector = plane.Normal
+                nx = normal.X
+                ny = normal.Y
+                nz = normal.Z
+                Return True
+            End If
+        Catch
+        End Try
+        Return False
+    End Function
+
+    Public Function GetWorkPlaneNormal(ByVal workPlane As WorkPlane, ByRef nx As Double, ByRef ny As Double, ByRef nz As Double) As Boolean
+        Try
+            Dim plane As Plane = workPlane.Plane
+            Dim normal As UnitVector = plane.Normal
+            nx = normal.X
+            ny = normal.Y
+            nz = normal.Z
+            Return True
+        Catch
+        End Try
+        Return False
+    End Function
+
+    Public Function FormatVectorDesc(ByVal vx As Double, ByVal vy As Double, ByVal vz As Double) As String
+        ' Format vector as readable description like "0.71, 0.71, 0.00"
+        Return vx.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) & ", " & _
+               vy.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) & ", " & _
+               vz.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)
     End Function
 
     Public Function GetEdgeDirection(ByVal app As Inventor.Application, ByVal edge As Edge) As Vector
@@ -427,14 +620,80 @@ Public Module BoundingBoxStockLib
         End If
     End Function
 
+    ' ============================================================================
+    ' Vector Format Utility Functions (for OBB support)
+    ' Format: "V:x,y,z" where x,y,z are unit vector components
+    ' ============================================================================
+
+    Public Function IsVectorFormat(ByVal axis As String) As Boolean
+        Return axis IsNot Nothing AndAlso axis.StartsWith("V:")
+    End Function
+
+    Public Function ParseVectorComponents(ByVal axis As String, ByRef vx As Double, ByRef vy As Double, ByRef vz As Double) As Boolean
+        If Not IsVectorFormat(axis) Then Return False
+        Try
+            Dim parts() As String = axis.Substring(2).Split(","c)
+            If parts.Length <> 3 Then Return False
+            vx = Double.Parse(parts(0), System.Globalization.CultureInfo.InvariantCulture)
+            vy = Double.Parse(parts(1), System.Globalization.CultureInfo.InvariantCulture)
+            vz = Double.Parse(parts(2), System.Globalization.CultureInfo.InvariantCulture)
+            Return True
+        Catch
+            Return False
+        End Try
+    End Function
+
+    Public Function VectorToString(ByVal vx As Double, ByVal vy As Double, ByVal vz As Double) As String
+        Return "V:" & vx.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture) & "," & _
+                      vy.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture) & "," & _
+                      vz.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture)
+    End Function
+
+    Public Sub ComputePerpendicularVectors(ByVal tx As Double, ByVal ty As Double, ByVal tz As Double, _
+                                           ByRef wx As Double, ByRef wy As Double, ByRef wz As Double, _
+                                           ByRef lx As Double, ByRef ly As Double, ByRef lz As Double)
+        ' Find a vector perpendicular to thickness vector
+        ' Use the axis most perpendicular to thickness as a reference
+        Dim refX As Double = 0, refY As Double = 0, refZ As Double = 0
+        If Math.Abs(tx) <= Math.Abs(ty) AndAlso Math.Abs(tx) <= Math.Abs(tz) Then
+            refX = 1 : refY = 0 : refZ = 0
+        ElseIf Math.Abs(ty) <= Math.Abs(tz) Then
+            refX = 0 : refY = 1 : refZ = 0
+        Else
+            refX = 0 : refY = 0 : refZ = 1
+        End If
+
+        ' Width = cross(thickness, reference) then normalize
+        wx = ty * refZ - tz * refY
+        wy = tz * refX - tx * refZ
+        wz = tx * refY - ty * refX
+        Dim wLen As Double = Math.Sqrt(wx * wx + wy * wy + wz * wz)
+        If wLen > 0.0001 Then
+            wx = wx / wLen : wy = wy / wLen : wz = wz / wLen
+        End If
+
+        ' Length = cross(thickness, width) then normalize
+        lx = ty * wz - tz * wy
+        ly = tz * wx - tx * wz
+        lz = tx * wy - ty * wx
+        Dim lLen As Double = Math.Sqrt(lx * lx + ly * ly + lz * lz)
+        If lLen > 0.0001 Then
+            lx = lx / lLen : ly = ly / lLen : lz = lz / lLen
+        End If
+    End Sub
+
     Public Sub ParseAxisConfig(ByVal config As String, ByRef thicknessAxis As String, ByRef widthAxis As String, ByRef lengthAxis As String)
-        Dim parts() As String = config.Split(","c)
+        ' Split on "|" to handle vector format (which contains commas)
+        Dim parts() As String = config.Split("|"c)
         For Each part As String In parts
-            Dim kv() As String = part.Split(":"c)
-            If kv.Length = 2 Then
-                If kv(0) = "T" Then thicknessAxis = kv(1)
-                If kv(0) = "W" Then widthAxis = kv(1)
-                If kv(0) = "L" Then lengthAxis = kv(1)
+            ' Split only on first ":" to preserve vector format "V:x,y,z"
+            Dim colonPos As Integer = part.IndexOf(":"c)
+            If colonPos > 0 Then
+                Dim key As String = part.Substring(0, colonPos)
+                Dim value As String = part.Substring(colonPos + 1)
+                If key = "T" Then thicknessAxis = value
+                If key = "W" Then widthAxis = value
+                If key = "L" Then lengthAxis = value
             End If
         Next
     End Sub
@@ -486,26 +745,54 @@ Public Module BoundingBoxStockLib
         Dim sb As New System.Text.StringBuilder()
         
         sb.AppendLine("' Auto-generated rule: Updates Width, Length, Thickness iProperties from bounding box")
+        sb.AppendLine("' Supports both simple axis (X/Y/Z) and vector format (V:x,y,z) for oriented bounding box")
         sb.AppendLine("' Override by creating parameters: WidthOverride, LengthOverride, ThicknessOverride")
         sb.AppendLine("")
         sb.AppendLine("Sub Main()")
         sb.AppendLine("    Dim partDoc As PartDocument = CType(ThisDoc.Document, PartDocument)")
         sb.AppendLine("")
-        sb.AppendLine("    ' Get bounding box")
-        sb.AppendLine("    Dim rangebox As Box = partDoc.ComponentDefinition.RangeBox")
-        sb.AppendLine("    Dim xSize As Double = rangebox.MaxPoint.X - rangebox.MinPoint.X")
-        sb.AppendLine("    Dim ySize As Double = rangebox.MaxPoint.Y - rangebox.MinPoint.Y")
-        sb.AppendLine("    Dim zSize As Double = rangebox.MaxPoint.Z - rangebox.MinPoint.Z")
-        sb.AppendLine("")
-        sb.AppendLine("    ' Read axis configuration from iProperties (length is derived from the other two)")
+        sb.AppendLine("    ' Read axis configuration from iProperties")
         sb.AppendLine("    Dim thicknessAxis As String = GetCustomProp(partDoc, ""BB_ThicknessAxis"", ""Z"")")
         sb.AppendLine("    Dim widthAxis As String = GetCustomProp(partDoc, ""BB_WidthAxis"", ""X"")")
-        sb.AppendLine("    Dim lengthAxis As String = GetRemainingAxis(thicknessAxis, widthAxis)")
         sb.AppendLine("")
-        sb.AppendLine("    ' Calculate values based on axis mapping")
-        sb.AppendLine("    Dim thicknessVal As Double = GetAxisValue(thicknessAxis, xSize, ySize, zSize)")
-        sb.AppendLine("    Dim widthVal As Double = GetAxisValue(widthAxis, xSize, ySize, zSize)")
-        sb.AppendLine("    Dim lengthVal As Double = GetAxisValue(lengthAxis, xSize, ySize, zSize)")
+        sb.AppendLine("    Dim thicknessVal As Double = 0")
+        sb.AppendLine("    Dim widthVal As Double = 0")
+        sb.AppendLine("    Dim lengthVal As Double = 0")
+        sb.AppendLine("")
+        sb.AppendLine("    If IsVectorFormat(thicknessAxis) Then")
+        sb.AppendLine("        ' Oriented Bounding Box calculation")
+        sb.AppendLine("        Dim tx As Double = 0, ty As Double = 0, tz As Double = 0")
+        sb.AppendLine("        Dim wx As Double = 0, wy As Double = 0, wz As Double = 0")
+        sb.AppendLine("        Dim lx As Double = 0, ly As Double = 0, lz As Double = 0")
+        sb.AppendLine("")
+        sb.AppendLine("        ParseVectorComponents(thicknessAxis, tx, ty, tz)")
+        sb.AppendLine("")
+        sb.AppendLine("        If IsVectorFormat(widthAxis) Then")
+        sb.AppendLine("            ParseVectorComponents(widthAxis, wx, wy, wz)")
+        sb.AppendLine("            ' Length = cross(thickness, width)")
+        sb.AppendLine("            lx = ty * wz - tz * wy")
+        sb.AppendLine("            ly = tz * wx - tx * wz")
+        sb.AppendLine("            lz = tx * wy - ty * wx")
+        sb.AppendLine("        Else")
+        sb.AppendLine("            ' Compute perpendicular vectors")
+        sb.AppendLine("            ComputePerpendicularVectors(tx, ty, tz, wx, wy, wz, lx, ly, lz)")
+        sb.AppendLine("        End If")
+        sb.AppendLine("")
+        sb.AppendLine("        thicknessVal = GetOrientedExtent(partDoc, tx, ty, tz)")
+        sb.AppendLine("        widthVal = GetOrientedExtent(partDoc, wx, wy, wz)")
+        sb.AppendLine("        lengthVal = GetOrientedExtent(partDoc, lx, ly, lz)")
+        sb.AppendLine("    Else")
+        sb.AppendLine("        ' Standard axis-aligned bounding box (fast path)")
+        sb.AppendLine("        Dim rangebox As Box = partDoc.ComponentDefinition.RangeBox")
+        sb.AppendLine("        Dim xSize As Double = rangebox.MaxPoint.X - rangebox.MinPoint.X")
+        sb.AppendLine("        Dim ySize As Double = rangebox.MaxPoint.Y - rangebox.MinPoint.Y")
+        sb.AppendLine("        Dim zSize As Double = rangebox.MaxPoint.Z - rangebox.MinPoint.Z")
+        sb.AppendLine("")
+        sb.AppendLine("        Dim lengthAxis As String = GetRemainingAxis(thicknessAxis, widthAxis)")
+        sb.AppendLine("        thicknessVal = GetAxisValue(thicknessAxis, xSize, ySize, zSize)")
+        sb.AppendLine("        widthVal = GetAxisValue(widthAxis, xSize, ySize, zSize)")
+        sb.AppendLine("        lengthVal = GetAxisValue(lengthAxis, xSize, ySize, zSize)")
+        sb.AppendLine("    End If")
         sb.AppendLine("")
         sb.AppendLine("    ' Check for overrides")
         sb.AppendLine("    thicknessVal = GetOverrideOrValue(partDoc, ""ThicknessOverride"", thicknessVal)")
@@ -523,6 +810,83 @@ Public Module BoundingBoxStockLib
         sb.AppendLine("    SetCustomProp(partDoc, ""Length"", lengthStr)")
         sb.AppendLine("End Sub")
         sb.AppendLine("")
+        sb.AppendLine("' ============================================================================")
+        sb.AppendLine("' Vector format utilities")
+        sb.AppendLine("' ============================================================================")
+        sb.AppendLine("")
+        sb.AppendLine("Function IsVectorFormat(axis As String) As Boolean")
+        sb.AppendLine("    Return axis IsNot Nothing AndAlso axis.StartsWith(""V:"")")
+        sb.AppendLine("End Function")
+        sb.AppendLine("")
+        sb.AppendLine("Sub ParseVectorComponents(axis As String, ByRef vx As Double, ByRef vy As Double, ByRef vz As Double)")
+        sb.AppendLine("    If Not IsVectorFormat(axis) Then Exit Sub")
+        sb.AppendLine("    Try")
+        sb.AppendLine("        Dim parts() As String = axis.Substring(2).Split("",""c)")
+        sb.AppendLine("        If parts.Length = 3 Then")
+        sb.AppendLine("            vx = Double.Parse(parts(0), System.Globalization.CultureInfo.InvariantCulture)")
+        sb.AppendLine("            vy = Double.Parse(parts(1), System.Globalization.CultureInfo.InvariantCulture)")
+        sb.AppendLine("            vz = Double.Parse(parts(2), System.Globalization.CultureInfo.InvariantCulture)")
+        sb.AppendLine("        End If")
+        sb.AppendLine("    Catch")
+        sb.AppendLine("    End Try")
+        sb.AppendLine("End Sub")
+        sb.AppendLine("")
+        sb.AppendLine("Sub ComputePerpendicularVectors(tx As Double, ty As Double, tz As Double, _")
+        sb.AppendLine("                                ByRef wx As Double, ByRef wy As Double, ByRef wz As Double, _")
+        sb.AppendLine("                                ByRef lx As Double, ByRef ly As Double, ByRef lz As Double)")
+        sb.AppendLine("    ' Find reference axis most perpendicular to thickness")
+        sb.AppendLine("    Dim refX As Double = 0, refY As Double = 0, refZ As Double = 0")
+        sb.AppendLine("    If Math.Abs(tx) <= Math.Abs(ty) AndAlso Math.Abs(tx) <= Math.Abs(tz) Then")
+        sb.AppendLine("        refX = 1 : refY = 0 : refZ = 0")
+        sb.AppendLine("    ElseIf Math.Abs(ty) <= Math.Abs(tz) Then")
+        sb.AppendLine("        refX = 0 : refY = 1 : refZ = 0")
+        sb.AppendLine("    Else")
+        sb.AppendLine("        refX = 0 : refY = 0 : refZ = 1")
+        sb.AppendLine("    End If")
+        sb.AppendLine("")
+        sb.AppendLine("    ' Width = cross(thickness, reference) normalized")
+        sb.AppendLine("    wx = ty * refZ - tz * refY")
+        sb.AppendLine("    wy = tz * refX - tx * refZ")
+        sb.AppendLine("    wz = tx * refY - ty * refX")
+        sb.AppendLine("    Dim wLen As Double = Math.Sqrt(wx * wx + wy * wy + wz * wz)")
+        sb.AppendLine("    If wLen > 0.0001 Then")
+        sb.AppendLine("        wx = wx / wLen : wy = wy / wLen : wz = wz / wLen")
+        sb.AppendLine("    End If")
+        sb.AppendLine("")
+        sb.AppendLine("    ' Length = cross(thickness, width) normalized")
+        sb.AppendLine("    lx = ty * wz - tz * wy")
+        sb.AppendLine("    ly = tz * wx - tx * wz")
+        sb.AppendLine("    lz = tx * wy - ty * wx")
+        sb.AppendLine("    Dim lLen As Double = Math.Sqrt(lx * lx + ly * ly + lz * lz)")
+        sb.AppendLine("    If lLen > 0.0001 Then")
+        sb.AppendLine("        lx = lx / lLen : ly = ly / lLen : lz = lz / lLen")
+        sb.AppendLine("    End If")
+        sb.AppendLine("End Sub")
+        sb.AppendLine("")
+        sb.AppendLine("Function GetOrientedExtent(partDoc As PartDocument, dirX As Double, dirY As Double, dirZ As Double) As Double")
+        sb.AppendLine("    Dim minProj As Double = Double.MaxValue")
+        sb.AppendLine("    Dim maxProj As Double = Double.MinValue")
+        sb.AppendLine("")
+        sb.AppendLine("    Try")
+        sb.AppendLine("        For Each body As SurfaceBody In partDoc.ComponentDefinition.SurfaceBodies")
+        sb.AppendLine("            For Each vertex As Vertex In body.Vertices")
+        sb.AppendLine("                Dim pt As Point = vertex.Point")
+        sb.AppendLine("                Dim proj As Double = pt.X * dirX + pt.Y * dirY + pt.Z * dirZ")
+        sb.AppendLine("                If proj < minProj Then minProj = proj")
+        sb.AppendLine("                If proj > maxProj Then maxProj = proj")
+        sb.AppendLine("            Next")
+        sb.AppendLine("        Next")
+        sb.AppendLine("    Catch")
+        sb.AppendLine("    End Try")
+        sb.AppendLine("")
+        sb.AppendLine("    If minProj = Double.MaxValue Then Return 0")
+        sb.AppendLine("    Return maxProj - minProj")
+        sb.AppendLine("End Function")
+        sb.AppendLine("")
+        sb.AppendLine("' ============================================================================")
+        sb.AppendLine("' Standard axis utilities (for backward compatibility)")
+        sb.AppendLine("' ============================================================================")
+        sb.AppendLine("")
         sb.AppendLine("Function GetAxisValue(axis As String, xSize As Double, ySize As Double, zSize As Double) As Double")
         sb.AppendLine("    If axis = ""X"" Then Return xSize")
         sb.AppendLine("    If axis = ""Y"" Then Return ySize")
@@ -534,6 +898,10 @@ Public Module BoundingBoxStockLib
         sb.AppendLine("    If (axis1 = ""X"" AndAlso axis2 = ""Z"") OrElse (axis1 = ""Z"" AndAlso axis2 = ""X"") Then Return ""Y""")
         sb.AppendLine("    Return ""X""")
         sb.AppendLine("End Function")
+        sb.AppendLine("")
+        sb.AppendLine("' ============================================================================")
+        sb.AppendLine("' Property and override utilities")
+        sb.AppendLine("' ============================================================================")
         sb.AppendLine("")
         sb.AppendLine("Function GetCustomProp(doc As Document, propName As String, defaultVal As String) As String")
         sb.AppendLine("    Try")
