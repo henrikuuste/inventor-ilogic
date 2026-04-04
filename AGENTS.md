@@ -209,10 +209,26 @@ These are available in the iLogic execution context:
 
 ### iLogic Objects Not Available Inside Public Module
 
-- `iLogicVb`, `ThisApplication`, `ThisDoc` are **only available in the `Sub Main()` context** of a runnable rule
+- `iLogicVb`, `ThisApplication`, `ThisDoc`, `Logger` are **only available in the `Sub Main()` context** of a runnable rule
 - They are **NOT accessible inside a `Public Module`** included via `AddVbFile`
 - This causes: `'iLogicVb' is not declared. It may be inaccessible due to its protection level.`
-- **Solution: Pass these objects as parameters from the calling script:**
+- **Solution: Pass these objects as parameters from the calling script**
+- **For Logger: Pass a `List(Of String)` to collect log messages, then output them in the caller:**
+
+```vb
+' In library module - collect logs
+Public Sub DoWork(ByVal logs As System.Collections.Generic.List(Of String))
+    logs.Add("MyLib: Starting work...")
+    logs.Add("MyLib: Work completed")
+End Sub
+
+' In calling script (Sub Main) - output logs
+Dim logs As New System.Collections.Generic.List(Of String)
+MyLibrary.DoWork(logs)
+For Each logMsg As String In logs
+    Logger.Info(logMsg)
+Next
+```
 
 ```vb
 ' In the runnable script (Sub Main)
@@ -363,6 +379,63 @@ SetCustomProp(doc, "Name", "Value")
 - Search for the function name across all `.vb` files to find callers
 - This causes: `Argument not specified for parameter 'paramName' of 'FunctionName'`
 
+## Vault Integration
+
+### Detecting Vault Checkout Status
+
+- **`doc.ReservedForWriteByMe`** - Returns `True` if document is checked out by current user (reliable)
+- **`doc.IsModifiable`** - Unreliable for Vault; returns `True` even when file is not checked out
+
+```vb
+' Correctly detect if checkout is needed
+If Not doc.ReservedForWriteByMe Then
+    ' Document needs checkout
+End If
+```
+
+### Methods/Properties That Do NOT Exist
+
+These cause "Public member not found" errors despite appearing in some documentation:
+- `doc.CheckOut()` - does not exist on PartDocument/AssemblyDocument
+- `doc.Reserve()` - does not exist
+- `doc.ReservationStatus` - does not exist
+- `app.FileAccessEvents.AutoCheckOut` - does not exist
+
+### Vault Add-in Access
+
+- **Add-in GUID**: `{48B682BC-42E6-4953-84C5-3D253B52E77A}`
+- **Add-in name**: "Inventor Vault"
+- The `Automation` property returns a COM object but exposes no accessible methods via reflection or late binding
+
+```vb
+Dim vaultAddin As ApplicationAddIn = app.ApplicationAddIns.ItemById("{48B682BC-42E6-4953-84C5-3D253B52E77A}")
+If vaultAddin IsNot Nothing AndAlso vaultAddin.Activated Then
+    Dim vaultAuto As Object = vaultAddin.Automation  ' Returns System.__ComObject, methods not accessible
+End If
+```
+
+### Vault Commands via CommandManager
+
+Available checkout commands (all show a dialog - no silent checkout possible):
+
+```vb
+Dim cmdMgr As CommandManager = app.CommandManager
+Dim ctrlDef As ControlDefinition = cmdMgr.ControlDefinitions.Item("VaultCheckout")
+ctrlDef.Execute()  ' Shows checkout dialog
+```
+
+| Command Internal Name | Display Name |
+|-----------------------|--------------|
+| `VaultCheckout` | Check Out |
+| `VaultCheckoutTop` | Check Out |
+| `VaultUndoCheckout` | Undo Check Out... |
+| `VaultGetCheckout` | Get Revision... |
+
+### File Attributes
+
+- Vault-managed files have `ReadOnly` attribute set on disk
+- Removing `ReadOnly` via `File.SetAttributes` does NOT bypass Vault control
+
 ## Summary of Key Constraints
 
 | Issue | Solution |
@@ -380,4 +453,6 @@ SetCustomProp(doc, "Name", "Value")
 | Library function signature changed | Update ALL callers across all .vb files |
 | CreateGeometryProxy is a Sub, not Function | Use `occ.CreateGeometryProxy(obj, result)` with ByRef result |
 | object.Select() not found | Use `doc.SelectSet.Select(object)` instead |
+| Vault checkout status | Use `doc.ReservedForWriteByMe`, not `doc.IsModifiable` |
+| Vault silent checkout | Not possible; all commands show dialogs |
 
