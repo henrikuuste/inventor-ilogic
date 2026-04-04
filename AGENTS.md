@@ -390,6 +390,7 @@ Some Inventor API members that work in standalone applications do not work in iL
 | `DerivedPartUniformScaleDef.IncludeAllWorkSurfaces` | `Public member not found` | Only set `DeriveStyle` and individual `IncludeEntity` |
 | `DerivedPartUniformScaleDef.IncludeAllParameters` | `Public member not found` | (same as above) |
 | `DerivedPartUniformScaleDef.LinkFaceColor` | `Public member not found` | (same as above) |
+| `DerivedPartUniformScaleDef.Sketches2D` | `Public member not found` | Use `Sketches` instead (wrap in Try/Catch) |
 | Save after `smCompDef.Unfold()` | `E_FAIL` error during SaveAs | Call `smCompDef.FlatPattern.ExitEdit()` before save |
 
 **Material enumeration example:**
@@ -404,6 +405,49 @@ Next
 For Each mat As Material In partDoc.Materials
     materials.Add(mat.Name)  ' Works!
 Next
+```
+
+**Excluding sketches and work features from derived parts:**
+
+When deriving parts, sketches, work features, and parameters from the master may be included by default. To derive only the solid body, iterate through the entity collections and set `IncludeEntity = False`.
+
+**Important:** Not all collections exist on `DerivedPartUniformScaleDef`:
+- `Sketches2D` does NOT exist - use `Sketches` instead
+- Wrap each property access in `Try/Catch` because the property access itself throws if the property doesn't exist
+
+```vb
+Dim dpDef As DerivedPartUniformScaleDef = dpcs.CreateUniformScaleDef(masterDoc.FullDocumentName)
+
+' Include only target body
+For Each dpe As DerivedPartEntity In dpDef.Solids
+    If GetBodyName(dpe) = targetBodyName Then
+        dpe.IncludeEntity = True
+    Else
+        dpe.IncludeEntity = False
+    End If
+Next
+
+' Exclude all sketches, work features, surfaces, parameters
+' CRITICAL: Wrap EACH property access in Try/Catch - not just the loop
+' The property access itself throws if property doesn't exist on this type
+Try
+    For Each dpe As DerivedPartEntity In dpDef.Sketches3D : dpe.IncludeEntity = False : Next
+Catch : End Try
+Try
+    For Each dpe As DerivedPartEntity In dpDef.Sketches : dpe.IncludeEntity = False : Next
+Catch : End Try
+Try
+    For Each dpe As DerivedPartEntity In dpDef.WorkFeatures : dpe.IncludeEntity = False : Next
+Catch : End Try
+Try
+    For Each dpe As DerivedPartEntity In dpDef.Surfaces : dpe.IncludeEntity = False : Next
+Catch : End Try
+Try
+    For Each dpe As DerivedPartEntity In dpDef.Parameters : dpe.IncludeEntity = False : Next
+Catch : End Try
+
+dpDef.DeriveStyle = DerivedComponentStyleEnum.kDeriveAsSingleBodyWithSeams
+dpcs.Add(dpDef)
 ```
 
 ### Creating/Updating Rules Programmatically
@@ -619,5 +663,6 @@ ctrlDef.Execute()  ' Shows checkout dialog
 | Vault silent checkout | Not possible; all commands show dialogs |
 | app.Assets() not found | Use `partDoc.Materials` to enumerate materials |
 | DerivedPartUniformScaleDef.IncludeAll* | Only use `DeriveStyle` and individual `IncludeEntity` |
+| DerivedPartUniformScaleDef.Sketches2D | Use `Sketches` instead (wrap property access in Try/Catch) |
 | Save fails after Unfold() | Call `smCompDef.FlatPattern.ExitEdit()` before SaveAs |
 

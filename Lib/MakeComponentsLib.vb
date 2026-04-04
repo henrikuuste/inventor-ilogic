@@ -528,6 +528,25 @@ Public Module MakeComponentsLib
         End Try
     End Function
     
+    ' Helper to exclude all entities from a derived part entity collection
+    ' Wrapped in Try/Catch since some collections may not exist in iLogic context
+    Private Sub ExcludeAllDerivedEntities(entities As Object, _
+                                          logs As System.Collections.Generic.List(Of String), _
+                                          entityType As String)
+        Try
+            Dim count As Integer = 0
+            For Each dpe As DerivedPartEntity In entities
+                dpe.IncludeEntity = False
+                count += 1
+            Next
+            If count > 0 Then
+                logs.Add("MakeComponentsLib: Excluded " & count & " " & entityType)
+            End If
+        Catch
+            ' Collection may not exist or not be accessible in iLogic context
+        End Try
+    End Sub
+    
     ' Derive a single body from a multi-body part
     ' Note: DerivedPartUniformScaleDef does NOT have IncludeAllWorkSurfaces, IncludeAllParameters etc.
     ' Only DeriveStyle and individual entity IncludeEntity work in iLogic
@@ -570,6 +589,14 @@ Public Module MakeComponentsLib
                 logs.Add("MakeComponentsLib: No bodies matched target '" & targetBodyName & "'")
                 Return False
             End If
+            
+            ' Exclude sketches, work features, surfaces, and parameters to derive only the solid body
+            ' Each call wrapped in Try/Catch because property access itself may fail if property doesn't exist
+            Try : ExcludeAllDerivedEntities(dpDef.Sketches3D, logs, "3D sketches") : Catch : End Try
+            Try : ExcludeAllDerivedEntities(dpDef.Sketches, logs, "sketches") : Catch : End Try
+            Try : ExcludeAllDerivedEntities(dpDef.WorkFeatures, logs, "work features") : Catch : End Try
+            Try : ExcludeAllDerivedEntities(dpDef.Surfaces, logs, "surfaces") : Catch : End Try
+            Try : ExcludeAllDerivedEntities(dpDef.Parameters, logs, "parameters") : Catch : End Try
             
             dpDef.DeriveStyle = DerivedComponentStyleEnum.kDeriveAsSingleBodyWithSeams
             
@@ -654,6 +681,14 @@ Public Module MakeComponentsLib
             If included = 0 Then
                 logs.Add("MakeComponentsLib: Warning - no bodies matched '" & targetBodyName & "' during update")
             End If
+            
+            ' Exclude sketches, work features, surfaces, and parameters to derive only the solid body
+            ' Each call wrapped in Try/Catch because property access itself may fail if property doesn't exist
+            Try : ExcludeAllDerivedEntities(dpDef.Sketches3D, logs, "3D sketches") : Catch : End Try
+            Try : ExcludeAllDerivedEntities(dpDef.Sketches, logs, "sketches") : Catch : End Try
+            Try : ExcludeAllDerivedEntities(dpDef.WorkFeatures, logs, "work features") : Catch : End Try
+            Try : ExcludeAllDerivedEntities(dpDef.Surfaces, logs, "surfaces") : Catch : End Try
+            Try : ExcludeAllDerivedEntities(dpDef.Parameters, logs, "parameters") : Catch : End Try
             
             dpDef.DeriveStyle = DerivedComponentStyleEnum.kDeriveAsSingleBodyWithSeams
             dpcs.Add(dpDef)
