@@ -66,27 +66,64 @@ Public Module BoundingBoxStockLib
         Dim lengthAxis As String = ""
         Dim customAxisDesc As String = "" ' Description when custom axis is picked
 
-        ' If no existing config, use defaults: Z = Thickness, then Width = longer of X/Y
+        ' If no existing config, auto-detect based on face geometry:
+        ' - Thickness = face normal with smallest extent (works for rotated parts)
+        ' - Length = largest perpendicular extent
+        ' - Width = remaining perpendicular extent
         If thicknessAxis = "" Then
-            thicknessAxis = "Z"
-            AssignWidthLength(thicknessAxis, xSize, ySize, zSize, widthAxis, lengthAxis)
+            If Not AutoDetectAxesFromGeometry(partDoc, thicknessAxis, widthAxis, lengthAxis) Then
+                ' Fall back to axis-aligned detection if geometry detection fails
+                AutoDetectAxes(xSize, ySize, zSize, thicknessAxis, widthAxis, lengthAxis)
+            End If
+            ' Set custom axis description if auto-detected a vector
+            If IsVectorFormat(thicknessAxis) Then
+                Dim tx As Double = 0, ty As Double = 0, tz As Double = 0
+                ParseVectorComponents(thicknessAxis, tx, ty, tz)
+                customAxisDesc = "Auto (" & FormatVectorDesc(tx, ty, tz) & ")"
+            End If
         ElseIf IsVectorFormat(thicknessAxis) Then
-            ' Vector format - compute perpendicular vectors for width/length
+            ' Vector format stored - set description and compute width/length if not stored
             Dim tx As Double = 0, ty As Double = 0, tz As Double = 0
-            Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
-            Dim lx As Double = 0, ly As Double = 0, lz As Double = 0
             If ParseVectorComponents(thicknessAxis, tx, ty, tz) Then
-                ComputePerpendicularVectors(tx, ty, tz, wx, wy, wz, lx, ly, lz)
-                widthAxis = VectorToString(wx, wy, wz)
-                lengthAxis = VectorToString(lx, ly, lz)
                 customAxisDesc = "Custom (" & FormatVectorDesc(tx, ty, tz) & ")"
+                ' Only compute perpendicular vectors if width not stored
+                If widthAxis = "" OrElse Not IsVectorFormat(widthAxis) Then
+                    Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
+                    Dim lx As Double = 0, ly As Double = 0, lz As Double = 0
+                    ComputePerpendicularVectors(tx, ty, tz, wx, wy, wz, lx, ly, lz)
+                    ' Measure extents to determine which is width vs length
+                    Dim widthExtent As Double = GetOrientedExtent(partDoc, wx, wy, wz)
+                    Dim lengthExtent As Double = GetOrientedExtent(partDoc, lx, ly, lz)
+                    If lengthExtent >= widthExtent Then
+                        lengthAxis = VectorToString(lx, ly, lz)
+                        widthAxis = VectorToString(wx, wy, wz)
+                    Else
+                        lengthAxis = VectorToString(wx, wy, wz)
+                        widthAxis = VectorToString(lx, ly, lz)
+                    End If
+                Else
+                    ' Width stored - compute length as the remaining perpendicular
+                    Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
+                    ParseVectorComponents(widthAxis, wx, wy, wz)
+                    ' Length = cross(thickness, width)
+                    Dim lx As Double = ty * wz - tz * wy
+                    Dim ly As Double = tz * wx - tx * wz
+                    Dim lz As Double = tx * wy - ty * wx
+                    lengthAxis = VectorToString(lx, ly, lz)
+                End If
             Else
                 thicknessAxis = "Z"
                 AssignWidthLength(thicknessAxis, xSize, ySize, zSize, widthAxis, lengthAxis)
             End If
         Else
-            ' Simple axis format - length is the remaining axis
-            lengthAxis = GetRemainingAxis(thicknessAxis, widthAxis)
+            ' Simple axis format (X/Y/Z)
+            If widthAxis = "" Then
+                ' No width axis stored - use AssignWidthLength to determine based on size
+                AssignWidthLength(thicknessAxis, xSize, ySize, zSize, widthAxis, lengthAxis)
+            Else
+                ' Both thickness and width stored - length is the remaining axis
+                lengthAxis = GetRemainingAxis(thicknessAxis, widthAxis)
+            End If
         End If
 
         Dim keepGoing As Boolean = True
@@ -157,14 +194,165 @@ Public Module BoundingBoxStockLib
             axis2 = "Y" : size2 = ySize
         End If
 
+        ' Length is the larger dimension, width is the smaller
         If size1 >= size2 Then
-            widthAxis = axis1
-            lengthAxis = axis2
-        Else
-            widthAxis = axis2
             lengthAxis = axis1
+            widthAxis = axis2
+        Else
+            lengthAxis = axis2
+            widthAxis = axis1
         End If
     End Sub
+
+    ' ============================================================================
+    ' Auto-detect thickness, width, and length axes based on bounding box dimensions
+    ' Rules:
+    ' - Thickness = smallest dimension (typically the sheet/plate thickness)
+    ' - Length = largest dimension
+    ' - Width = remaining middle dimension
+    ' ============================================================================
+    Public Sub AutoDetectAxes(ByVal xSize As Double, ByVal ySize As Double, ByVal zSize As Double, _
+                              ByRef thicknessAxis As String, ByRef widthAxis As String, ByRef lengthAxis As String)
+        ' Create array of axis-size pairs for sorting
+        Dim axes(2) As String
+        Dim sizes(2) As Double
+        axes(0) = "X" : sizes(0) = xSize
+        axes(1) = "Y" : sizes(1) = ySize
+        axes(2) = "Z" : sizes(2) = zSize
+
+        ' Simple bubble sort by size (ascending: smallest first)
+        For i As Integer = 0 To 1
+            For j As Integer = i + 1 To 2
+                If sizes(j) < sizes(i) Then
+                    ' Swap sizes
+                    Dim tempSize As Double = sizes(i)
+                    sizes(i) = sizes(j)
+                    sizes(j) = tempSize
+                    ' Swap axes
+                    Dim tempAxis As String = axes(i)
+                    axes(i) = axes(j)
+                    axes(j) = tempAxis
+                End If
+            Next
+        Next
+
+        ' After sorting: axes(0) = smallest, axes(1) = middle, axes(2) = largest
+        thicknessAxis = axes(0)  ' Smallest = thickness
+        widthAxis = axes(1)      ' Middle = width
+        lengthAxis = axes(2)     ' Largest = length
+    End Sub
+
+    ' ============================================================================
+    ' Auto-detect axes from geometry by analyzing face normals
+    ' This works for rotated parts by finding the face normal with smallest extent
+    ' Returns True if successful, False to fall back to axis-aligned detection
+    ' ============================================================================
+    Public Function AutoDetectAxesFromGeometry(ByVal partDoc As PartDocument, _
+                                               ByRef thicknessAxis As String, ByRef widthAxis As String, ByRef lengthAxis As String) As Boolean
+        Dim compDef As PartComponentDefinition = partDoc.ComponentDefinition
+        
+        ' Collect unique face normals and find the one with smallest extent
+        Dim bestNormalX As Double = 0, bestNormalY As Double = 0, bestNormalZ As Double = 0
+        Dim minExtent As Double = Double.MaxValue
+        Dim foundNormal As Boolean = False
+        
+        ' Track normals we've already checked (to avoid duplicates like top/bottom faces)
+        Dim checkedNormals As New System.Collections.Generic.List(Of String)
+        
+        Try
+            For Each body As SurfaceBody In compDef.SurfaceBodies
+                For Each face As Face In body.Faces
+                    Dim nx As Double = 0, ny As Double = 0, nz As Double = 0
+                    If GetFaceNormal(face, nx, ny, nz) Then
+                        ' Normalize the normal (should already be unit, but be safe)
+                        Dim len As Double = Math.Sqrt(nx * nx + ny * ny + nz * nz)
+                        If len > 0.0001 Then
+                            nx /= len : ny /= len : nz /= len
+                        End If
+                        
+                        ' Make normal canonical (always point in "positive" direction to dedupe opposites)
+                        ' We consider two normals the same if they're parallel (same or opposite direction)
+                        If nx < -0.0001 OrElse (Math.Abs(nx) < 0.0001 AndAlso ny < -0.0001) OrElse _
+                           (Math.Abs(nx) < 0.0001 AndAlso Math.Abs(ny) < 0.0001 AndAlso nz < -0.0001) Then
+                            nx = -nx : ny = -ny : nz = -nz
+                        End If
+                        
+                        ' Create a key for this normal direction (rounded to avoid floating point issues)
+                        Dim normalKey As String = Math.Round(nx, 3).ToString() & "," & _
+                                                  Math.Round(ny, 3).ToString() & "," & _
+                                                  Math.Round(nz, 3).ToString()
+                        
+                        ' Skip if we've already checked this normal direction
+                        If checkedNormals.Contains(normalKey) Then Continue For
+                        checkedNormals.Add(normalKey)
+                        
+                        ' Calculate extent along this normal
+                        Dim extent As Double = GetOrientedExtent(partDoc, nx, ny, nz)
+                        
+                        ' Check if this is the smallest extent so far
+                        If extent > 0 AndAlso extent < minExtent Then
+                            minExtent = extent
+                            bestNormalX = nx
+                            bestNormalY = ny
+                            bestNormalZ = nz
+                            foundNormal = True
+                        End If
+                    End If
+                Next
+            Next
+        Catch
+            Return False
+        End Try
+        
+        If Not foundNormal Then Return False
+        
+        ' Check if the best normal is close to a principal axis (within 1 degree)
+        Dim tolerance As Double = 0.0175  ' cos(89°) ≈ 0.0175, so dot product > 0.9998 means < 1°
+        Dim dotX As Double = Math.Abs(bestNormalX)
+        Dim dotY As Double = Math.Abs(bestNormalY)
+        Dim dotZ As Double = Math.Abs(bestNormalZ)
+        
+        If dotX > 0.9998 Then
+            ' Very close to X axis - use simple axis
+            thicknessAxis = "X"
+        ElseIf dotY > 0.9998 Then
+            ' Very close to Y axis - use simple axis
+            thicknessAxis = "Y"
+        ElseIf dotZ > 0.9998 Then
+            ' Very close to Z axis - use simple axis
+            thicknessAxis = "Z"
+        Else
+            ' Rotated part - use vector format
+            thicknessAxis = VectorToString(bestNormalX, bestNormalY, bestNormalZ)
+        End If
+        
+        ' Now compute width and length axes
+        If IsVectorFormat(thicknessAxis) Then
+            ' For vector format, compute perpendicular vectors
+            Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
+            Dim lx As Double = 0, ly As Double = 0, lz As Double = 0
+            ComputePerpendicularVectors(bestNormalX, bestNormalY, bestNormalZ, wx, wy, wz, lx, ly, lz)
+            
+            ' Measure extents to determine which is width vs length
+            Dim widthExtent As Double = GetOrientedExtent(partDoc, wx, wy, wz)
+            Dim lengthExtent As Double = GetOrientedExtent(partDoc, lx, ly, lz)
+            
+            If lengthExtent >= widthExtent Then
+                lengthAxis = VectorToString(lx, ly, lz)
+                widthAxis = VectorToString(wx, wy, wz)
+            Else
+                lengthAxis = VectorToString(wx, wy, wz)
+                widthAxis = VectorToString(lx, ly, lz)
+            End If
+        Else
+            ' For simple axis, use the existing logic
+            Dim xSize As Double = 0, ySize As Double = 0, zSize As Double = 0
+            GetBoundingBoxSizes(partDoc, xSize, ySize, zSize)
+            AssignWidthLength(thicknessAxis, xSize, ySize, zSize, widthAxis, lengthAxis)
+        End If
+        
+        Return True
+    End Function
 
     Public Function ShowConfigForm(ByVal app As Inventor.Application, ByVal partDoc As PartDocument, _
                                    ByVal xSize As Double, ByVal ySize As Double, ByVal zSize As Double, _
