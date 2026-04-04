@@ -206,148 +206,142 @@ Public Module BoundingBoxStockLib
         ' Determine if we have a custom pick (either from description or from vector format)
         Dim isCustomPick As Boolean = (customAxisDesc <> "") OrElse IsVectorFormat(thicknessAxis)
 
+        ' Create form
         Dim frm As New System.Windows.Forms.Form()
-        If formTitle <> "" Then
-            frm.Text = formTitle
-        Else
-            frm.Text = txtDefaultTitle
-        End If
-        frm.Width = 420
-        frm.Height = 320
+        frm.Text = If(formTitle <> "", formTitle, txtDefaultTitle)
         frm.StartPosition = FormStartPosition.CenterScreen
         frm.FormBorderStyle = FormBorderStyle.FixedDialog
         frm.MaximizeBox = False
         frm.MinimizeBox = False
+        frm.AutoSize = True
+        frm.AutoSizeMode = AutoSizeMode.GrowAndShrink
+        frm.Padding = New System.Windows.Forms.Padding(10)
 
+        ' Main layout panel
+        Dim layout As New System.Windows.Forms.TableLayoutPanel()
+        layout.AutoSize = True
+        layout.AutoSizeMode = AutoSizeMode.GrowAndShrink
+        layout.ColumnCount = 3
+        layout.RowCount = 5
+        layout.ColumnStyles.Add(New ColumnStyle(SizeType.AutoSize))
+        layout.ColumnStyles.Add(New ColumnStyle(SizeType.Absolute, 100))
+        layout.ColumnStyles.Add(New ColumnStyle(SizeType.AutoSize))
+        layout.CellBorderStyle = TableLayoutPanelCellBorderStyle.None
+        frm.Controls.Add(layout)
+
+        ' Row 0: Thickness Axis
         Dim lblThicknessAxis As New System.Windows.Forms.Label()
         lblThicknessAxis.Text = txtThicknessAxisLabel
-        lblThicknessAxis.Left = 20
-        lblThicknessAxis.Top = 20
-        lblThicknessAxis.Width = 100
-        frm.Controls.Add(lblThicknessAxis)
+        lblThicknessAxis.AutoSize = True
+        lblThicknessAxis.Anchor = AnchorStyles.Left
+        layout.Controls.Add(lblThicknessAxis, 0, 0)
 
         Dim cboAxis As New System.Windows.Forms.ComboBox()
         cboAxis.Name = "cboAxis"
-        cboAxis.Left = 125
-        cboAxis.Top = 17
         cboAxis.Width = 80
         cboAxis.DropDownStyle = ComboBoxStyle.DropDownList
         cboAxis.Items.Add("X")
         cboAxis.Items.Add("Y")
         cboAxis.Items.Add("Z")
         cboAxis.Items.Add("Custom")
-        If isCustomPick Then
-            cboAxis.SelectedItem = "Custom"
-        Else
-            cboAxis.SelectedItem = thicknessAxis
-        End If
-        frm.Controls.Add(cboAxis)
+        cboAxis.SelectedItem = If(isCustomPick, "Custom", thicknessAxis)
+        cboAxis.Anchor = AnchorStyles.Left
+        layout.Controls.Add(cboAxis, 1, 0)
 
         Dim txtCustomAxis As New System.Windows.Forms.TextBox()
         txtCustomAxis.Name = "txtCustomAxis"
-        txtCustomAxis.Left = 215
-        txtCustomAxis.Top = 17
-        txtCustomAxis.Width = 170
+        txtCustomAxis.Width = 180
         txtCustomAxis.ReadOnly = True
-        If isCustomPick Then
-            txtCustomAxis.Text = customAxisDesc
-        Else
-            txtCustomAxis.Text = ""
-        End If
-        frm.Controls.Add(txtCustomAxis)
+        txtCustomAxis.Text = If(isCustomPick, customAxisDesc, "")
+        txtCustomAxis.Anchor = AnchorStyles.Left
+        layout.Controls.Add(txtCustomAxis, 2, 0)
 
+        ' Row 1: Thickness value
         Dim lblThickness As New System.Windows.Forms.Label()
         lblThickness.Text = txtThicknessLabel
-        lblThickness.Left = 20
-        lblThickness.Top = 60
-        lblThickness.Width = 100
-        frm.Controls.Add(lblThickness)
+        lblThickness.AutoSize = True
+        lblThickness.Anchor = AnchorStyles.Left
+        layout.Controls.Add(lblThickness, 0, 1)
 
         Dim txtThickness As New System.Windows.Forms.TextBox()
         txtThickness.Text = thicknessStr
-        txtThickness.Left = 125
-        txtThickness.Top = 57
-        txtThickness.Width = 100
         txtThickness.ReadOnly = True
-        frm.Controls.Add(txtThickness)
+        txtThickness.Dock = DockStyle.Fill
+        layout.Controls.Add(txtThickness, 1, 1)
 
+        ' Row 2: Width
         Dim lblWidth As New System.Windows.Forms.Label()
         If IsVectorFormat(widthAxis) Then
             lblWidth.Text = txtWidthLabel & " (" & txtCustom & "):"
         Else
             lblWidth.Text = txtWidthLabel & " (" & widthAxis & " " & txtAxis & "):"
         End If
-        lblWidth.Left = 20
-        lblWidth.Top = 100
-        lblWidth.Width = 100
-        frm.Controls.Add(lblWidth)
+        lblWidth.AutoSize = True
+        lblWidth.Anchor = AnchorStyles.Left
+        layout.Controls.Add(lblWidth, 0, 2)
 
         Dim txtWidth As New System.Windows.Forms.TextBox()
         txtWidth.Text = widthStr
-        txtWidth.Left = 125
-        txtWidth.Top = 97
-        txtWidth.Width = 100
         txtWidth.ReadOnly = True
-        frm.Controls.Add(txtWidth)
+        txtWidth.Dock = DockStyle.Fill
+        layout.Controls.Add(txtWidth, 1, 2)
 
+        Dim btnFlip As New System.Windows.Forms.Button()
+        btnFlip.Text = txtFlipButton
+        btnFlip.AutoSize = True
+        btnFlip.DialogResult = DialogResult.Ignore
+        btnFlip.Anchor = AnchorStyles.Left
+        layout.Controls.Add(btnFlip, 2, 2)
+
+        ' Row 3: Length
         Dim lblLength As New System.Windows.Forms.Label()
         If IsVectorFormat(lengthAxis) Then
             lblLength.Text = txtLengthLabel & " (" & txtCustom & "):"
         Else
             lblLength.Text = txtLengthLabel & " (" & lengthAxis & " " & txtAxis & "):"
         End If
-        lblLength.Left = 20
-        lblLength.Top = 140
-        lblLength.Width = 100
-        frm.Controls.Add(lblLength)
+        lblLength.AutoSize = True
+        lblLength.Anchor = AnchorStyles.Left
+        layout.Controls.Add(lblLength, 0, 3)
 
         Dim txtLength As New System.Windows.Forms.TextBox()
         txtLength.Text = lengthStr
-        txtLength.Left = 125
-        txtLength.Top = 137
-        txtLength.Width = 100
         txtLength.ReadOnly = True
-        frm.Controls.Add(txtLength)
+        txtLength.Dock = DockStyle.Fill
+        layout.Controls.Add(txtLength, 1, 3)
 
-        Dim btnFlip As New System.Windows.Forms.Button()
-        btnFlip.Text = txtFlipButton
-        btnFlip.Left = 235
-        btnFlip.Top = 117
-        btnFlip.Width = 140
-        btnFlip.Height = 28
-        btnFlip.DialogResult = DialogResult.Ignore
-        frm.Controls.Add(btnFlip)
+        ' Row 4: Buttons
+        Dim buttonPanel As New System.Windows.Forms.FlowLayoutPanel()
+        buttonPanel.AutoSize = True
+        buttonPanel.FlowDirection = FlowDirection.RightToLeft
+        buttonPanel.Anchor = AnchorStyles.Right
+        layout.Controls.Add(buttonPanel, 0, 4)
+        layout.SetColumnSpan(buttonPanel, 3)
+
+        Dim btnCancel As New System.Windows.Forms.Button()
+        btnCancel.Text = txtCancelButton
+        btnCancel.Width = 80
+        btnCancel.Height = 28
+        btnCancel.DialogResult = DialogResult.Cancel
+        frm.CancelButton = btnCancel
+        buttonPanel.Controls.Add(btnCancel)
+
+        Dim btnOK As New System.Windows.Forms.Button()
+        btnOK.Text = "OK"
+        btnOK.Width = 80
+        btnOK.Height = 28
+        btnOK.DialogResult = DialogResult.OK
+        frm.AcceptButton = btnOK
+        buttonPanel.Controls.Add(btnOK)
 
         If showSkipButton Then
             Dim btnSkip As New System.Windows.Forms.Button()
             btnSkip.Text = txtSkipButton
-            btnSkip.Left = 120
-            btnSkip.Top = 230
             btnSkip.Width = 80
-            btnSkip.Height = 30
+            btnSkip.Height = 28
             btnSkip.DialogResult = DialogResult.No
-            frm.Controls.Add(btnSkip)
+            buttonPanel.Controls.Add(btnSkip)
         End If
-
-        Dim btnOK As New System.Windows.Forms.Button()
-        btnOK.Text = "OK"
-        btnOK.Left = 210
-        btnOK.Top = 230
-        btnOK.Width = 80
-        btnOK.Height = 30
-        btnOK.DialogResult = DialogResult.OK
-        frm.AcceptButton = btnOK
-        frm.Controls.Add(btnOK)
-
-        Dim btnCancel As New System.Windows.Forms.Button()
-        btnCancel.Text = txtCancelButton
-        btnCancel.Left = 300
-        btnCancel.Top = 230
-        btnCancel.Width = 80
-        btnCancel.Height = 30
-        btnCancel.DialogResult = DialogResult.Cancel
-        frm.CancelButton = btnCancel
-        frm.Controls.Add(btnCancel)
 
         cboAxis.Tag = frm
         AddHandler cboAxis.SelectedIndexChanged, AddressOf OnAxisComboChanged
