@@ -88,6 +88,22 @@ Sub Main()
         Logger.Warn("Loo komponendid: Vault not connected - manual filenames required")
     End If
     
+    ' Get workspace root for Vault path conversion
+    ' This detects the actual Vault root by testing path prefixes against Vault
+    Dim workspaceRoot As String = ""
+    If vaultConnected Then
+        Dim docFolder As String = System.IO.Path.GetDirectoryName(masterDoc.FullDocumentName)
+        workspaceRoot = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, docFolder, logs)
+        For Each log As String In logs : Logger.Info(log) : Next
+        logs.Clear()
+    End If
+    
+    If String.IsNullOrEmpty(workspaceRoot) Then
+        Logger.Warn("Loo komponendid: Could not detect Vault workspace root")
+    Else
+        Logger.Info("Loo komponendid: Workspace root: " & workspaceRoot)
+    End If
+    
     ' Get all bodies with detected axes
     Dim allBodies As List(Of MakeComponentsLib.BodyInfo) = MakeComponentsLib.GetBodiesWithAxes(masterDoc, logs)
     For Each log As String In logs : Logger.Info(log) : Next
@@ -229,8 +245,11 @@ Sub Main()
         fileNumbers.Add(safeName)
     Next
     
-    ' Prepare output folder
-    Dim outputFolder As String = MakeComponentsLib.EnsureSubfolder(masterPath, selectedSubfolder)
+    ' Prepare output folder (creates in both local file system and Vault)
+    Dim outputFolder As String = MakeComponentsLib.EnsureSubfolderWithVault( _
+        masterPath, selectedSubfolder, vaultConn, workspaceRoot, logs)
+    For Each log As String In logs : Logger.Info(log) : Next
+    logs.Clear()
     Logger.Info("Loo komponendid: Output folder: " & outputFolder)
     
     ' Find template path

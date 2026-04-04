@@ -870,7 +870,7 @@ Public Module MakeComponentsLib
         Return ""
     End Function
     
-    ' Create subfolder if it doesn't exist
+    ' Create subfolder if it doesn't exist (local file system only)
     Public Function EnsureSubfolder(basePath As String, subfolderName As String) As String
         Try
             Dim subPath As String = System.IO.Path.Combine(basePath, subfolderName)
@@ -881,6 +881,43 @@ Public Module MakeComponentsLib
         Catch
             Return basePath
         End Try
+    End Function
+    
+    ' Create subfolder in both local file system AND Vault
+    ' Parameters:
+    '   basePath - The parent folder path (local file system)
+    '   subfolderName - Name of the subfolder to create
+    '   vaultConn - Vault connection object (from VaultNumberingLib.GetVaultConnection)
+    '   workspaceRoot - Local workspace root path (maps to $/ in Vault)
+    '   logs - List to collect log messages
+    ' Returns: The full path of the created subfolder
+    Public Function EnsureSubfolderWithVault(basePath As String, _
+                                             subfolderName As String, _
+                                             vaultConn As Object, _
+                                             workspaceRoot As String, _
+                                             logs As System.Collections.Generic.List(Of String)) As String
+        ' Create local folder first
+        Dim localPath As String = EnsureSubfolder(basePath, subfolderName)
+        
+        ' If Vault is connected and workspace is known, also create in Vault
+        If vaultConn IsNot Nothing AndAlso Not String.IsNullOrEmpty(workspaceRoot) Then
+            Dim vaultPath As String = VaultNumberingLib.ConvertLocalPathToVaultPath(localPath, workspaceRoot)
+            
+            If Not String.IsNullOrEmpty(vaultPath) Then
+                Dim vaultFolder As Object = VaultNumberingLib.EnsureVaultFolder(vaultConn, vaultPath, logs)
+                If vaultFolder IsNot Nothing Then
+                    logs.Add("MakeComponentsLib: Vault folder ready: " & vaultPath)
+                Else
+                    logs.Add("MakeComponentsLib: Could not create Vault folder (local only): " & vaultPath)
+                End If
+            Else
+                logs.Add("MakeComponentsLib: Path not in workspace, skipping Vault folder creation")
+            End If
+        Else
+            logs.Add("MakeComponentsLib: No Vault connection or workspace, local folder only")
+        End If
+        
+        Return localPath
     End Function
     
     ' ============================================================================
