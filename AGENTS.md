@@ -380,6 +380,32 @@ Public Module MyLibrary
 End Module
 ```
 
+### Inventor API Members Not Available in iLogic
+
+Some Inventor API members that work in standalone applications do not work in iLogic:
+
+| API Member | Error | Use Instead |
+|------------|-------|-------------|
+| `app.Assets(AssetTypeEnum.kAssetTypeMaterial)` | `Public member 'Assets' on type 'Application' not found` | `partDoc.Materials` |
+| `DerivedPartUniformScaleDef.IncludeAllWorkSurfaces` | `Public member not found` | Only set `DeriveStyle` and individual `IncludeEntity` |
+| `DerivedPartUniformScaleDef.IncludeAllParameters` | `Public member not found` | (same as above) |
+| `DerivedPartUniformScaleDef.LinkFaceColor` | `Public member not found` | (same as above) |
+| Save after `smCompDef.Unfold()` | `E_FAIL` error during SaveAs | Call `smCompDef.FlatPattern.ExitEdit()` before save |
+
+**Material enumeration example:**
+
+```vb
+' BAD - app.Assets doesn't work in iLogic
+For Each asset As Asset In app.Assets(AssetTypeEnum.kAssetTypeMaterial)
+    materials.Add(asset.DisplayName)  ' Error!
+Next
+
+' GOOD - use partDoc.Materials
+For Each mat As Material In partDoc.Materials
+    materials.Add(mat.Name)  ' Works!
+Next
+```
+
 ### Creating/Updating Rules Programmatically
 
 ```vb
@@ -591,4 +617,7 @@ ctrlDef.Execute()  ' Shows checkout dialog
 | object.Select() not found | Use `doc.SelectSet.Select(object)` instead |
 | Vault checkout status | Use `doc.ReservedForWriteByMe`, not `doc.IsModifiable` |
 | Vault silent checkout | Not possible; all commands show dialogs |
+| app.Assets() not found | Use `partDoc.Materials` to enumerate materials |
+| DerivedPartUniformScaleDef.IncludeAll* | Only use `DeriveStyle` and individual `IncludeEntity` |
+| Save fails after Unfold() | Call `smCompDef.FlatPattern.ExitEdit()` before SaveAs |
 
