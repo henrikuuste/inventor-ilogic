@@ -4,6 +4,46 @@ This document captures constraints and best practices for writing Autodesk Inven
 
 - Use the 2026 iLogic API for reference https://help.autodesk.com/view/INVNTOR/2026/ENU/?guid=110f3019-404c-4fc4-8b5d-7a3143f129da
 
+## QUICK REFERENCE - VERIFY BEFORE WRITING CODE
+
+**STOP and check these rules BEFORE writing code, not after compile errors.**
+
+### Critical Constraints Table
+
+| When Writing... | NEVER Do This | ALWAYS Do This Instead |
+|-----------------|---------------|------------------------|
+| Lambda with ByRef param | `AddHandler btn.Click, Sub() byRefParam = x` | Store in `frm.Tag`, read after `ShowDialog()` |
+| Forms controls | `New TextBox()` | `New System.Windows.Forms.TextBox()` |
+| Control position/size | `New Point(x,y)`, `New Size(w,h)` | Use `.Left`, `.Top`, `.Width`, `.Height` |
+| Context menus | `ContextMenuStrip`, `ToolStripMenuItem` | Use `Button` or `ComboBox` instead |
+| Library files | `AddReference` or `AddVbFile` in library | Put ALL in main script only |
+| Library with external types | `Function() As ACW.NumSchm` | `Function() As Object` (late binding) |
+| Modal dialog + Pick | Pick while dialog open | Close dialog → Pick → Reopen dialog |
+| File-level variables | `Dim x` outside Module/Sub | Declare inside `Sub Main()` |
+
+### Windows Forms Checklist
+
+Before writing ANY Windows Forms code, verify:
+
+- [ ] **No ByRef parameters used in lambda expressions** - use `form.Tag` or `control.Tag` instead
+- [ ] **No System.Drawing types** - no `Size`, `Point`, `Color`, `Font`
+- [ ] **No ContextMenuStrip/ToolStripMenuItem** - use Buttons or ComboBox
+- [ ] **All controls fully qualified** - `System.Windows.Forms.TextBox`, not `TextBox`
+- [ ] **Close form before CommandManager.Pick**, reopen after
+- [ ] **Read ByRef values from Tag AFTER ShowDialog returns**, not inside lambda
+
+### Library Module Checklist
+
+Before writing ANY library module code, verify:
+
+- [ ] **No `AddReference` statements** - only main script can have these
+- [ ] **No `AddVbFile` statements** - only main script can have these
+- [ ] **No `Imports` with aliases for external assemblies** - use `Object` type
+- [ ] **No `Logger`, `ThisApplication`, `ThisDoc`, `iLogicVb`** - pass as parameters
+- [ ] **Use `Object` return type** for any external API types
+
+---
+
 ## Language and Logging Conventions
 
 ### Language
@@ -55,6 +95,65 @@ aSideFace = app.CommandManager.Pick(SelectionFilterEnum.kPartFacePlanarFilter, _
 - **Do NOT mix them in the same file** - a `Module` statement nested inside or after `Sub Main()` causes: `'Module' statements can occur only at file or namespace level`
 - To use a library from a rule, use `AddVbFile "Lib/LibraryName.vb"` at the top of the rule
 
+### AddReference and AddVbFile Ordering
+
+- **`AddReference` MUST come BEFORE `AddVbFile`** in runnable scripts
+- **Library modules CANNOT contain `AddReference` or `AddVbFile`** - these are iLogic directives that only work in `Sub Main()` context
+- This causes: `Statement cannot appear outside of a method body` and `Method arguments must be enclosed in parentheses`
+- **All references must be declared in the main runnable script**, not in libraries
+
+```vb
+' BAD - AddVbFile before AddReference
+AddVbFile "Lib/MyLib.vb"
+AddReference "SomeAssembly"  ' Error!
+
+' BAD - AddReference inside library module
+Public Module MyLib
+    AddReference "SomeAssembly"  ' Error! Cannot appear in module
+End Module
+
+' GOOD - All AddReference first, then AddVbFile, in main script only
+AddReference "Autodesk.Connectivity.WebServices"
+AddReference "Autodesk.DataManagement.Client.Framework.Vault"
+AddVbFile "Lib/VaultLib.vb"
+AddVbFile "Lib/OtherLib.vb"
+
+Sub Main()
+    ' ...
+End Sub
+```
+
+### Imports and Namespace Aliases in Libraries
+
+- **Libraries CANNOT use `Imports` with namespace aliases** that depend on `AddReference`
+- The referenced types won't be available because libraries can't add references
+- **Use `Object` type for external API types**, or use fully qualified names
+- This causes: `Type 'ACW.NumSchm' is not defined` or `'Imports' statements must precede any declarations`
+
+```vb
+' BAD - library using Imports alias for referenced assembly
+Imports ACW = Autodesk.Connectivity.WebServices
+Public Module VaultLib
+    Public Function GetScheme() As ACW.NumSchm  ' Error!
+    End Function
+End Module
+
+' GOOD - library using Object type (late binding)
+Public Module VaultLib
+    Public Function GetScheme() As Object
+        ' Access properties via late binding
+        Return scheme  ' scheme.Name, scheme.SchmID work at runtime
+    End Function
+End Module
+
+' GOOD - library using fully qualified names (if reference is added by caller)
+Public Module VaultLib
+    Public Function GetConnection() As Object
+        Return Connectivity.InventorAddin.EdmAddin.EdmSecurity.Instance.VaultConnection()
+    End Function
+End Module
+```
+
 ### Module-Level Variables and Constants
 
 - **Do NOT declare variables or constants at file level outside of Module/Sub/Function**
@@ -102,6 +201,7 @@ Dim frm As New System.Windows.Forms.Form()
 ' BAD - may cause missing assembly errors
 btn.Location = New Point(10, 20)
 btn.Size = New Size(80, 30)
+frm.MinimumSize = New System.Drawing.Size(800, 500)
 lbl.Font = New System.Drawing.Font(lbl.Font, System.Drawing.FontStyle.Bold)
 
 ' GOOD - use individual properties
@@ -112,6 +212,35 @@ btn.Height = 30
 
 ' For emphasis, use text decoration instead of Font changes
 lbl.Text = "--- Section Header ---"  ' Use dashes or symbols for visual separation
+```
+
+### Avoid ContextMenuStrip and ToolStripMenuItem
+
+- `ContextMenuStrip` and `ToolStripMenuItem` internally use `System.Drawing.Image`
+- This causes: `Reference required to assembly 'System.Drawing.Common' containing the type 'Image'`
+- **Use regular Buttons or ComboBox for actions instead:**
+
+```vb
+' BAD - ToolStripMenuItem uses System.Drawing.Image internally
+Dim ctxMenu As New ContextMenuStrip()
+Dim mnuItem As New ToolStripMenuItem("Action")  ' Error!
+
+' GOOD - use Buttons for actions
+Dim btnAction As New System.Windows.Forms.Button()
+btnAction.Text = "Action"
+btnAction.Left = 10
+btnAction.Top = 400
+btnAction.Width = 100
+AddHandler btnAction.Click, Sub(s, e)
+    ' Handle action
+End Sub
+frm.Controls.Add(btnAction)
+
+' GOOD - use ComboBox for selection-based actions
+Dim cboOptions As New System.Windows.Forms.ComboBox()
+cboOptions.Items.Add("Option 1")
+cboOptions.Items.Add("Option 2")
+frm.Controls.Add(cboOptions)
 ```
 
 ### Lambda Closures Have Scoping Issues
@@ -438,14 +567,21 @@ ctrlDef.Execute()  ' Shows checkout dialog
 
 ## Summary of Key Constraints
 
+> **IMPORTANT**: These constraints must be checked BEFORE writing code, not after compile errors.
+> See the **QUICK REFERENCE** section at the top of this document for checklists.
+
 | Issue | Solution |
 |-------|----------|
+| **ByRef in lambda** | **NEVER use ByRef params in lambda. Store in form.Tag, read AFTER ShowDialog()** |
 | Module-level Dim/Const outside Module | Declare inside Sub Main or pass via parameters |
 | Module inside Sub Main | Separate into different files |
+| AddReference/AddVbFile in library | Put ALL AddReference/AddVbFile in main script only |
+| AddVbFile before AddReference | Put AddReference BEFORE AddVbFile |
+| Type from referenced assembly in library | Use `Object` type with late binding |
 | TextBox ambiguous | Use `System.Windows.Forms.TextBox` |
 | Size/Point/Font not defined | Use Left/Top/Width/Height; use text decoration for emphasis |
+| ContextMenuStrip/ToolStripMenuItem | Use Buttons or ComboBox instead |
 | Lambda closure errors | Use `AddressOf` with separate Sub, or use Tag property |
-| ByRef in lambda | Read control values after dialog closes, use form.Tag for action |
 | Modal blocks Inventor picks | Close form before pick, reopen after |
 | Sub call without parentheses | Always use `SubName(args)` not `SubName args` |
 | iLogicVb/ThisApplication in Module | Pass as parameters from Sub Main |
