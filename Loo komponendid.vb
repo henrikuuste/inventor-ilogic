@@ -392,6 +392,11 @@ Sub Main()
         For Each log As String In logs : Logger.Info(log) : Next
         logs.Clear()
         
+        ' Set assembly properties BEFORE save (Vault reads VDS properties at SaveAs time)
+        MakeComponentsLib.SetAssemblyProperties(asmDoc, projectName, logs)
+        For Each log As String In logs : Logger.Info(log) : Next
+        logs.Clear()
+        
         ' Save assembly
         If assemblyAction = "CREATE" AndAlso Not String.IsNullOrEmpty(assemblyPath) Then
             Try
@@ -415,19 +420,6 @@ Sub Main()
             asmDoc.Save()
             actualAssemblyPath = asmDoc.FullDocumentName
         End If
-        
-        ' Set assembly project property
-        MakeComponentsLib.SetAssemblyProperties(asmDoc, projectName, logs)
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
-        
-        ' Save assembly again to persist properties
-        Try
-            asmDoc.Save()
-            Logger.Info("Loo komponendid: Assembly properties saved")
-        Catch ex As Exception
-            Logger.Warn("Loo komponendid: Could not save assembly properties: " & ex.Message)
-        End Try
     End If
     
     ' Save general settings to master document
