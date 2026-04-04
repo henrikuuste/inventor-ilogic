@@ -17,10 +17,11 @@ Public Module BoundingBoxStockLib
     ' Main processing function - called by both standalone and batch scripts
     ' Returns: "OK" = success, "SKIP" = user skipped, "CANCEL" = user cancelled
     ' iLogicAuto: Pass iLogicVb.Automation from the calling script
+    ' useEstonian: If True, show Estonian UI text
     ' ============================================================================
     Public Function ProcessPartDocument(ByVal app As Inventor.Application, ByVal partDoc As PartDocument, _
                                         ByVal formTitle As String, ByVal showSkipButton As Boolean, _
-                                        ByVal iLogicAuto As Object) As String
+                                        ByVal iLogicAuto As Object, Optional ByVal useEstonian As Boolean = False) As String
         ' Get bounding box dimensions
         Dim xSize As Double = 0
         Dim ySize As Double = 0
@@ -28,7 +29,7 @@ Public Module BoundingBoxStockLib
         GetBoundingBoxSizes(partDoc, xSize, ySize, zSize)
 
         ' Run the UI loop
-        Dim axisConfig As String = RunConfigLoop(app, partDoc, xSize, ySize, zSize, formTitle, showSkipButton)
+        Dim axisConfig As String = RunConfigLoop(app, partDoc, xSize, ySize, zSize, formTitle, showSkipButton, useEstonian)
 
         If axisConfig = "" Then
             Return "CANCEL" ' User cancelled
@@ -57,7 +58,8 @@ Public Module BoundingBoxStockLib
 
     Public Function RunConfigLoop(ByVal app As Inventor.Application, ByVal partDoc As PartDocument, _
                                   ByVal xSize As Double, ByVal ySize As Double, ByVal zSize As Double, _
-                                  ByVal formTitle As String, ByVal showSkipButton As Boolean) As String
+                                  ByVal formTitle As String, ByVal showSkipButton As Boolean, _
+                                  Optional ByVal useEstonian As Boolean = False) As String
         ' Try to read existing axis configuration from iProperties
         Dim thicknessAxis As String = GetCustomPropertyValue(partDoc, "BB_ThicknessAxis", "")
         Dim widthAxis As String = GetCustomPropertyValue(partDoc, "BB_WidthAxis", "")
@@ -92,7 +94,7 @@ Public Module BoundingBoxStockLib
             Dim action As String = ""
             Dim result As DialogResult = ShowConfigForm(app, partDoc, xSize, ySize, zSize, _
                                                          thicknessAxis, widthAxis, lengthAxis, _
-                                                         customAxisDesc, formTitle, showSkipButton, action)
+                                                         customAxisDesc, formTitle, showSkipButton, action, useEstonian)
 
             If result = DialogResult.Cancel Then
                 Return ""
@@ -104,7 +106,7 @@ Public Module BoundingBoxStockLib
             ElseIf action = "PICK_PLANE" Then
                 ' Pick face/work plane for thickness direction
                 Dim planeDesc As String = ""
-                Dim pickedVector As String = PickPlaneForThickness(app, planeDesc)
+                Dim pickedVector As String = PickPlaneForThickness(app, planeDesc, useEstonian)
                 If pickedVector <> "" Then
                     thicknessAxis = pickedVector
                     customAxisDesc = planeDesc
@@ -168,9 +170,21 @@ Public Module BoundingBoxStockLib
                                    ByVal xSize As Double, ByVal ySize As Double, ByVal zSize As Double, _
                                    ByRef thicknessAxis As String, ByVal widthAxis As String, ByVal lengthAxis As String, _
                                    ByVal customAxisDesc As String, ByVal formTitle As String, ByVal showSkipButton As Boolean, _
-                                   ByRef action As String) As DialogResult
+                                   ByRef action As String, Optional ByVal useEstonian As Boolean = False) As DialogResult
         action = ""
         Dim uom As UnitsOfMeasure = partDoc.UnitsOfMeasure
+
+        ' Estonian/English UI text
+        Dim txtThicknessAxisLabel As String = If(useEstonian, "Paksuse telg:", "Thickness Axis:")
+        Dim txtThicknessLabel As String = If(useEstonian, "Paksus:", "Thickness:")
+        Dim txtWidthLabel As String = If(useEstonian, "Laius", "Width")
+        Dim txtLengthLabel As String = If(useEstonian, "Pikkus", "Length")
+        Dim txtFlipButton As String = If(useEstonian, "Vaheta laius/pikkus", "Flip Width/Length")
+        Dim txtSkipButton As String = If(useEstonian, "Jäta vahele", "Skip")
+        Dim txtCancelButton As String = If(useEstonian, "Tühista", "Cancel")
+        Dim txtCustom As String = If(useEstonian, "kohandatud", "custom")
+        Dim txtAxis As String = If(useEstonian, "telg", "axis")
+        Dim txtDefaultTitle As String = If(useEstonian, "Mõõdud", "Bounding Box Stock Sizes")
 
         ' Calculate display values - use OBB for vector format
         Dim thicknessValue As Double = 0
@@ -196,7 +210,7 @@ Public Module BoundingBoxStockLib
         If formTitle <> "" Then
             frm.Text = formTitle
         Else
-            frm.Text = "Bounding Box Stock Sizes"
+            frm.Text = txtDefaultTitle
         End If
         frm.Width = 420
         frm.Height = 320
@@ -206,7 +220,7 @@ Public Module BoundingBoxStockLib
         frm.MinimizeBox = False
 
         Dim lblThicknessAxis As New System.Windows.Forms.Label()
-        lblThicknessAxis.Text = "Thickness Axis:"
+        lblThicknessAxis.Text = txtThicknessAxisLabel
         lblThicknessAxis.Left = 20
         lblThicknessAxis.Top = 20
         lblThicknessAxis.Width = 100
@@ -243,7 +257,7 @@ Public Module BoundingBoxStockLib
         frm.Controls.Add(txtCustomAxis)
 
         Dim lblThickness As New System.Windows.Forms.Label()
-        lblThickness.Text = "Thickness:"
+        lblThickness.Text = txtThicknessLabel
         lblThickness.Left = 20
         lblThickness.Top = 60
         lblThickness.Width = 100
@@ -259,9 +273,9 @@ Public Module BoundingBoxStockLib
 
         Dim lblWidth As New System.Windows.Forms.Label()
         If IsVectorFormat(widthAxis) Then
-            lblWidth.Text = "Width (custom):"
+            lblWidth.Text = txtWidthLabel & " (" & txtCustom & "):"
         Else
-            lblWidth.Text = "Width (" & widthAxis & " axis):"
+            lblWidth.Text = txtWidthLabel & " (" & widthAxis & " " & txtAxis & "):"
         End If
         lblWidth.Left = 20
         lblWidth.Top = 100
@@ -278,9 +292,9 @@ Public Module BoundingBoxStockLib
 
         Dim lblLength As New System.Windows.Forms.Label()
         If IsVectorFormat(lengthAxis) Then
-            lblLength.Text = "Length (custom):"
+            lblLength.Text = txtLengthLabel & " (" & txtCustom & "):"
         Else
-            lblLength.Text = "Length (" & lengthAxis & " axis):"
+            lblLength.Text = txtLengthLabel & " (" & lengthAxis & " " & txtAxis & "):"
         End If
         lblLength.Left = 20
         lblLength.Top = 140
@@ -296,17 +310,17 @@ Public Module BoundingBoxStockLib
         frm.Controls.Add(txtLength)
 
         Dim btnFlip As New System.Windows.Forms.Button()
-        btnFlip.Text = "Flip Width/Length"
+        btnFlip.Text = txtFlipButton
         btnFlip.Left = 235
         btnFlip.Top = 117
-        btnFlip.Width = 120
+        btnFlip.Width = 140
         btnFlip.Height = 28
         btnFlip.DialogResult = DialogResult.Ignore
         frm.Controls.Add(btnFlip)
 
         If showSkipButton Then
             Dim btnSkip As New System.Windows.Forms.Button()
-            btnSkip.Text = "Skip"
+            btnSkip.Text = txtSkipButton
             btnSkip.Left = 120
             btnSkip.Top = 230
             btnSkip.Width = 80
@@ -326,7 +340,7 @@ Public Module BoundingBoxStockLib
         frm.Controls.Add(btnOK)
 
         Dim btnCancel As New System.Windows.Forms.Button()
-        btnCancel.Text = "Cancel"
+        btnCancel.Text = txtCancelButton
         btnCancel.Left = 300
         btnCancel.Top = 230
         btnCancel.Width = 80
@@ -481,16 +495,28 @@ Public Module BoundingBoxStockLib
     ' Pick a face or work plane for thickness direction (returns vector format)
     ' Returns: "V:x,y,z" string or "" if cancelled
     ' ============================================================================
-    Public Function PickPlaneForThickness(ByVal app As Inventor.Application, ByRef planeDesc As String) As String
+    Public Function PickPlaneForThickness(ByVal app As Inventor.Application, ByRef planeDesc As String, _
+                                          Optional ByVal useEstonian As Boolean = False) As String
         planeDesc = ""
+
+        ' Estonian/English text
+        Dim txtPrompt As String = If(useEstonian, "Vali pind või töötasapind paksuse suuna määramiseks:", _
+                                     "Select a face or work plane to define the thickness direction:")
+        Dim txtTitle As String = If(useEstonian, "Mõõdud", "Bounding Box Stock")
+        Dim txtFaceError As String = If(useEstonian, "Valitud pinnalt ei saanud normaali. Valige tasapinnaline pind.", _
+                                        "Could not get normal from selected face. Please select a planar face.")
+        Dim txtPlaneError As String = If(useEstonian, "Valitud töötasapinnalt ei saanud normaali.", _
+                                         "Could not get normal from selected work plane.")
+        Dim txtSelectError As String = If(useEstonian, "Valige pind või töötasapind.", _
+                                          "Please select a face or work plane.")
+        Dim txtFace As String = If(useEstonian, "Pind", "Face")
+        Dim txtWorkPlane As String = If(useEstonian, "Töötasapind", "Work Plane")
         
         Dim selFilter As SelectionFilterEnum = SelectionFilterEnum.kAllPlanarEntities
         Dim selectedObj As Object = Nothing
 
         Try
-            selectedObj = app.CommandManager.Pick( _
-                selFilter, _
-                "Select a face or work plane to define the thickness direction:")
+            selectedObj = app.CommandManager.Pick(selFilter, txtPrompt)
         Catch
             Return ""
         End Try
@@ -505,23 +531,23 @@ Public Module BoundingBoxStockLib
         If TypeOf selectedObj Is Face Then
             Dim face As Face = CType(selectedObj, Face)
             If Not GetFaceNormal(face, normalX, normalY, normalZ) Then
-                MessageBox.Show("Could not get normal from selected face. Please select a planar face.", "Bounding Box Stock")
+                MessageBox.Show(txtFaceError, txtTitle)
                 Return ""
             End If
-            objName = "Face"
+            objName = txtFace
         ElseIf TypeOf selectedObj Is WorkPlane Then
             Dim workPlane As WorkPlane = CType(selectedObj, WorkPlane)
             If Not GetWorkPlaneNormal(workPlane, normalX, normalY, normalZ) Then
-                MessageBox.Show("Could not get normal from selected work plane.", "Bounding Box Stock")
+                MessageBox.Show(txtPlaneError, txtTitle)
                 Return ""
             End If
             Try
-                objName = "WorkPlane: " & workPlane.Name
+                objName = txtWorkPlane & ": " & workPlane.Name
             Catch
-                objName = "Work Plane"
+                objName = txtWorkPlane
             End Try
         Else
-            MessageBox.Show("Please select a face or work plane.", "Bounding Box Stock")
+            MessageBox.Show(txtSelectError, txtTitle)
             Return ""
         End If
 
@@ -703,8 +729,17 @@ Public Module BoundingBoxStockLib
         SetCustomProperty(partDoc, "BB_ThicknessAxis", thicknessAxis)
         SetCustomProperty(partDoc, "BB_WidthAxis", widthAxis)
 
-        Dim ruleName As String = "BoundingBoxStockUpdate"
+        Dim ruleName As String = "Uuenda mõõdud"
         Dim ruleText As String = BuildRuleText()
+
+        ' Delete old BoundingBoxStockUpdate rule if it exists (migration to new name)
+        Try
+            Dim oldRule As Object = iLogicAuto.GetRule(partDoc, "BoundingBoxStockUpdate")
+            If oldRule IsNot Nothing Then
+                iLogicAuto.DeleteRule(partDoc, "BoundingBoxStockUpdate")
+            End If
+        Catch
+        End Try
 
         Dim existingRule As Object = Nothing
 
