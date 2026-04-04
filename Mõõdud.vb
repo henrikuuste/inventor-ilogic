@@ -32,8 +32,14 @@ Sub Main()
 End Sub
 
 Sub ProcessSinglePart(ByVal app As Inventor.Application, ByVal partDoc As PartDocument)
+    ' Build form title with filename and description
+    Dim partDesc As String = GetPartDescription(partDoc)
+    Dim partName As String = System.IO.Path.GetFileNameWithoutExtension(partDoc.FullFileName)
+    Dim formTitle As String = "Mõõdud - " & partName
+    If partDesc <> "" Then formTitle &= " - " & partDesc
+
     ' Process the part with Estonian UI, no skip button, no batch info
-    Dim result As String = BoundingBoxStockLib.ProcessPartDocument(app, partDoc, "", False, iLogicVb.Automation, True)
+    Dim result As String = BoundingBoxStockLib.ProcessPartDocument(app, partDoc, formTitle, False, iLogicVb.Automation, True)
     ' No success message - exit silently if OK
 End Sub
 
@@ -96,9 +102,17 @@ Sub ProcessAssemblySelection(ByVal app As Inventor.Application, ByVal asmDoc As 
             Continue For
         End If
 
-        ' Build form title with part name and progress
-        Dim partName As String = System.IO.Path.GetFileName(partDoc.FullFileName)
-        Dim formTitle As String = "Mõõdud - " & partName & " (" & currentIndex & "/" & totalCount & ")"
+        ' Build form title with filename, description, and progress
+        Dim partDesc As String = GetPartDescription(partDoc)
+        Dim partName As String = System.IO.Path.GetFileNameWithoutExtension(partDoc.FullFileName)
+        Dim formTitle As String = "Mõõdud - " & partName
+        If partDesc <> "" Then formTitle &= " - " & partDesc
+        formTitle &= " (" & currentIndex & "/" & totalCount & ")"
+
+        ' Highlight the current part in the assembly view
+        asmDoc.SelectSet.Clear()
+        asmDoc.SelectSet.Select(occ)
+        app.ActiveView.Update()
 
         ' Process this part with Estonian UI and skip button
         Dim result As String = BoundingBoxStockLib.ProcessPartDocument(app, partDoc, formTitle, True, iLogicVb.Automation, True)
@@ -112,3 +126,27 @@ Sub ProcessAssemblySelection(ByVal app As Inventor.Application, ByVal asmDoc As 
 
     ' No summary message - exit silently
 End Sub
+
+Function GetPartDescription(ByVal partDoc As PartDocument) As String
+    Try
+        ' Try to get Description from Design Tracking Properties (most common location)
+        Dim designProps As PropertySet = partDoc.PropertySets.Item("Design Tracking Properties")
+        Dim desc As String = CStr(designProps.Item("Description").Value)
+        If desc IsNot Nothing AndAlso desc.Trim() <> "" Then
+            Return desc.Trim()
+        End If
+    Catch
+    End Try
+    
+    Try
+        ' Fallback: try Summary Information "Subject" field
+        Dim summaryInfo As PropertySet = partDoc.PropertySets.Item("Inventor Summary Information")
+        Dim subj As String = CStr(summaryInfo.Item("Subject").Value)
+        If subj IsNot Nothing AndAlso subj.Trim() <> "" Then
+            Return subj.Trim()
+        End If
+    Catch
+    End Try
+    
+    Return ""
+End Function

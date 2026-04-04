@@ -294,6 +294,22 @@ Else
 End If
 ```
 
+### Selecting/Highlighting Objects Programmatically
+
+- Objects like `ComponentOccurrence` do **NOT** have a `Select()` method
+- This causes: `Public member 'Select' on type 'ComponentOccurrence' not found.`
+- **Use `SelectSet.Select(object)` on the document's SelectSet:**
+
+```vb
+' BAD - ComponentOccurrence has no Select method
+occ.Select()
+
+' GOOD - use the document's SelectSet
+asmDoc.SelectSet.Clear()
+asmDoc.SelectSet.Select(occ)
+app.ActiveView.Update()  ' Refresh the view to show selection
+```
+
 ## Common Patterns
 
 ### Document Type Checking
@@ -353,4 +369,5 @@ SetCustomProp(doc, "Name", "Value")
 | SelectionFilterEnum combined with Or | Use aggregate filters like kAllPlanarEntities |
 | Library function signature changed | Update ALL callers across all .vb files |
 | CreateGeometryProxy is a Sub, not Function | Use `occ.CreateGeometryProxy(obj, result)` with ByRef result |
+| object.Select() not found | Use `doc.SelectSet.Select(object)` instead |
 
