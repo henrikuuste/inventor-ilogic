@@ -20,8 +20,11 @@ This document captures constraints and best practices for writing Autodesk Inven
 
 - Use `Logger.Info()`, `Logger.Warn()`, `Logger.Error()` to log to the iLogic log window
 - **Do NOT use MessageBox.Show()** for informational summaries or progress updates
-- MessageBox is acceptable only for critical errors that require user acknowledgment before continuing
 - Prefix log messages with the rule name for easy filtering, e.g., `Logger.Info("Lehtmetall: Starting conversion...")`
+- **Early-exit errors** (where the rule cannot run at all) should use **both** Logger and MessageBox:
+  - Logger message in English for the log
+  - MessageBox message in Estonian for the user
+  - This ensures the user sees immediate feedback when a rule fails to start
 
 ```vb
 ' BAD - blocks user with popup for information
@@ -29,6 +32,13 @@ MessageBox.Show("Conversion complete. Thickness: 2.5 mm", "Lehtmetall")
 
 ' GOOD - logs to iLogic log without blocking
 Logger.Info("Lehtmetall: Conversion complete. Thickness: 2.5 mm")
+
+' GOOD - early-exit error with both Logger and MessageBox
+If doc Is Nothing Then
+    Logger.Error("Lehtmetall: No active document.")
+    MessageBox.Show("Aktiivne dokument puudub.", "Lehtmetall")
+    Exit Sub
+End If
 
 ' GOOD - user-facing prompt in Estonian
 aSideFace = app.CommandManager.Pick(SelectionFilterEnum.kPartFacePlanarFilter, _
