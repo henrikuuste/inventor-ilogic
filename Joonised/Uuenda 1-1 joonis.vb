@@ -10,12 +10,21 @@
 ' Usage: 
 ' - From drawing: Updates active drawing
 ' - From part: Finds and updates associated drawing (by Part Number)
+'              Searches both open documents and disk
 ' - From assembly: Shows list of parts with associated drawings
 '
 ' Note: This script does NOT add or remove views.
 '       Use "Lisa vaated" to add views or "Loo 1:1 joonised" for new drawings.
 ' ============================================================================
 
+' References for Vault integration (workspace root detection)
+AddReference "Autodesk.Connectivity.WebServices"
+AddReference "Autodesk.DataManagement.Client.Framework.Vault"
+AddReference "Autodesk.DataManagement.Client.Framework.Vault.Forms"
+AddReference "Connectivity.InventorAddin.EdmAddin"
+
+' Libraries
+AddVbFile "Lib/VaultNumberingLib.vb"
 AddVbFile "Lib/CAMDrawingLib.vb"
 
 Imports System.Collections.Generic
@@ -47,7 +56,7 @@ Sub Main()
             Logger.Info("Uuenda 1:1 joonis: Using active drawing: " & drawDoc.DisplayName)
             
         Case DocumentTypeEnum.kPartDocumentObject
-            ' In a part - find associated drawing
+            ' In a part - find associated drawing (open docs + disk)
             partDoc = CType(activeDoc, PartDocument)
             Dim partNumber As String = CAMDrawingLib.GetPartNumber(partDoc)
             
@@ -59,10 +68,36 @@ Sub Main()
             
             Logger.Info("Uuenda 1:1 joonis: Part: " & partDoc.DisplayName & " (" & partNumber & ")")
             
-            ' Search in open documents for 1:1 drawing
-            drawDoc = CAMDrawingLib.FindDrawingForPartInOpenDocs(partNumber, app, logs, CAMDrawingLib.DRAWING_TYPE_1TO1)
+            ' Get workspace root for disk search
+            Dim searchRoot As String = System.IO.Path.GetDirectoryName(partDoc.FullDocumentName)
+            Dim vaultConn As Object = VaultNumberingLib.GetVaultConnection()
+            If vaultConn IsNot Nothing Then
+                Dim workspaceRoot As String = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, searchRoot, logs)
+                For Each log As String In logs : Logger.Info(log) : Next
+                logs.Clear()
+                If Not String.IsNullOrEmpty(workspaceRoot) Then
+                    searchRoot = workspaceRoot
+                End If
+            End If
+            
+            Logger.Info("Uuenda 1:1 joonis: Searching for drawing in: " & searchRoot)
+            
+            ' Search in open documents AND on disk for 1:1 drawing
+            Dim drawingPath As String = CAMDrawingLib.FindDrawingForPart( _
+                partNumber, searchRoot, app, logs, CAMDrawingLib.DRAWING_TYPE_1TO1, True)
             For Each log As String In logs : Logger.Info(log) : Next
             logs.Clear()
+            
+            If Not String.IsNullOrEmpty(drawingPath) Then
+                ' Found - check if already open
+                drawDoc = CAMDrawingLib.FindDrawingForPartInOpenDocs(partNumber, app, logs, CAMDrawingLib.DRAWING_TYPE_1TO1)
+                If drawDoc Is Nothing Then
+                    ' Open from disk
+                    drawDoc = CAMDrawingLib.OpenExistingDrawing(app, drawingPath, logs)
+                    For Each log As String In logs : Logger.Info(log) : Next
+                    logs.Clear()
+                End If
+            End If
             
             If drawDoc Is Nothing Then
                 ' Ask user to select a drawing file
@@ -88,12 +123,27 @@ Sub Main()
             End If
             
         Case DocumentTypeEnum.kAssemblyDocumentObject
-            ' In an assembly - show list of parts with drawings
+            ' In an assembly - show list of parts with drawings (search open docs + disk)
             Logger.Info("Uuenda 1:1 joonis: Assembly context - searching for parts with drawings")
             
             Dim asmDoc As AssemblyDocument = CType(activeDoc, AssemblyDocument)
             Dim partsWithDrawings As New List(Of Tuple(Of PartDocument, DrawingDocument))
+            Dim partsWithDrawingPaths As New List(Of Tuple(Of PartDocument, String)) ' Parts with drawings on disk (not open)
             Dim partPaths As New HashSet(Of String)
+            
+            ' Get workspace root for disk search
+            Dim searchRoot As String = System.IO.Path.GetDirectoryName(asmDoc.FullDocumentName)
+            Dim vaultConn As Object = VaultNumberingLib.GetVaultConnection()
+            If vaultConn IsNot Nothing Then
+                Dim workspaceRoot As String = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, searchRoot, logs)
+                For Each log As String In logs : Logger.Info(log) : Next
+                logs.Clear()
+                If Not String.IsNullOrEmpty(workspaceRoot) Then
+                    searchRoot = workspaceRoot
+                End If
+            End If
+            
+            Logger.Info("Uuenda 1:1 joonis: Searching for drawings in: " & searchRoot)
             
             ' Find all unique parts and their drawings
             For Each occ As ComponentOccurrence In asmDoc.ComponentDefinition.Occurrences
@@ -106,10 +156,18 @@ Sub Main()
                             Dim pn As String = CAMDrawingLib.GetPartNumber(pd)
                             
                             If Not String.IsNullOrEmpty(pn) Then
+                                ' First check open documents
                                 Dim dd As DrawingDocument = CAMDrawingLib.FindDrawingForPartInOpenDocs( _
                                     pn, app, logs, CAMDrawingLib.DRAWING_TYPE_1TO1)
                                 If dd IsNot Nothing Then
                                     partsWithDrawings.Add(New Tuple(Of PartDocument, DrawingDocument)(pd, dd))
+                                Else
+                                    ' Search on disk
+                                    Dim drawingPath As String = CAMDrawingLib.FindDrawingForPart( _
+                                        pn, searchRoot, app, logs, CAMDrawingLib.DRAWING_TYPE_1TO1, True)
+                                    If Not String.IsNullOrEmpty(drawingPath) Then
+                                        partsWithDrawingPaths.Add(New Tuple(Of PartDocument, String)(pd, drawingPath))
+                                    End If
                                 End If
                             End If
                         End If
@@ -120,9 +178,19 @@ Sub Main()
             For Each log As String In logs : Logger.Info(log) : Next
             logs.Clear()
             
+            ' Open drawings found on disk
+            For Each pdPair As Tuple(Of PartDocument, String) In partsWithDrawingPaths
+                Dim dd As DrawingDocument = CAMDrawingLib.OpenExistingDrawing(app, pdPair.Item2, logs)
+                If dd IsNot Nothing Then
+                    partsWithDrawings.Add(New Tuple(Of PartDocument, DrawingDocument)(pdPair.Item1, dd))
+                End If
+            Next
+            For Each log As String In logs : Logger.Info(log) : Next
+            logs.Clear()
+            
             If partsWithDrawings.Count = 0 Then
-                MessageBox.Show("Avatud 1:1 jooniseid ei leitud." & vbCrLf & _
-                               "Ava esmalt uuendatav joonis või käivita reegel joonisest.", "Uuenda 1:1 joonis")
+                MessageBox.Show("1:1 jooniseid ei leitud (avatud ega kettal)." & vbCrLf & _
+                               "Käivita 'Loo 1:1 joonised' uute jooniste loomiseks.", "Uuenda 1:1 joonis")
                 Exit Sub
             End If
             

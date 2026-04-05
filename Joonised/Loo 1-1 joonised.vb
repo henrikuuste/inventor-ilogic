@@ -1,8 +1,9 @@
 ' ============================================================================
-' Loo 1:1 joonised - Create 1:1 scale drawings for CAM applications
+' Loo 1:1 joonised - Create/Update 1:1 scale drawings for CAM applications
 ' 
 ' Features:
 ' - Create drawings with all 6 orthographic views at 1:1 scale
+' - UPDATE existing drawings (sync properties, refresh dimensions, fit sheet)
 ' - Auto-size sheet to fit part extents with dimension space (50% padding)
 ' - Add extent dimensions to all views
 ' - Shows existing drawing status for each part (by Part Number)
@@ -10,8 +11,9 @@
 ' - Stores BB_SourcePartNumber for part-drawing association
 '
 ' Usage: 
-' - From part document: Creates drawing for active part
+' - From part document: Creates or updates drawing for active part
 ' - From assembly: Select components or use all parts (with checkboxes)
+' - Select existing drawings to update them instead of recreating
 '
 ' Template: Uses Drawing.1.1.idw (must exist in templates folder)
 ' ============================================================================
@@ -172,7 +174,7 @@ Sub Main()
     
     Dim frm As New System.Windows.Forms.Form()
     frm.Text = "Loo 1:1 joonised"
-    frm.Width = 750
+    frm.Width = 800
     frm.Height = 500
     frm.StartPosition = FormStartPosition.CenterScreen
     frm.FormBorderStyle = FormBorderStyle.Sizable
@@ -196,7 +198,7 @@ Sub Main()
     dgv.Name = "dgvParts"
     dgv.Left = 10
     dgv.Top = currentY
-    dgv.Width = 710
+    dgv.Width = 760
     dgv.Height = 280
     dgv.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right Or AnchorStyles.Bottom
     dgv.AllowUserToAddRows = False
@@ -217,38 +219,56 @@ Sub Main()
     Dim colPartNum As New DataGridViewTextBoxColumn()
     colPartNum.Name = "colPartNum"
     colPartNum.HeaderText = "Artikkel"
-    colPartNum.Width = 120
+    colPartNum.Width = 100
     colPartNum.ReadOnly = True
     dgv.Columns.Add(colPartNum)
     
     ' Column: Name
     Dim colName As New DataGridViewTextBoxColumn()
     colName.Name = "colName"
-    colName.HeaderText = "Nimi"
-    colName.Width = 300
+    colName.HeaderText = "Detaili nimi"
+    colName.Width = 180
     colName.ReadOnly = True
     dgv.Columns.Add(colName)
     
-    ' Column: Status
-    Dim colStatus As New DataGridViewTextBoxColumn()
-    colStatus.Name = "colStatus"
-    colStatus.HeaderText = "Olek"
-    colStatus.Width = 220
-    colStatus.ReadOnly = True
-    dgv.Columns.Add(colStatus)
+    ' Column: Action (ComboBox)
+    Dim colAction As New DataGridViewComboBoxColumn()
+    colAction.Name = "colAction"
+    colAction.HeaderText = "Tegevus"
+    colAction.Width = 90
+    colAction.FlatStyle = FlatStyle.Flat
+    dgv.Columns.Add(colAction)
+    
+    ' Column: Existing Drawing (shows filename if exists)
+    Dim colDrawing As New DataGridViewTextBoxColumn()
+    colDrawing.Name = "colDrawing"
+    colDrawing.HeaderText = "Olemasolev joonis"
+    colDrawing.Width = 270
+    colDrawing.ReadOnly = True
+    dgv.Columns.Add(colDrawing)
     
     ' Populate rows
     For i As Integer = 0 To partDocs.Count - 1
         Dim rowIndex As Integer = dgv.Rows.Add()
         dgv.Rows(rowIndex).Tag = i
+        
+        ' Checkbox - by default: select new parts
         dgv.Rows(rowIndex).Cells("colSelected").Value = selectedFlags(i) AndAlso Not hasDrawings(i)
         dgv.Rows(rowIndex).Cells("colPartNum").Value = If(String.IsNullOrEmpty(partNumbers(i)), "(puudub)", partNumbers(i))
         dgv.Rows(rowIndex).Cells("colName").Value = displayNames(i)
         
+        ' Set up combo box items based on whether drawing exists
+        Dim actionCell As DataGridViewComboBoxCell = CType(dgv.Rows(rowIndex).Cells("colAction"), DataGridViewComboBoxCell)
         If hasDrawings(i) Then
-            dgv.Rows(rowIndex).Cells("colStatus").Value = "* 1:1 joonis olemas"
+            actionCell.Items.Add("Uuenda")
+            actionCell.Items.Add("Loo uus")
+            actionCell.Value = "Uuenda"
+            ' Show existing drawing filename
+            dgv.Rows(rowIndex).Cells("colDrawing").Value = System.IO.Path.GetFileName(existingDrawingPaths(i))
         Else
-            dgv.Rows(rowIndex).Cells("colStatus").Value = "(uus)"
+            actionCell.Items.Add("Loo uus")
+            actionCell.Value = "Loo uus"
+            dgv.Rows(rowIndex).Cells("colDrawing").Value = ""
         End If
     Next
     
@@ -256,7 +276,7 @@ Sub Main()
     
     currentY += 290
     
-    ' Select all / none buttons
+    ' Select all / none / new / existing buttons
     Dim btnSelectAll As New System.Windows.Forms.Button()
     btnSelectAll.Text = "Vali kõik"
     btnSelectAll.Left = 10
@@ -268,15 +288,12 @@ Sub Main()
     
     AddHandler btnSelectAll.Click, Sub(s, e)
         For Each row As DataGridViewRow In dgv.Rows
-            Dim idx As Integer = CInt(row.Tag)
-            If Not hasDrawings(idx) Then
-                row.Cells("colSelected").Value = True
-            End If
+            row.Cells("colSelected").Value = True
         Next
     End Sub
     
     Dim btnSelectNone As New System.Windows.Forms.Button()
-    btnSelectNone.Text = "Tühista"
+    btnSelectNone.Text = "Tühjenda"
     btnSelectNone.Left = 95
     btnSelectNone.Top = currentY
     btnSelectNone.Width = 80
@@ -306,6 +323,25 @@ Sub Main()
         Next
     End Sub
     
+    Dim btnSelectExisting As New System.Windows.Forms.Button()
+    btnSelectExisting.Text = "Uuenda olemasolevaid"
+    btnSelectExisting.Left = 275
+    btnSelectExisting.Top = currentY
+    btnSelectExisting.Width = 130
+    btnSelectExisting.Height = 25
+    btnSelectExisting.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left
+    frm.Controls.Add(btnSelectExisting)
+    
+    AddHandler btnSelectExisting.Click, Sub(s, e)
+        For Each row As DataGridViewRow In dgv.Rows
+            Dim idx As Integer = CInt(row.Tag)
+            row.Cells("colSelected").Value = hasDrawings(idx)
+            If hasDrawings(idx) Then
+                row.Cells("colAction").Value = "Uuenda"
+            End If
+        Next
+    End Sub
+    
     currentY += 35
     
     ' Output folder
@@ -322,14 +358,14 @@ Sub Main()
     txtOutput.Text = outputFolder
     txtOutput.Left = 95
     txtOutput.Top = currentY
-    txtOutput.Width = 570
+    txtOutput.Width = 620
     txtOutput.ReadOnly = True
     txtOutput.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
     frm.Controls.Add(txtOutput)
     
     Dim btnBrowseOutput As New System.Windows.Forms.Button()
     btnBrowseOutput.Text = "..."
-    btnBrowseOutput.Left = 670
+    btnBrowseOutput.Left = 720
     btnBrowseOutput.Top = currentY
     btnBrowseOutput.Width = 40
     btnBrowseOutput.Height = 23
@@ -350,8 +386,8 @@ Sub Main()
     
     ' OK/Cancel buttons
     Dim btnOK As New System.Windows.Forms.Button()
-    btnOK.Text = "Loo joonised"
-    btnOK.Left = 540
+    btnOK.Text = "Käivita"
+    btnOK.Left = 590
     btnOK.Top = currentY
     btnOK.Width = 100
     btnOK.Height = 28
@@ -362,7 +398,7 @@ Sub Main()
     
     Dim btnCancel As New System.Windows.Forms.Button()
     btnCancel.Text = "Tühista"
-    btnCancel.Left = 645
+    btnCancel.Left = 695
     btnCancel.Top = currentY
     btnCancel.Width = 70
     btnCancel.Height = 28
@@ -377,10 +413,19 @@ Sub Main()
     ' Extract values before disposing
     outputFolder = txtOutput.Text
     
-    ' Update selection flags from grid
+    ' Track actions selected for each part
+    Dim partActions As New List(Of String)
+    For i As Integer = 0 To partDocs.Count - 1
+        partActions.Add("")
+    Next
+    
+    ' Update selection flags and actions from grid
     For Each row As DataGridViewRow In dgv.Rows
         Dim idx As Integer = CInt(row.Tag)
         selectedFlags(idx) = CBool(row.Cells("colSelected").Value)
+        If row.Cells("colAction").Value IsNot Nothing Then
+            partActions(idx) = CStr(row.Cells("colAction").Value)
+        End If
     Next
     
     frm.Dispose()
@@ -430,38 +475,81 @@ Sub Main()
     
     ' Process each part
     Dim createdDrawings As New List(Of String)
-    Dim skippedCount As Integer = 0
+    Dim updatedDrawings As New List(Of String)
     
     For Each idx As Integer In selectedIndices
         Dim partDoc As PartDocument = partDocs(idx)
-        Logger.Info("Loo 1:1 joonised: Processing " & partDoc.DisplayName)
+        Dim action As String = partActions(idx)
+        Logger.Info("Loo 1:1 joonised: Processing " & partDoc.DisplayName & " (action: " & action & ")")
         
-        ' Skip if drawing already exists and user selected it anyway
-        If hasDrawings(idx) Then
-            Logger.Info("Loo 1:1 joonised: Skipping - drawing already exists")
-            skippedCount += 1
+        ' Check if action is "Uuenda" - update existing drawing
+        If action = "Uuenda" AndAlso hasDrawings(idx) Then
+            Logger.Info("Loo 1:1 joonised: Updating existing drawing...")
+            
+            ' Open the existing drawing
+            Dim existingPath As String = existingDrawingPaths(idx)
+            Dim existingDrawDoc As DrawingDocument = CAMDrawingLib.OpenExistingDrawing(app, existingPath, logs)
+            For Each log As String In logs : Logger.Info(log) : Next
+            logs.Clear()
+            
+            If existingDrawDoc Is Nothing Then
+                Logger.Error("Loo 1:1 joonised: Failed to open drawing: " & existingPath)
+                Continue For
+            End If
+            
+            Dim existingSheet As Sheet = existingDrawDoc.ActiveSheet
+            
+            ' Sync properties from part to drawing
+            CAMDrawingLib.CopyPropertiesToDrawing(partDoc, existingDrawDoc, logs)
+            For Each log As String In logs : Logger.Info(log) : Next
+            logs.Clear()
+            
+            ' Reposition views (geometry may have changed)
+            CAMDrawingLib.RepositionViews(existingSheet, app, logs)
+            For Each log As String In logs : Logger.Info(log) : Next
+            logs.Clear()
+            
+            ' Update tagged extent dimensions
+            CAMDrawingLib.UpdateTaggedExtentDimensions(existingDrawDoc, existingSheet, app, logs)
+            For Each log As String In logs : Logger.Info(log) : Next
+            logs.Clear()
+            
+            ' Fit sheet to content
+            CAMDrawingLib.FitSheetToContent(existingSheet, app, logs)
+            For Each log As String In logs : Logger.Info(log) : Next
+            logs.Clear()
+            
+            ' Save
+            Try
+                existingDrawDoc.Save()
+                Logger.Info("Loo 1:1 joonised: Updated drawing saved")
+                updatedDrawings.Add(existingDrawDoc.FullDocumentName)
+            Catch ex As Exception
+                Logger.Error("Loo 1:1 joonised: Failed to save: " & ex.Message)
+            End Try
+            
             Continue For
         End If
         
-        ' Create drawing from template
-        Dim drawDoc As DrawingDocument = CAMDrawingLib.CreateDrawingFromTemplate(app, templatePath, logs)
+        ' Create new drawing from template
+        Dim newDrawDoc As DrawingDocument = CAMDrawingLib.CreateDrawingFromTemplate(app, templatePath, logs)
         For Each log As String In logs : Logger.Info(log) : Next
         logs.Clear()
         
-        If drawDoc Is Nothing Then
+        If newDrawDoc Is Nothing Then
             Logger.Error("Loo 1:1 joonised: Failed to create drawing for " & partDoc.DisplayName)
             Continue For
         End If
         
-        Dim sheet As Sheet = drawDoc.ActiveSheet
+        Dim newSheet As Sheet = newDrawDoc.ActiveSheet
         
         ' Set drawing association (copies properties + sets BB_SourcePartNumber)
-        CAMDrawingLib.SetDrawingAssociation(drawDoc, partDoc, logs)
+        CAMDrawingLib.SetDrawingAssociation(newDrawDoc, partDoc, logs)
         For Each log As String In logs : Logger.Info(log) : Next
         logs.Clear()
         
         ' Add all 6 views at 1:1 scale
-        Dim views As List(Of DrawingView) = CAMDrawingLib.AddAllViews(sheet, partDoc, app, logs)
+        Dim views As List(Of DrawingView) = CAMDrawingLib.AddAllViews(newSheet, partDoc, app, logs)
         For Each log As String In logs : Logger.Info(log) : Next
         logs.Clear()
         
@@ -471,12 +559,12 @@ Sub Main()
         Next
         
         ' Add extent dimensions to all views (dimensions are auto-tagged)
-        CAMDrawingLib.AddExtentDimensionsToViews(sheet, views, app, logs)
+        CAMDrawingLib.AddExtentDimensionsToViews(newSheet, views, app, logs)
         For Each log As String In logs : Logger.Info(log) : Next
         logs.Clear()
         
         ' Fit sheet to content with 50% padding
-        CAMDrawingLib.FitSheetToContent(sheet, app, logs, 0.5)
+        CAMDrawingLib.FitSheetToContent(newSheet, app, logs, 0.5)
         For Each log As String In logs : Logger.Info(log) : Next
         logs.Clear()
         
@@ -487,10 +575,10 @@ Sub Main()
         
         ' Save drawing (Vault dialog will appear for numbering)
         Try
-            drawDoc.SaveAs(drawingPath, False)
+            newDrawDoc.SaveAs(drawingPath, False)
             
             ' Get actual path after save (Vault may have renamed)
-            Dim actualPath As String = drawDoc.FullDocumentName
+            Dim actualPath As String = newDrawDoc.FullDocumentName
             Logger.Info("Loo 1:1 joonised: Saved " & actualPath)
             createdDrawings.Add(actualPath)
             
@@ -505,6 +593,6 @@ Sub Main()
     Logger.Info("Loo 1:1 joonised: ========================================")
     Logger.Info("Loo 1:1 joonised: Parts selected: " & selectedIndices.Count)
     Logger.Info("Loo 1:1 joonised: Drawings created: " & createdDrawings.Count)
-    Logger.Info("Loo 1:1 joonised: Skipped (existing): " & skippedCount)
+    Logger.Info("Loo 1:1 joonised: Drawings updated: " & updatedDrawings.Count)
     Logger.Info("Loo 1:1 joonised: ========================================")
 End Sub
