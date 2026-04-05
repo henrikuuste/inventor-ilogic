@@ -87,7 +87,7 @@ Sub Main()
         Dim partDoc As PartDocument = CType(doc, PartDocument)
         partDocs.Add(partDoc)
         partNumbers.Add(CAMDrawingLib.GetPartNumber(partDoc))
-        displayNames.Add(partDoc.DisplayName)
+        displayNames.Add(GetDescription(partDoc))
         hasDrawings.Add(False)
         selectedFlags.Add(True)
     Else
@@ -104,12 +104,14 @@ Sub Main()
         Next
         
         ' Get parts from selection or all occurrences
-        Dim occurrencesToProcess As IEnumerable(Of ComponentOccurrence)
+        Dim occurrencesToProcess As New List(Of ComponentOccurrence)
         If selectedOccurrences.Count > 0 Then
             occurrencesToProcess = selectedOccurrences
             Logger.Info("Loo 1:1 joonised: Using " & selectedOccurrences.Count & " selected occurrence(s)")
         Else
-            occurrencesToProcess = CType(asmDoc.ComponentDefinition.Occurrences, IEnumerable(Of ComponentOccurrence))
+            For Each occ As ComponentOccurrence In asmDoc.ComponentDefinition.Occurrences
+                occurrencesToProcess.Add(occ)
+            Next
             Logger.Info("Loo 1:1 joonised: No selection, using all occurrences")
         End If
         
@@ -122,7 +124,7 @@ Sub Main()
                         Dim partDoc As PartDocument = CType(occ.Definition.Document, PartDocument)
                         partDocs.Add(partDoc)
                         partNumbers.Add(CAMDrawingLib.GetPartNumber(partDoc))
-                        displayNames.Add(partDoc.DisplayName)
+                        displayNames.Add(GetDescription(partDoc))
                         hasDrawings.Add(False)
                         selectedFlags.Add(True)
                     End If
@@ -596,3 +598,16 @@ Sub Main()
     Logger.Info("Loo 1:1 joonised: Drawings updated: " & updatedDrawings.Count)
     Logger.Info("Loo 1:1 joonised: ========================================")
 End Sub
+
+Function GetDescription(partDoc As PartDocument) As String
+    Try
+        Dim propSets As PropertySets = partDoc.PropertySets
+        Dim designProps As PropertySet = propSets.Item("Design Tracking Properties")
+        Dim desc As Object = designProps.Item("Description").Value
+        If desc IsNot Nothing AndAlso Not String.IsNullOrEmpty(CStr(desc)) Then
+            Return CStr(desc)
+        End If
+    Catch
+    End Try
+    Return partDoc.DisplayName
+End Function

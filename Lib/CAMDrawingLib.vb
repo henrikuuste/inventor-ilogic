@@ -893,6 +893,8 @@ Public Module CAMDrawingLib
     ' ============================================================================
     
     ' Resize sheet to custom dimensions (in mm)
+    ' widthMm = horizontal extent, heightMm = vertical extent
+    ' Automatically sets portrait/landscape orientation based on which is larger
     Public Sub ResizeSheet(sheet As Sheet, _
                            widthMm As Double, _
                            heightMm As Double, _
@@ -900,7 +902,11 @@ Public Module CAMDrawingLib
         Dim widthCm As Double = widthMm / 10
         Dim heightCm As Double = heightMm / 10
         
-        logs.Add("CAMDrawingLib: Attempting to resize sheet to " & widthMm.ToString("F1") & " x " & heightMm.ToString("F1") & " mm")
+        ' Determine if we need portrait or landscape orientation
+        Dim needsPortrait As Boolean = (heightMm > widthMm)
+        Dim orientationName As String = If(needsPortrait, "Portrait", "Landscape")
+        
+        logs.Add("CAMDrawingLib: Attempting to resize sheet to " & widthMm.ToString("F1") & " x " & heightMm.ToString("F1") & " mm (" & orientationName & ")")
         logs.Add("CAMDrawingLib: Current sheet size: " & (sheet.Width * 10).ToString("F1") & " x " & (sheet.Height * 10).ToString("F1") & " mm")
         
         ' Ensure sheet is set to custom size first
@@ -913,40 +919,35 @@ Public Module CAMDrawingLib
             logs.Add("CAMDrawingLib: Could not set custom size mode: " & ex.Message)
         End Try
         
+        ' Set orientation BEFORE setting dimensions
+        ' This is critical for portrait sheets where height > width
         Try
-            ' Method 1: Try Resize method
-            sheet.Resize(DrawingSheetSizeEnum.kCustomDrawingSheetSize, widthCm, heightCm)
+            Dim targetOrientation As PageOrientationTypeEnum
+            If needsPortrait Then
+                targetOrientation = PageOrientationTypeEnum.kPortraitPageOrientation
+            Else
+                targetOrientation = PageOrientationTypeEnum.kLandscapePageOrientation
+            End If
             
-            Dim actualWidth As Double = sheet.Width * 10
-            Dim actualHeight As Double = sheet.Height * 10
-            logs.Add("CAMDrawingLib: Sheet resized (Resize method) to " & actualWidth.ToString("F1") & " x " & actualHeight.ToString("F1") & " mm")
-        Catch ex1 As Exception
-            logs.Add("CAMDrawingLib: Resize method failed: " & ex1.Message)
+            If sheet.Orientation <> targetOrientation Then
+                logs.Add("CAMDrawingLib: Setting orientation to " & orientationName)
+                sheet.Orientation = targetOrientation
+            End If
+        Catch ex As Exception
+            logs.Add("CAMDrawingLib: Could not set orientation: " & ex.Message)
+        End Try
+        
+        ' Now set dimensions - with orientation set correctly, Width/Height should work properly
+        Try
+            logs.Add("CAMDrawingLib: Before dimension changes: " & (sheet.Width * 10).ToString("F1") & " x " & (sheet.Height * 10).ToString("F1") & " mm")
             
-            ' Method 2: Try direct property assignment
-            ' NOTE: Setting Width may actually affect Height in some cases - try both orders
-            Try
-                logs.Add("CAMDrawingLib: Before any changes: " & (sheet.Width * 10).ToString("F1") & " x " & (sheet.Height * 10).ToString("F1") & " mm")
-                
-                ' Try setting Height first, then Width
-                sheet.Height = heightCm
-                logs.Add("CAMDrawingLib: After setting Height=" & (heightCm * 10).ToString("F1") & ": " & (sheet.Width * 10).ToString("F1") & " x " & (sheet.Height * 10).ToString("F1") & " mm")
-                
-                sheet.Width = widthCm
-                logs.Add("CAMDrawingLib: After setting Width=" & (widthCm * 10).ToString("F1") & ": " & (sheet.Width * 10).ToString("F1") & " x " & (sheet.Height * 10).ToString("F1") & " mm")
-                
-                ' Check if we need to swap (in case Width/Height are swapped in landscape mode)
-                If Math.Abs(sheet.Width * 10 - widthMm) > 1 AndAlso Math.Abs(sheet.Height * 10 - widthMm) < 1 Then
-                    logs.Add("CAMDrawingLib: Detected Width/Height swap - sheet may be in portrait mode, trying swap...")
-                    sheet.Width = heightCm
-                    sheet.Height = widthCm
-                    logs.Add("CAMDrawingLib: After swap: " & (sheet.Width * 10).ToString("F1") & " x " & (sheet.Height * 10).ToString("F1") & " mm")
-                End If
-                
-                logs.Add("CAMDrawingLib: Sheet resized (direct) to " & (sheet.Width * 10).ToString("F1") & " x " & (sheet.Height * 10).ToString("F1") & " mm")
-            Catch ex2 As Exception
-                logs.Add("CAMDrawingLib: Failed to resize sheet: " & ex2.Message)
-            End Try
+            ' Set both dimensions
+            sheet.Width = widthCm
+            sheet.Height = heightCm
+            
+            logs.Add("CAMDrawingLib: Sheet resized to " & (sheet.Width * 10).ToString("F1") & " x " & (sheet.Height * 10).ToString("F1") & " mm")
+        Catch ex As Exception
+            logs.Add("CAMDrawingLib: Failed to resize sheet: " & ex.Message)
         End Try
     End Sub
     
@@ -2757,16 +2758,23 @@ Public Module CAMDrawingLib
         logs.Add("CAMDrawingLib: Target sheet size: " & FormatNumber(sheetWidthMm, 1) & " x " & _
                  FormatNumber(sheetHeightMm, 1) & " mm (padding: " & FormatNumber(paddingPercent * 100, 0) & "%)")
         
-        ' Calculate offset to center content on new sheet
+        ' Resize sheet FIRST (Inventor may swap Width/Height for portrait sheets)
+        ResizeSheet(sheet, sheetWidthMm, sheetHeightMm, logs)
+        
+        ' Get ACTUAL sheet dimensions after resize (Inventor enforces Width >= Height)
+        Dim actualWidthCm As Double = sheet.Width
+        Dim actualHeightCm As Double = sheet.Height
+        
+        ' Calculate offset to center content on ACTUAL sheet dimensions
         Dim contentCenterX As Double = (minX + maxX) / 2
         Dim contentCenterY As Double = (minY + maxY) / 2
-        Dim newSheetCenterX As Double = (sheetWidthMm / 10) / 2
-        Dim newSheetCenterY As Double = (sheetHeightMm / 10) / 2
+        Dim newSheetCenterX As Double = actualWidthCm / 2
+        Dim newSheetCenterY As Double = actualHeightCm / 2
         
         Dim offsetX As Double = newSheetCenterX - contentCenterX
         Dim offsetY As Double = newSheetCenterY - contentCenterY
         
-        ' Move all views first (before resizing sheet)
+        ' Move all views AFTER resize using actual sheet center
         For Each view As DrawingView In views
             Dim newPos As Point2d = app.TransientGeometry.CreatePoint2d( _
                 view.Position.X + offsetX, _
@@ -2776,9 +2784,6 @@ Public Module CAMDrawingLib
         
         logs.Add("CAMDrawingLib: Views moved (offset: " & FormatNumber(offsetX * 10, 1) & ", " & _
                  FormatNumber(offsetY * 10, 1) & " mm)")
-        
-        ' Now resize the sheet
-        ResizeSheet(sheet, sheetWidthMm, sheetHeightMm, logs)
     End Sub
     
     ' Get all views from a sheet as a List
