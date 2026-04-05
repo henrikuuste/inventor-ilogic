@@ -206,26 +206,22 @@ Sub Main()
     For Each log As String In logs : Logger.Info(log) : Next
     logs.Clear()
     
-    ' Step 3: Remove old dimensions
-    Logger.Info("Uuenda 1:1 joonis: Removing old dimensions...")
-    CAMDrawingLib.RemoveAllDimensions(sheet, logs)
+    ' Step 3: Update tagged extent dimensions (smart update)
+    ' - Only recreates dimensions that were auto-generated and still exist
+    ' - Preserves user-added dimensions (no tag)
+    ' - Doesn't recreate dimensions user deleted (not in tagged list)
+    Logger.Info("Uuenda 1:1 joonis: Updating tagged extent dimensions...")
+    CAMDrawingLib.UpdateTaggedExtentDimensions(drawDoc, sheet, app, logs)
     For Each log As String In logs : Logger.Info(log) : Next
     logs.Clear()
     
-    ' Step 4: Add new extent dimensions to all views
-    Logger.Info("Uuenda 1:1 joonis: Adding new extent dimensions...")
-    Dim views As List(Of DrawingView) = CAMDrawingLib.GetAllViewsFromSheet(sheet)
-    CAMDrawingLib.AddExtentDimensionsToViews(sheet, views, app, logs)
-    For Each log As String In logs : Logger.Info(log) : Next
-    logs.Clear()
-    
-    ' Step 5: Fit sheet to content
+    ' Step 4: Fit sheet to content
     Logger.Info("Uuenda 1:1 joonis: Fitting sheet to content...")
     CAMDrawingLib.FitSheetToContent(sheet, app, logs)
     For Each log As String In logs : Logger.Info(log) : Next
     logs.Clear()
     
-    ' Step 6: Save the drawing
+    ' Step 5: Save the drawing
     Try
         drawDoc.Save()
         Logger.Info("Uuenda 1:1 joonis: Drawing saved")
@@ -367,14 +363,15 @@ Function ShowUpdateDialog(drawDoc As DrawingDocument, _
     Dim lblInfo As New System.Windows.Forms.Label()
     lblInfo.Text = "Uuendamisel tehakse:" & vbCrLf & vbCrLf & _
                    If(partDoc IsNot Nothing, "✓ Atribuudid (Project, Description) sünkroniseeritakse" & vbCrLf, "") & _
-                   "✓ Olemasolevad mõõtmed kustutatakse" & vbCrLf & _
-                   "✓ Uued gabariidi mõõtmed lisatakse kõigile vaadetele" & vbCrLf & _
+                   "✓ Automaatsed gabariidimõõtmed uuendatakse" & vbCrLf & _
+                   "✓ Käsitsi lisatud mõõtmed säilivad" & vbCrLf & _
+                   "✓ Kustutatud mõõtmeid ei taastata" & vbCrLf & _
                    "✓ Lehe suurus kohandatakse sisule" & vbCrLf & vbCrLf & _
                    "NB: Vaated jäävad muutmata."
     lblInfo.Left = 15
     lblInfo.Top = currentY
     lblInfo.Width = 460
-    lblInfo.Height = 130
+    lblInfo.Height = 140
     frm.Controls.Add(lblInfo)
     
     currentY += 140

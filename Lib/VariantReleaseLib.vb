@@ -76,21 +76,29 @@ Public Module VariantReleaseLib
         
         logMessages.Add("  Looking for drawings that reference " & refFileSet.Count & " files")
         
-        ' Find all IDW and DWG files
+        ' Find all IDW and DWG files (exclude OldVersions backup folders created by Vault)
         Dim drawingFiles As New List(Of String)
         Try
-            drawingFiles.AddRange(System.IO.Directory.GetFiles(searchFolder, "*.idw", System.IO.SearchOption.AllDirectories))
+            For Each f As String In System.IO.Directory.GetFiles(searchFolder, "*.idw", System.IO.SearchOption.AllDirectories)
+                If f.IndexOf("\OldVersions\", StringComparison.OrdinalIgnoreCase) < 0 Then
+                    drawingFiles.Add(f)
+                End If
+            Next
         Catch ex As Exception
             logMessages.Add("  Error searching for IDW files: " & ex.Message)
         End Try
         
         Try
-            drawingFiles.AddRange(System.IO.Directory.GetFiles(searchFolder, "*.dwg", System.IO.SearchOption.AllDirectories))
+            For Each f As String In System.IO.Directory.GetFiles(searchFolder, "*.dwg", System.IO.SearchOption.AllDirectories)
+                If f.IndexOf("\OldVersions\", StringComparison.OrdinalIgnoreCase) < 0 Then
+                    drawingFiles.Add(f)
+                End If
+            Next
         Catch ex As Exception
             logMessages.Add("  Error searching for DWG files: " & ex.Message)
         End Try
         
-        logMessages.Add("  Found " & drawingFiles.Count & " drawing files to check")
+        logMessages.Add("  Found " & drawingFiles.Count & " drawing files to check (excluded OldVersions)")
         
         ' For first few drawings, show what they reference for debugging
         Dim debugCount As Integer = 0

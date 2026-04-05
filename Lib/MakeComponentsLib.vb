@@ -326,8 +326,17 @@ Public Module MakeComponentsLib
         Try
             If Not System.IO.Directory.Exists(searchRoot) Then Return ""
             
-            Dim files() As String = System.IO.Directory.GetFiles(searchRoot, fileName, System.IO.SearchOption.AllDirectories)
-            If files.Length > 0 Then
+            Dim allFiles() As String = System.IO.Directory.GetFiles(searchRoot, fileName, System.IO.SearchOption.AllDirectories)
+            
+            ' Filter out OldVersions backup folders (created by Vault)
+            Dim files As New List(Of String)
+            For Each f As String In allFiles
+                If f.IndexOf("\OldVersions\", StringComparison.OrdinalIgnoreCase) < 0 Then
+                    files.Add(f)
+                End If
+            Next
+            
+            If files.Count > 0 Then
                 logs.Add("MakeComponentsLib: Found '" & fileName & "' at new location: " & files(0))
                 Return files(0)
             End If
