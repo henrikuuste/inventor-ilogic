@@ -168,8 +168,21 @@ Sub Main()
     ' Apply loaded settings as defaults, or use computed defaults
     Dim selectedTemplate As String = If(Not String.IsNullOrEmpty(generalSettings.Template), _
                                         generalSettings.Template, "Part.ipt")
-    Dim selectedSubfolder As String = If(Not String.IsNullOrEmpty(generalSettings.Subfolder), _
-                                         generalSettings.Subfolder, "Detailid")
+    
+    ' Handle subfolder - support both old format (relative name) and new format (full path)
+    Dim storedSubfolder As String = generalSettings.Subfolder
+    Dim selectedSubfolder As String
+    If String.IsNullOrEmpty(storedSubfolder) Then
+        ' Default to Detailid subfolder under master path
+        selectedSubfolder = System.IO.Path.Combine(masterPath, "Detailid")
+    ElseIf storedSubfolder.Contains("\") OrElse storedSubfolder.Contains(":") Then
+        ' Full path stored (new format)
+        selectedSubfolder = storedSubfolder
+    Else
+        ' Relative name stored (old format) - convert to full path
+        selectedSubfolder = System.IO.Path.Combine(masterPath, storedSubfolder)
+    End If
+    
     Dim projectName As String = If(Not String.IsNullOrEmpty(generalSettings.ProjectName), _
                                    generalSettings.ProjectName, defaultProject)
     
@@ -245,9 +258,19 @@ Sub Main()
         fileNumbers.Add(safeName)
     Next
     
-    ' Prepare output folder (creates in both local file system and Vault)
-    Dim outputFolder As String = MakeComponentsLib.EnsureSubfolderWithVault( _
-        masterPath, selectedSubfolder, vaultConn, workspaceRoot, logs)
+    ' Prepare output folder - selectedSubfolder is now a full path
+    ' User creates folder on disk, we ensure it exists in Vault
+    Dim outputFolder As String = selectedSubfolder
+    
+    If Not System.IO.Directory.Exists(outputFolder) Then
+        Logger.Error("Loo komponendid: Output folder does not exist: " & outputFolder)
+        MessageBox.Show("Väljundkausta ei leitud: " & vbCrLf & outputFolder & vbCrLf & vbCrLf & _
+                        "Loo kaust enne jätkamist.", "Loo komponendid")
+        Exit Sub
+    End If
+    
+    ' Ensure folder exists in Vault (if connected)
+    MakeComponentsLib.EnsureFolderInVault(outputFolder, vaultConn, workspaceRoot, logs)
     For Each log As String In logs : Logger.Info(log) : Next
     logs.Clear()
     Logger.Info("Loo komponendid: Output folder: " & outputFolder)
@@ -604,25 +627,45 @@ Function ShowMainDialog(app As Inventor.Application, _
     cboTemplate.SelectedIndex = 0
     frm.Controls.Add(cboTemplate)
     
-    ' Subfolder
+    ' Subfolder (output folder)
     Dim lblSubfolder As New System.Windows.Forms.Label()
-    lblSubfolder.Text = "Alamkaust:"
+    lblSubfolder.Text = "Väljundkaust:"
     lblSubfolder.Left = 310
     lblSubfolder.Top = currentY + 3
-    lblSubfolder.Width = 100
+    lblSubfolder.Width = 80
     frm.Controls.Add(lblSubfolder)
     
-    Dim cboSubfolder As New System.Windows.Forms.ComboBox()
-    cboSubfolder.Name = "cboSubfolder"
-    cboSubfolder.Left = 415
-    cboSubfolder.Top = currentY
-    cboSubfolder.Width = 180
-    cboSubfolder.DropDownStyle = ComboBoxStyle.DropDown
-    cboSubfolder.Items.Add("Detailid")
-    cboSubfolder.Items.Add("Poroloon")
-    cboSubfolder.Items.Add("Lehtmetall")
-    cboSubfolder.SelectedIndex = 0
-    frm.Controls.Add(cboSubfolder)
+    Dim txtSubfolder As New System.Windows.Forms.TextBox()
+    txtSubfolder.Name = "txtSubfolder"
+    txtSubfolder.Text = selectedSubfolder
+    txtSubfolder.Left = 395
+    txtSubfolder.Top = currentY
+    txtSubfolder.Width = 470
+    txtSubfolder.ReadOnly = True
+    frm.Controls.Add(txtSubfolder)
+    
+    Dim btnBrowseFolder As New System.Windows.Forms.Button()
+    btnBrowseFolder.Name = "btnBrowseFolder"
+    btnBrowseFolder.Text = "..."
+    btnBrowseFolder.Left = 870
+    btnBrowseFolder.Top = currentY
+    btnBrowseFolder.Width = 30
+    btnBrowseFolder.Height = 23
+    frm.Controls.Add(btnBrowseFolder)
+    
+    AddHandler btnBrowseFolder.Click, Sub(s, e)
+        Dim fbd As New FolderBrowserDialog()
+        fbd.Description = "Vali väljundkaust komponentidele"
+        fbd.ShowNewFolderButton = True
+        If Not String.IsNullOrEmpty(txtSubfolder.Text) AndAlso System.IO.Directory.Exists(txtSubfolder.Text) Then
+            fbd.SelectedPath = txtSubfolder.Text
+        Else
+            fbd.SelectedPath = masterPath
+        End If
+        If fbd.ShowDialog() = DialogResult.OK Then
+            txtSubfolder.Text = fbd.SelectedPath
+        End If
+    End Sub
     
     currentY += 30
     
@@ -936,7 +979,7 @@ Function ShowMainDialog(app As Inventor.Application, _
         projectName = txtProject.Text
         ' selectedScheme not used - Vault handles numbering on save
         selectedTemplate = If(cboTemplate.SelectedItem IsNot Nothing, cboTemplate.SelectedItem.ToString(), "Part.ipt")
-        selectedSubfolder = If(String.IsNullOrEmpty(cboSubfolder.Text), "Detailid", cboSubfolder.Text)
+        selectedSubfolder = txtSubfolder.Text
         
         Select Case cboAssembly.SelectedIndex
             Case 0 : assemblyAction = "NONE"

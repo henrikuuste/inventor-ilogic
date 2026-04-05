@@ -955,6 +955,54 @@ Public Module MakeComponentsLib
         Return localPath
     End Function
     
+    ' Ensure a local folder exists in Vault (folder must already exist on disk)
+    ' Parameters:
+    '   localPath - The full local folder path (must exist on disk)
+    '   vaultConn - Vault connection object (from VaultNumberingLib.GetVaultConnection)
+    '   workspaceRoot - Local workspace root path (maps to $/ in Vault)
+    '   logs - List to collect log messages
+    ' Returns: True if folder is ready (exists in Vault or was created)
+    Public Function EnsureFolderInVault(localPath As String, _
+                                        vaultConn As Object, _
+                                        workspaceRoot As String, _
+                                        logs As System.Collections.Generic.List(Of String)) As Boolean
+        ' Skip if folder doesn't exist on disk
+        If Not System.IO.Directory.Exists(localPath) Then
+            logs.Add("MakeComponentsLib: Folder does not exist on disk: " & localPath)
+            Return False
+        End If
+        
+        ' Skip if no Vault connection
+        If vaultConn Is Nothing Then
+            logs.Add("MakeComponentsLib: No Vault connection, skipping Vault folder creation")
+            Return True
+        End If
+        
+        ' Skip if no workspace root
+        If String.IsNullOrEmpty(workspaceRoot) Then
+            logs.Add("MakeComponentsLib: No workspace root, skipping Vault folder creation")
+            Return True
+        End If
+        
+        ' Convert local path to Vault path
+        Dim vaultPath As String = VaultNumberingLib.ConvertLocalPathToVaultPath(localPath, workspaceRoot)
+        
+        If String.IsNullOrEmpty(vaultPath) Then
+            logs.Add("MakeComponentsLib: Path not in workspace, cannot create Vault folder: " & localPath)
+            Return True
+        End If
+        
+        ' Ensure folder exists in Vault
+        Dim vaultFolder As Object = VaultNumberingLib.EnsureVaultFolder(vaultConn, vaultPath, logs)
+        If vaultFolder IsNot Nothing Then
+            logs.Add("MakeComponentsLib: Vault folder ready: " & vaultPath)
+            Return True
+        Else
+            logs.Add("MakeComponentsLib: Could not create Vault folder: " & vaultPath)
+            Return False
+        End If
+    End Function
+    
     ' ============================================================================
     ' Helper Functions
     ' ============================================================================
