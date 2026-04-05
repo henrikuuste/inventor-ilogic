@@ -383,5 +383,54 @@ Public Module VaultNumberingLib
         
         Return success
     End Function
+    
+    ' Ensure a local folder exists in Vault (folder must already exist on disk)
+    ' This is useful when the local folder was created by the user manually
+    ' Parameters:
+    '   localPath - The full local folder path (must exist on disk)
+    '   conn - Vault connection object (from GetVaultConnection)
+    '   workspaceRoot - Local workspace root path (maps to $/ in Vault)
+    '   logs - List to collect log messages
+    ' Returns: True if folder is ready (exists in Vault or was created)
+    Public Function EnsureFolderInVault(localPath As String, _
+                                        conn As Object, _
+                                        workspaceRoot As String, _
+                                        logs As System.Collections.Generic.List(Of String)) As Boolean
+        ' Skip if folder doesn't exist on disk
+        If Not System.IO.Directory.Exists(localPath) Then
+            logs.Add("VaultNumberingLib: Folder does not exist on disk: " & localPath)
+            Return False
+        End If
+        
+        ' Skip if no Vault connection
+        If conn Is Nothing Then
+            logs.Add("VaultNumberingLib: No Vault connection, skipping Vault folder creation")
+            Return True
+        End If
+        
+        ' Skip if no workspace root
+        If String.IsNullOrEmpty(workspaceRoot) Then
+            logs.Add("VaultNumberingLib: No workspace root, skipping Vault folder creation")
+            Return True
+        End If
+        
+        ' Convert local path to Vault path
+        Dim vaultPath As String = ConvertLocalPathToVaultPath(localPath, workspaceRoot)
+        
+        If String.IsNullOrEmpty(vaultPath) Then
+            logs.Add("VaultNumberingLib: Path not in workspace, cannot create Vault folder: " & localPath)
+            Return True
+        End If
+        
+        ' Ensure folder exists in Vault
+        Dim vaultFolder As Object = EnsureVaultFolder(conn, vaultPath, logs)
+        If vaultFolder IsNot Nothing Then
+            logs.Add("VaultNumberingLib: Vault folder ready: " & vaultPath)
+            Return True
+        Else
+            logs.Add("VaultNumberingLib: Could not create Vault folder: " & vaultPath)
+            Return False
+        End If
+    End Function
 
 End Module

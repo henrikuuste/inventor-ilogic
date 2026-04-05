@@ -2,7 +2,84 @@
 
 This document captures constraints and best practices for writing Autodesk Inventor iLogic rules and VB scripts.
 
-- Use the 2026 iLogic API for reference https://help.autodesk.com/view/INVNTOR/2026/ENU/?guid=110f3019-404c-4fc4-8b5d-7a3143f129da
+## API Documentation References
+
+When writing Inventor API code, **always search the official documentation first**:
+
+- **Inventor 2026 API Reference (Primary)**: https://help.autodesk.com/view/INVNTOR/2026/ENU/
+- **iLogic API Reference**: https://help.autodesk.com/view/INVNTOR/2026/ENU/?guid=110f3019-404c-4fc4-8b5d-7a3143f129da
+
+### Key API Pages
+
+| Topic | URL |
+|-------|-----|
+| DrawingViews.AddBaseView | https://help.autodesk.com/view/INVNTOR/2026/ENU/?guid=DrawingViews_AddBaseView |
+| Sheet Metal Flat Pattern | Use `AddBaseView` with `SheetMetalFoldedModel=False` via NameValueMap |
+
+### Using NameValueMap for Optional API Parameters
+
+Many Inventor API methods accept a `NameValueMap` for optional parameters that aren't exposed as direct method arguments. This is the recommended way to pass advanced options.
+
+**Pattern:**
+```vb
+Dim options As NameValueMap = app.TransientObjects.CreateNameValueMap()
+options.Add("OptionName", optionValue)
+
+' Pass using named parameter syntax
+result = SomeMethod(requiredParam1, requiredParam2, AdditionalOptions := options)
+```
+
+**Common NameValueMap Options:**
+
+| Method | Option Name | Values | Description |
+|--------|-------------|--------|-------------|
+| `DrawingViews.AddBaseView` | `SheetMetalFoldedModel` | `True`/`False` | `False` = flat pattern view |
+| `DrawingViews.AddBaseView` | `DesignViewAssociative` | `True`/`False` | Associative design view |
+| `DrawingViews.AddBaseView` | `PositionalRepresentation` | String | Name of positional representation |
+
+**Example - Create Flat Pattern View:**
+```vb
+Dim viewOptions As NameValueMap = app.TransientObjects.CreateNameValueMap()
+viewOptions.Add("SheetMetalFoldedModel", False)
+
+Dim flatView As DrawingView = sheet.DrawingViews.AddBaseView( _
+    partDoc, _
+    position, _
+    1.0, _
+    ViewOrientationTypeEnum.kDefaultViewOrientation, _
+    DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
+    AdditionalOptions := viewOptions)
+```
+
+**Reference:** https://forums.autodesk.com/t5/inventor-programming-forum/ilogic-to-create-drawing-with-flat-pattern-view/td-p/13367792
+
+**Example - Create View with Arbitrary Camera (custom orientation):**
+```vb
+' For non-axis-aligned view directions, use a Camera object
+Dim camera As Camera = app.TransientObjects.CreateCamera()
+camera.Eye = tg.CreatePoint(eyeX, eyeY, eyeZ)        ' Where you look FROM
+camera.Target = tg.CreatePoint(centerX, centerY, centerZ)  ' What you look AT
+camera.UpVector = tg.CreateUnitVector(upX, upY, upZ)  ' Which way is "up"
+camera.ViewOrientationType = ViewOrientationTypeEnum.kArbitraryViewOrientation
+camera.Perspective = False  ' Orthographic for drawings
+
+Dim customView As DrawingView = sheet.DrawingViews.AddBaseView( _
+    partDoc, _
+    position, _
+    1.0, _
+    ViewOrientationTypeEnum.kArbitraryViewOrientation, _
+    DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
+    "", _      ' ModelViewStyle (empty string)
+    camera)    ' Pass camera as 7th parameter
+```
+
+**Note:** Projected views from an arbitrary camera base view work correctly - they project orthogonally from the custom view direction.
+
+### How to Find API Documentation
+
+1. Base URL: `https://help.autodesk.com/view/INVNTOR/2026/ENU/`
+2. Add `?guid=` followed by the class/method name (e.g., `?guid=DrawingViews_AddBaseView`)
+3. Search for specific methods by appending class name and method name with underscore
 
 ## QUICK REFERENCE - VERIFY BEFORE WRITING CODE
 
@@ -20,6 +97,9 @@ This document captures constraints and best practices for writing Autodesk Inven
 | Library with external types | `Function() As ACW.NumSchm` | `Function() As Object` (late binding) |
 | Modal dialog + Pick | Pick while dialog open | Close dialog → Pick → Reopen dialog |
 | File-level variables | `Dim x` outside Module/Sub | Declare inside `Sub Main()` |
+| API optional parameters | Guessing parameter position | Use `NameValueMap` + `AdditionalOptions :=` |
+| Drawing view spacing | Model dimensions (`RangeBox`) | Actual view bounds (`view.Width`, `view.Height`) |
+| Extent dimension offset | 15mm offset (too close to model) | Use `CAMDrawingLib.DIMENSION_OFFSET` (25mm) |
 
 ### Windows Forms Checklist
 
@@ -665,4 +745,9 @@ ctrlDef.Execute()  ' Shows checkout dialog
 | DerivedPartUniformScaleDef.IncludeAll* | Only use `DeriveStyle` and individual `IncludeEntity` |
 | DerivedPartUniformScaleDef.Sketches2D | Use `Sketches` instead (wrap property access in Try/Catch) |
 | Save fails after Unfold() | Call `smCompDef.FlatPattern.ExitEdit()` before SaveAs |
+| API optional parameters | Use `NameValueMap` with `AdditionalOptions :=` named parameter |
+| Sheet metal flat pattern view | `AddBaseView` with `NameValueMap("SheetMetalFoldedModel", False)` |
+| Drawing view spacing/positioning | Use `view.Width` and `view.Height`, not model `RangeBox` dimensions |
+| Extent dimension spacing | Use `CAMDrawingLib.DIMENSION_OFFSET` (25mm) for spacing from model |
+| Sheet resize fails | Move views within new bounds FIRST, then resize sheet |
 
