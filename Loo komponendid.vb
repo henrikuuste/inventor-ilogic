@@ -129,8 +129,13 @@ Sub Main()
     logs.Clear()
     
     ' Apply stored settings to bodies (matches by name, then by geometry signature)
+    ' Use workspace root for file search if available, otherwise master folder
+    Dim searchRoot As String = If(Not String.IsNullOrEmpty(workspaceRoot), _
+                                  workspaceRoot, _
+                                  System.IO.Path.GetDirectoryName(masterDoc.FullDocumentName))
+    
     If storedData.Count > 0 Then
-        MakeComponentsLib.ApplyStoredDataToBodies(bodies, storedData, logs)
+        MakeComponentsLib.ApplyStoredDataToBodies(bodies, storedData, searchRoot, logs)
         For Each log As String In logs : Logger.Info(log) : Next
         logs.Clear()
     End If
@@ -683,7 +688,7 @@ Function ShowMainDialog(app As Inventor.Application, _
     cboAssembly.Top = currentY
     cboAssembly.Width = 200
     cboAssembly.DropDownStyle = ComboBoxStyle.DropDownList
-    cboAssembly.Items.Add("Ära loo koosti")
+    cboAssembly.Items.Add("Ära loo koostu")
     cboAssembly.Items.Add("Loo uus koost")
     cboAssembly.Items.Add("Uuenda olemasolevat")
     ' Set default based on assemblyAction

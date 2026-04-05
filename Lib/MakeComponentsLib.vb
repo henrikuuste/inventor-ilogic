@@ -236,8 +236,10 @@ Public Module MakeComponentsLib
     End Function
     
     ' Match current bodies with stored data (by name first, then by signature)
+    ' searchRoot: folder to search for relocated files if stored path not found
     Public Sub ApplyStoredDataToBodies(bodies As System.Collections.Generic.List(Of BodyInfo), _
                                        storedData As System.Collections.Generic.List(Of StoredBodyData), _
+                                       searchRoot As String, _
                                        logs As System.Collections.Generic.List(Of String))
         Dim matchedIndices As New System.Collections.Generic.HashSet(Of Integer)
         
@@ -248,7 +250,7 @@ Public Module MakeComponentsLib
                 
                 Dim sd As StoredBodyData = storedData(j)
                 If bi.Name.Equals(sd.Name, StringComparison.OrdinalIgnoreCase) Then
-                    ApplyStoredData(bi, sd, logs)
+                    ApplyStoredData(bi, sd, searchRoot, logs)
                     matchedIndices.Add(j)
                     Exit For
                 End If
@@ -266,7 +268,7 @@ Public Module MakeComponentsLib
                 If Not String.IsNullOrEmpty(bi.Signature) AndAlso _
                    bi.Signature.Equals(sd.Signature, StringComparison.OrdinalIgnoreCase) Then
                     logs.Add("MakeComponentsLib: Matched '" & bi.Name & "' to stored '" & sd.Name & "' by signature")
-                    ApplyStoredData(bi, sd, logs)
+                    ApplyStoredData(bi, sd, searchRoot, logs)
                     matchedIndices.Add(j)
                     Exit For
                 End If
@@ -275,6 +277,7 @@ Public Module MakeComponentsLib
     End Sub
     
     Private Sub ApplyStoredData(bi As BodyInfo, sd As StoredBodyData, _
+                                searchRoot As String, _
                                 logs As System.Collections.Generic.List(Of String))
         ' Apply stored axis settings if available
         If Not String.IsNullOrEmpty(sd.ThicknessVector) Then
@@ -290,14 +293,50 @@ Public Module MakeComponentsLib
         ' Check if part exists on disk
         If Not String.IsNullOrEmpty(sd.CreatedPartPath) Then
             bi.PartExists = System.IO.File.Exists(sd.CreatedPartPath)
+            
+            ' Fallback: search by file name if path not found
+            If Not bi.PartExists AndAlso Not String.IsNullOrEmpty(searchRoot) Then
+                Dim fileName As String = System.IO.Path.GetFileName(sd.CreatedPartPath)
+                Dim foundPath As String = FindPartByFileName(fileName, searchRoot, logs)
+                If Not String.IsNullOrEmpty(foundPath) Then
+                    bi.CreatedPartPath = foundPath
+                    bi.PartExists = True
+                    logs.Add("MakeComponentsLib: WARNING - Part relocated from stored path")
+                End If
+            End If
+            
             If bi.PartExists Then
                 ' Default to NOT selected for existing parts (user must opt-in to recreate)
                 bi.Selected = False
                 logs.Add("MakeComponentsLib: Body '" & bi.Name & "' has existing part: " & _
-                         System.IO.Path.GetFileName(sd.CreatedPartPath))
+                         System.IO.Path.GetFileName(bi.CreatedPartPath))
             End If
         End If
     End Sub
+    
+    ' Search for a part file by name in the project workspace
+    ' Returns the found path, or empty string if not found
+    Public Function FindPartByFileName(fileName As String, _
+                                       searchRoot As String, _
+                                       logs As System.Collections.Generic.List(Of String)) As String
+        If String.IsNullOrEmpty(fileName) OrElse String.IsNullOrEmpty(searchRoot) Then
+            Return ""
+        End If
+        
+        Try
+            If Not System.IO.Directory.Exists(searchRoot) Then Return ""
+            
+            Dim files() As String = System.IO.Directory.GetFiles(searchRoot, fileName, System.IO.SearchOption.AllDirectories)
+            If files.Length > 0 Then
+                logs.Add("MakeComponentsLib: Found '" & fileName & "' at new location: " & files(0))
+                Return files(0)
+            End If
+        Catch ex As Exception
+            logs.Add("MakeComponentsLib: Error searching for '" & fileName & "': " & ex.Message)
+        End Try
+        
+        Return ""
+    End Function
     
     Private Sub ClearBodyProperties(userProps As PropertySet)
         Dim toRemove As New System.Collections.Generic.List(Of String)
