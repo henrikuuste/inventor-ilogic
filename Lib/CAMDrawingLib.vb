@@ -42,7 +42,7 @@ Public Module CAMDrawingLib
     Public Const DEFAULT_VIEW_GAP As Double = 1.5
     
     ' Default sheet padding percentage (30%)
-    Public Const DEFAULT_SHEET_PADDING As Double = 0.3
+    Public Const DEFAULT_SHEET_PADDING As Double = 0.5
     
     ' Minimum border around content (15mm)
     Public Const DEFAULT_BORDER_PADDING As Double = 1.5
