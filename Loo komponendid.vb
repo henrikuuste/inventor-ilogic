@@ -25,6 +25,7 @@ AddVbFile "Lib/VaultNumberingLib.vb"
 AddVbFile "Lib/MakeComponentsLib.vb"
 AddVbFile "Lib/SheetMetalLib.vb"
 AddVbFile "Lib/BoundingBoxStockLib.vb"
+AddVbFile "Lib/OccurrenceNamingLib.vb"
 
 Imports System.Collections.Generic
 Imports System.Windows.Forms
@@ -434,7 +435,10 @@ Sub Main()
     Dim actualAssemblyPath As String = ""
     If asmDoc IsNot Nothing AndAlso createdParts.Count > 0 Then
         For Each partPath As String In createdParts
-            MakeComponentsLib.PlaceComponentGrounded(asmDoc, partPath, logs)
+            Dim occ As ComponentOccurrence = MakeComponentsLib.PlaceComponentGrounded(asmDoc, partPath, logs)
+            If occ IsNot Nothing Then
+                OccurrenceNamingLib.RenameOccurrence(occ, logs)
+            End If
         Next
         For Each log As String In logs : Logger.Info(log) : Next
         logs.Clear()
