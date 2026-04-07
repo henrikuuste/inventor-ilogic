@@ -20,7 +20,8 @@ AddReference "Autodesk.DataManagement.Client.Framework.Vault"
 AddReference "Autodesk.DataManagement.Client.Framework.Vault.Forms"
 AddReference "Connectivity.InventorAddin.EdmAddin"
 
-' Libraries come after references
+' Libraries come after references (UtilsLib before VaultNumberingLib for Vault logging)
+AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/VaultNumberingLib.vb"
 AddVbFile "Lib/MakeComponentsLib.vb"
 AddVbFile "Lib/SheetMetalLib.vb"
@@ -33,17 +34,17 @@ Imports Inventor
 
 Sub Main()
     Dim app As Inventor.Application = ThisApplication
-    Dim logs As New List(Of String)
+    UtilsLib.SetLogger(Logger)
     
     ' Validate document
     If app.ActiveDocument Is Nothing Then
-        Logger.Error("Loo komponendid: No active document")
+        UtilsLib.LogError("Loo komponendid: No active document")
         MessageBox.Show("Ava esmalt multi-body detail.", "Loo komponendid")
         Exit Sub
     End If
     
     If app.ActiveDocument.DocumentType <> DocumentTypeEnum.kPartDocumentObject Then
-        Logger.Error("Loo komponendid: Active document is not a part")
+        UtilsLib.LogError("Loo komponendid: Active document is not a part")
         MessageBox.Show("Aktiivseks dokumendiks peab olema detail (.ipt).", "Loo komponendid")
         Exit Sub
     End If
@@ -51,19 +52,19 @@ Sub Main()
     Dim masterDoc As PartDocument = CType(app.ActiveDocument, PartDocument)
     
     If masterDoc.ComponentDefinition.SurfaceBodies.Count < 1 Then
-        Logger.Error("Loo komponendid: No solid bodies in part")
+        UtilsLib.LogError("Loo komponendid: No solid bodies in part")
         MessageBox.Show("Detailis puuduvad tahked kehad.", "Loo komponendid")
         Exit Sub
     End If
     
     ' Ensure master is saved
     If String.IsNullOrEmpty(masterDoc.FullDocumentName) Then
-        Logger.Error("Loo komponendid: Master document not saved")
+        UtilsLib.LogError("Loo komponendid: Master document not saved")
         MessageBox.Show("Salvesta esmalt master-detail.", "Loo komponendid")
         Exit Sub
     End If
     
-    Logger.Info("Loo komponendid: Starting for " & masterDoc.DisplayName)
+    UtilsLib.LogInfo("Loo komponendid: Starting for " & masterDoc.DisplayName)
     
     ' Get selected bodies from SelectSet (if any)
     Dim selectedBodyNames As New List(Of String)
@@ -74,9 +75,9 @@ Sub Main()
     Next
     
     If selectedBodyNames.Count > 0 Then
-        Logger.Info("Loo komponendid: User selected " & selectedBodyNames.Count & " body(ies)")
+        UtilsLib.LogInfo("Loo komponendid: User selected " & selectedBodyNames.Count & " body(ies)")
     Else
-        Logger.Info("Loo komponendid: No selection, using all " & masterDoc.ComponentDefinition.SurfaceBodies.Count & " body(ies)")
+        UtilsLib.LogInfo("Loo komponendid: No selection, using all " & masterDoc.ComponentDefinition.SurfaceBodies.Count & " body(ies)")
     End If
     
     ' Get Vault connection
@@ -84,9 +85,9 @@ Sub Main()
     Dim vaultConnected As Boolean = (vaultConn IsNot Nothing)
     
     If vaultConnected Then
-        Logger.Info("Loo komponendid: Vault connected - " & VaultNumberingLib.GetConnectionInfo(vaultConn))
+        UtilsLib.LogInfo("Loo komponendid: Vault connected - " & VaultNumberingLib.GetConnectionInfo(vaultConn))
     Else
-        Logger.Warn("Loo komponendid: Vault not connected - manual filenames required")
+        UtilsLib.LogWarn("Loo komponendid: Vault not connected - manual filenames required")
     End If
     
     ' Get workspace root for Vault path conversion
@@ -94,21 +95,17 @@ Sub Main()
     Dim workspaceRoot As String = ""
     If vaultConnected Then
         Dim docFolder As String = System.IO.Path.GetDirectoryName(masterDoc.FullDocumentName)
-        workspaceRoot = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, docFolder, logs)
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
+        workspaceRoot = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, docFolder)
     End If
     
     If String.IsNullOrEmpty(workspaceRoot) Then
-        Logger.Warn("Loo komponendid: Could not detect Vault workspace root")
+        UtilsLib.LogWarn("Loo komponendid: Could not detect Vault workspace root")
     Else
-        Logger.Info("Loo komponendid: Workspace root: " & workspaceRoot)
+        UtilsLib.LogInfo("Loo komponendid: Workspace root: " & workspaceRoot)
     End If
     
     ' Get all bodies with detected axes
-    Dim allBodies As List(Of MakeComponentsLib.BodyInfo) = MakeComponentsLib.GetBodiesWithAxes(masterDoc, logs)
-    For Each log As String In logs : Logger.Info(log) : Next
-    logs.Clear()
+    Dim allBodies As List(Of MakeComponentsLib.BodyInfo) = MakeComponentsLib.GetBodiesWithAxes(masterDoc)
     
     ' Filter to selected bodies if any were selected
     Dim bodies As List(Of MakeComponentsLib.BodyInfo)
@@ -125,9 +122,7 @@ Sub Main()
     
     ' Load stored settings from master document
     Dim storedData As List(Of MakeComponentsLib.StoredBodyData) = _
-        MakeComponentsLib.LoadBodyDataFromMaster(masterDoc, logs)
-    For Each log As String In logs : Logger.Info(log) : Next
-    logs.Clear()
+        MakeComponentsLib.LoadBodyDataFromMaster(masterDoc)
     
     ' Apply stored settings to bodies (matches by name, then by geometry signature)
     ' Use workspace root for file search if available, otherwise master folder
@@ -136,22 +131,16 @@ Sub Main()
                                   System.IO.Path.GetDirectoryName(masterDoc.FullDocumentName))
     
     If storedData.Count > 0 Then
-        MakeComponentsLib.ApplyStoredDataToBodies(bodies, storedData, searchRoot, logs)
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
+        MakeComponentsLib.ApplyStoredDataToBodies(bodies, storedData, searchRoot)
     End If
     
     ' Load general settings (template, subfolder, project, assembly)
     Dim generalSettings As MakeComponentsLib.GeneralSettings = _
-        MakeComponentsLib.LoadGeneralSettings(masterDoc, logs)
-    For Each log As String In logs : Logger.Info(log) : Next
-    logs.Clear()
+        MakeComponentsLib.LoadGeneralSettings(masterDoc)
     
     ' Get available materials from document's Materials collection
-    Dim materials As List(Of String) = MakeComponentsLib.GetAvailableMaterials(masterDoc, logs)
-    For Each log As String In logs : Logger.Info(log) : Next
-    logs.Clear()
-    Logger.Info("Loo komponendid: Materials available for selection: " & materials.Count)
+    Dim materials As List(Of String) = MakeComponentsLib.GetAvailableMaterials(masterDoc)
+    UtilsLib.LogInfo("Loo komponendid: Materials available for selection: " & materials.Count)
     
     ' Note: Vault numbering scheme fetching removed - Vault handles numbering on save
     
@@ -198,7 +187,7 @@ Sub Main()
     If Not String.IsNullOrEmpty(assemblyPath) AndAlso System.IO.File.Exists(assemblyPath) Then
         If assemblyAction = "CREATE" OrElse assemblyAction = "NONE" Then
             assemblyAction = "UPDATE"
-            Logger.Info("Loo komponendid: Found existing assembly, defaulting to UPDATE")
+            UtilsLib.LogInfo("Loo komponendid: Found existing assembly, defaulting to UPDATE")
         End If
     End If
     
@@ -212,7 +201,7 @@ Sub Main()
         If dialogResult = DialogResult.Retry AndAlso pickBodyIndex >= 0 AndAlso pickBodyIndex < bodies.Count Then
             ' User clicked "Vali pind" - do face pick
             Dim bi As MakeComponentsLib.BodyInfo = bodies(pickBodyIndex)
-            Logger.Info("Loo komponendid: Picking face for '" & bi.Name & "'")
+            UtilsLib.LogInfo("Loo komponendid: Picking face for '" & bi.Name & "'")
             
             Try
                 Dim pickedFace As Object = app.CommandManager.Pick( _
@@ -221,9 +210,7 @@ Sub Main()
                 
                 If pickedFace IsNot Nothing AndAlso TypeOf pickedFace Is Face Then
                     Dim face As Face = CType(pickedFace, Face)
-                    RecalculateAxesFromFace(bi, face, logs)
-                    For Each log As String In logs : Logger.Info(log) : Next
-                    logs.Clear()
+                    RecalculateAxesFromFace(bi, face)
                 End If
             Catch
                 ' User cancelled pick
@@ -237,7 +224,7 @@ Sub Main()
     Loop
     
     If dialogResult <> DialogResult.OK Then
-        Logger.Info("Loo komponendid: Cancelled by user")
+        UtilsLib.LogInfo("Loo komponendid: Cancelled by user")
         Exit Sub
     End If
     
@@ -248,11 +235,11 @@ Sub Main()
     Next
     
     If selectedBodies.Count = 0 Then
-        Logger.Warn("Loo komponendid: No bodies selected")
+        UtilsLib.LogWarn("Loo komponendid: No bodies selected")
         Exit Sub
     End If
     
-    Logger.Info("Loo komponendid: Processing " & selectedBodies.Count & " body(ies)")
+    UtilsLib.LogInfo("Loo komponendid: Processing " & selectedBodies.Count & " body(ies)")
     
     ' Use body names as filenames - Vault will assign part numbers on save
     ' Note: Vault numbering scheme selection is shown in dialog but actual numbering
@@ -269,35 +256,29 @@ Sub Main()
     Dim outputFolder As String = selectedSubfolder
     
     If Not System.IO.Directory.Exists(outputFolder) Then
-        Logger.Error("Loo komponendid: Output folder does not exist: " & outputFolder)
+        UtilsLib.LogError("Loo komponendid: Output folder does not exist: " & outputFolder)
         MessageBox.Show("Väljundkausta ei leitud: " & vbCrLf & outputFolder & vbCrLf & vbCrLf & _
                         "Loo kaust enne jätkamist.", "Loo komponendid")
         Exit Sub
     End If
     
     ' Ensure folder exists in Vault (if connected)
-    MakeComponentsLib.EnsureFolderInVault(outputFolder, vaultConn, workspaceRoot, logs)
-    For Each log As String In logs : Logger.Info(log) : Next
-    logs.Clear()
-    Logger.Info("Loo komponendid: Output folder: " & outputFolder)
+    MakeComponentsLib.EnsureFolderInVault(outputFolder, vaultConn, workspaceRoot)
+    UtilsLib.LogInfo("Loo komponendid: Output folder: " & outputFolder)
     
     ' Find template path
-    Dim templatePath As String = MakeComponentsLib.FindTemplate(app, selectedTemplate, logs)
-    For Each log As String In logs : Logger.Info(log) : Next
-    logs.Clear()
+    Dim templatePath As String = MakeComponentsLib.FindTemplate(app, selectedTemplate)
     
     ' Create assembly if needed
     Dim asmDoc As AssemblyDocument = Nothing
     If assemblyAction = "CREATE" Then
-        asmDoc = MakeComponentsLib.CreateAssembly(app, "", logs)
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
+        asmDoc = MakeComponentsLib.CreateAssembly(app, "")
     ElseIf assemblyAction = "UPDATE" AndAlso Not String.IsNullOrEmpty(assemblyPath) Then
         Try
             asmDoc = CType(app.Documents.Open(assemblyPath, True), AssemblyDocument)
-            Logger.Info("Loo komponendid: Opened assembly for update: " & assemblyPath)
+            UtilsLib.LogInfo("Loo komponendid: Opened assembly for update: " & assemblyPath)
         Catch ex As Exception
-            Logger.Error("Loo komponendid: Could not open assembly: " & ex.Message)
+            UtilsLib.LogError("Loo komponendid: Could not open assembly: " & ex.Message)
         End Try
     End If
     
@@ -314,7 +295,7 @@ Sub Main()
             ' RECREATE existing part - user has opted to overwrite
             isRecreate = True
             filePath = bi.CreatedPartPath
-            Logger.Info("Loo komponendid: Recreating '" & bi.Name & "' - " & System.IO.Path.GetFileName(filePath))
+            UtilsLib.LogInfo("Loo komponendid: Recreating '" & bi.Name & "' - " & System.IO.Path.GetFileName(filePath))
             
             ' Close the file if it's open and delete it
             Try
@@ -325,9 +306,9 @@ Sub Main()
                     End If
                 Next
                 System.IO.File.Delete(filePath)
-                Logger.Info("Loo komponendid: Deleted old file")
+                UtilsLib.LogInfo("Loo komponendid: Deleted old file")
             Catch ex As Exception
-                Logger.Error("Loo komponendid: Could not delete old file: " & ex.Message)
+                UtilsLib.LogError("Loo komponendid: Could not delete old file: " & ex.Message)
                 Continue For
             End Try
         Else
@@ -336,59 +317,47 @@ Sub Main()
             Dim fileName As String = fileNumber & ".ipt"
             filePath = System.IO.Path.Combine(outputFolder, fileName)
             
-            Logger.Info("Loo komponendid: Creating '" & bi.Name & "' as " & fileName)
+            UtilsLib.LogInfo("Loo komponendid: Creating '" & bi.Name & "' as " & fileName)
         End If
         
         ' Create new part from template (both for new and recreate)
-        newPart = MakeComponentsLib.CreatePartFromTemplate(app, templatePath, logs)
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
+        newPart = MakeComponentsLib.CreatePartFromTemplate(app, templatePath)
         
         If newPart Is Nothing Then
-            Logger.Error("Loo komponendid: Failed to create part for '" & bi.Name & "'")
+            UtilsLib.LogError("Loo komponendid: Failed to create part for '" & bi.Name & "'")
             Continue For
         End If
         
         ' Derive body
-        If Not MakeComponentsLib.DeriveBodyAsNewPart(masterDoc, bi.Name, newPart, logs) Then
-            Logger.Error("Loo komponendid: Failed to derive body '" & bi.Name & "'")
+        If Not MakeComponentsLib.DeriveBodyAsNewPart(masterDoc, bi.Name, newPart) Then
+            UtilsLib.LogError("Loo komponendid: Failed to derive body '" & bi.Name & "'")
             newPart.Close(True)
-            For Each log As String In logs : Logger.Info(log) : Next
-            logs.Clear()
             Continue For
         End If
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
         
         ' Set iProperties
-        MakeComponentsLib.SetPartProperties(newPart, projectName, bi.Name, "", logs)
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
+        MakeComponentsLib.SetPartProperties(newPart, projectName, bi.Name, "")
         
         ' Assign material
         If Not String.IsNullOrEmpty(bi.MaterialName) Then
-            MakeComponentsLib.AssignMaterial(newPart, bi.MaterialName, logs)
-            For Each log As String In logs : Logger.Info(log) : Next
-            logs.Clear()
+            MakeComponentsLib.AssignMaterial(newPart, bi.MaterialName)
         End If
         
         ' Convert to sheet metal or set dimensions and create local rule
         If bi.ConvertToSheetMetal Then
-            If SheetMetalLib.ConvertToSheetMetal(newPart, bi.ThicknessVector, bi.ThicknessValue, logs) Then
-                Logger.Info("Loo komponendid: Converted '" & bi.Name & "' to sheet metal")
+            If SheetMetalLib.ConvertToSheetMetal(newPart, bi.ThicknessVector, bi.ThicknessValue) Then
+                UtilsLib.LogInfo("Loo komponendid: Converted '" & bi.Name & "' to sheet metal")
             Else
                 ' Sheet metal conversion failed - set dimension properties and create update rule
-                MakeComponentsLib.SetDimensionProperties(newPart, bi.ThicknessValue, bi.WidthValue, bi.LengthValue, logs)
+                MakeComponentsLib.SetDimensionProperties(newPart, bi.ThicknessValue, bi.WidthValue, bi.LengthValue)
                 BoundingBoxStockLib.CreateOrUpdateRule(newPart, bi.ThicknessVector, bi.WidthVector, bi.LengthVector, iLogicVb.Automation)
-                Logger.Info("Loo komponendid: Created 'Uuenda mõõdud' rule for '" & bi.Name & "'")
+                UtilsLib.LogInfo("Loo komponendid: Created 'Uuenda mõõdud' rule for '" & bi.Name & "'")
             End If
         Else
-            MakeComponentsLib.SetDimensionProperties(newPart, bi.ThicknessValue, bi.WidthValue, bi.LengthValue, logs)
+            MakeComponentsLib.SetDimensionProperties(newPart, bi.ThicknessValue, bi.WidthValue, bi.LengthValue)
             BoundingBoxStockLib.CreateOrUpdateRule(newPart, bi.ThicknessVector, bi.WidthVector, bi.LengthVector, iLogicVb.Automation)
-            Logger.Info("Loo komponendid: Created 'Uuenda mõõdud' rule for '" & bi.Name & "'")
+            UtilsLib.LogInfo("Loo komponendid: Created 'Uuenda mõõdud' rule for '" & bi.Name & "'")
         End If
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
         
         ' Save part (always SaveAs - either new file or recreated file)
         Try
@@ -396,7 +365,7 @@ Sub Main()
             
             ' Read actual path after save (Vault may have renamed the file)
             Dim actualPath As String = newPart.FullDocumentName
-            Logger.Info("Loo komponendid: Saved " & actualPath)
+            UtilsLib.LogInfo("Loo komponendid: Saved " & actualPath)
             
             ' Only add to createdParts if this is a new part (not recreate)
             ' Recreated parts are already in the assembly
@@ -408,7 +377,7 @@ Sub Main()
             bi.CreatedPartPath = actualPath
             bi.PartExists = True
         Catch ex As Exception
-            Logger.Error("Loo komponendid: Failed to save: " & ex.Message)
+            UtilsLib.LogError("Loo komponendid: Failed to save: " & ex.Message)
         End Try
         
         ' Close part
@@ -417,17 +386,15 @@ Sub Main()
     
     ' Save body data to master document (settings and part references)
     ' Save ALL bodies, not just selected ones, to preserve unprocessed body data
-    MakeComponentsLib.SaveBodyDataToMaster(masterDoc, bodies, logs)
-    For Each log As String In logs : Logger.Info(log) : Next
-    logs.Clear()
+    MakeComponentsLib.SaveBodyDataToMaster(masterDoc, bodies)
     
     ' Save master document to persist the stored body data
     If bodies.Count > 0 Then
         Try
             masterDoc.Save()
-            Logger.Info("Loo komponendid: Master document saved with body references")
+            UtilsLib.LogInfo("Loo komponendid: Master document saved with body references")
         Catch ex As Exception
-            Logger.Warn("Loo komponendid: Could not save master document: " & ex.Message)
+            UtilsLib.LogWarn("Loo komponendid: Could not save master document: " & ex.Message)
         End Try
     End If
     
@@ -435,27 +402,23 @@ Sub Main()
     Dim actualAssemblyPath As String = ""
     If asmDoc IsNot Nothing AndAlso createdParts.Count > 0 Then
         For Each partPath As String In createdParts
-            Dim occ As ComponentOccurrence = MakeComponentsLib.PlaceComponentGrounded(asmDoc, partPath, logs)
+            Dim occ As ComponentOccurrence = MakeComponentsLib.PlaceComponentGrounded(asmDoc, partPath)
             If occ IsNot Nothing Then
-                OccurrenceNamingLib.RenameOccurrence(occ, logs)
+                OccurrenceNamingLib.RenameOccurrence(occ)
             End If
         Next
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
         
         ' Set assembly properties BEFORE save (Vault reads VDS properties at SaveAs time)
-        MakeComponentsLib.SetAssemblyProperties(asmDoc, projectName, logs)
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
+        MakeComponentsLib.SetAssemblyProperties(asmDoc, projectName)
         
         ' Save assembly
         If assemblyAction = "CREATE" AndAlso Not String.IsNullOrEmpty(assemblyPath) Then
             Try
                 asmDoc.SaveAs(assemblyPath, False)
                 actualAssemblyPath = asmDoc.FullDocumentName
-                Logger.Info("Loo komponendid: Saved assembly: " & actualAssemblyPath)
+                UtilsLib.LogInfo("Loo komponendid: Saved assembly: " & actualAssemblyPath)
             Catch ex As Exception
-                Logger.Error("Loo komponendid: Failed to save assembly: " & ex.Message)
+                UtilsLib.LogError("Loo komponendid: Failed to save assembly: " & ex.Message)
             End Try
         ElseIf assemblyAction = "CREATE" Then
             Dim asmFileName As String = defaultProject & "_asm.iam"
@@ -463,9 +426,9 @@ Sub Main()
             Try
                 asmDoc.SaveAs(asmFilePath, False)
                 actualAssemblyPath = asmDoc.FullDocumentName
-                Logger.Info("Loo komponendid: Saved assembly: " & actualAssemblyPath)
+                UtilsLib.LogInfo("Loo komponendid: Saved assembly: " & actualAssemblyPath)
             Catch ex As Exception
-                Logger.Error("Loo komponendid: Failed to save assembly: " & ex.Message)
+                UtilsLib.LogError("Loo komponendid: Failed to save assembly: " & ex.Message)
             End Try
         Else
             asmDoc.Save()
@@ -481,28 +444,26 @@ Sub Main()
     settingsToSave.AssemblyAction = assemblyAction
     settingsToSave.AssemblyPath = If(Not String.IsNullOrEmpty(actualAssemblyPath), actualAssemblyPath, assemblyPath)
     
-    MakeComponentsLib.SaveGeneralSettings(masterDoc, settingsToSave, logs)
-    For Each log As String In logs : Logger.Info(log) : Next
-    logs.Clear()
+    MakeComponentsLib.SaveGeneralSettings(masterDoc, settingsToSave)
     
     ' Save master document again to persist general settings
     Try
         masterDoc.Save()
-        Logger.Info("Loo komponendid: Master document saved with general settings")
+        UtilsLib.LogInfo("Loo komponendid: Master document saved with general settings")
     Catch ex As Exception
-        Logger.Warn("Loo komponendid: Could not save master document: " & ex.Message)
+        UtilsLib.LogWarn("Loo komponendid: Could not save master document: " & ex.Message)
     End Try
     
     Dim recreatedCount As Integer = selectedBodies.Count - createdParts.Count
     If recreatedCount > 0 Then
-        Logger.Info("Loo komponendid: Completed - " & createdParts.Count & " new part(s), " & recreatedCount & " recreated")
+        UtilsLib.LogInfo("Loo komponendid: Completed - " & createdParts.Count & " new part(s), " & recreatedCount & " recreated")
     Else
-        Logger.Info("Loo komponendid: Completed - created " & createdParts.Count & " part(s)")
+        UtilsLib.LogInfo("Loo komponendid: Completed - created " & createdParts.Count & " part(s)")
     End If
 End Sub
 
 ' Recalculate axes based on a picked face
-Sub RecalculateAxesFromFace(bi As MakeComponentsLib.BodyInfo, face As Face, logs As List(Of String))
+Sub RecalculateAxesFromFace(bi As MakeComponentsLib.BodyInfo, face As Face)
     Try
         Dim geom As Object = face.Geometry
         If TypeOf geom Is Plane Then
@@ -558,12 +519,12 @@ Sub RecalculateAxesFromFace(bi As MakeComponentsLib.BodyInfo, face As Face, logs
                 bi.LengthVector = MakeComponentsLib.VectorToString(wx, wy, wz)
             End If
             
-            logs.Add("Loo komponendid: Recalculated axes for '" & bi.Name & "' - T:" & _
+            UtilsLib.LogInfo("Loo komponendid: Recalculated axes for '" & bi.Name & "' - T:" & _
                      FormatNumber(bi.ThicknessValue * 10, 2) & " W:" & FormatNumber(bi.WidthValue * 10, 2) & _
                      " L:" & FormatNumber(bi.LengthValue * 10, 2))
         End If
     Catch ex As Exception
-        logs.Add("Loo komponendid: Error recalculating axes: " & ex.Message)
+        UtilsLib.LogError("Loo komponendid: Error recalculating axes: " & ex.Message)
     End Try
 End Sub
 

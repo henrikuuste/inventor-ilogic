@@ -1,17 +1,71 @@
 ' ============================================================================
 ' UtilsLib - Generic Utility Functions for Inventor iLogic
 ' 
-' Reusable geometry, measurement, and UI utility functions.
+' Reusable geometry, measurement, UI, browser, and occurrence utility functions.
 ' These functions have no dependencies on specific features or workflows.
 '
 ' Usage: AddVbFile "Lib/UtilsLib.vb"
+'
+' Logging: Call UtilsLib.SetLogger(Logger) from Sub Main to enable immediate logging.
 '
 ' Ref: https://help.autodesk.com/view/INVNTOR/2026/ENU/?guid=110f3019-404c-4fc4-8b5d-7a3143f129da
 ' ============================================================================
 
 Imports Inventor
+Imports System.Text.RegularExpressions
 
 Public Module UtilsLib
+
+    ' ============================================================================
+    ' SECTION 0: Logging Infrastructure
+    ' ============================================================================
+    
+    ' Module-level logger reference (set by caller via SetLogger, used by all methods)
+    Private m_Logger As Object = Nothing
+    
+    ''' <summary>
+    ''' Sets the logger object for immediate logging.
+    ''' Call this from Sub Main: UtilsLib.SetLogger(Logger)
+    ''' </summary>
+    Public Sub SetLogger(logger As Object)
+        m_Logger = logger
+    End Sub
+    
+    ''' <summary>
+    ''' Logs an info message. Uses late binding to call Logger.Info().
+    ''' </summary>
+    Public Sub LogInfo(message As String)
+        If m_Logger IsNot Nothing Then
+            Try
+                m_Logger.Info(message)
+            Catch
+            End Try
+        End If
+    End Sub
+    
+    ''' <summary>
+    ''' Logs a warning message. Uses late binding to call Logger.Warn().
+    ''' </summary>
+    Public Sub LogWarn(message As String)
+        If m_Logger IsNot Nothing Then
+            Try
+                m_Logger.Warn(message)
+            Catch
+            End Try
+        End If
+    End Sub
+    
+    ''' <summary>
+    ''' Logs an error message. Uses late binding to call Logger.Error().
+    ''' </summary>
+    Public Sub LogError(message As String)
+        If m_Logger IsNot Nothing Then
+            Try
+                m_Logger.Error(message)
+            Catch
+            End Try
+        End If
+    End Sub
 
     ' ============================================================================
     ' SECTION 1: Geometry Extraction
@@ -597,6 +651,167 @@ Public Module UtilsLib
     Public Function FormatDimensionCmToMm(valueCm As Double) As String
         Dim valueMm As Double = valueCm * 10.0
         Return valueMm.ToString("0.000") & " mm"
+    End Function
+
+    ' ============================================================================
+    ' SECTION 7: Browser Utilities
+    ' ============================================================================
+
+    ''' <summary>
+    ''' Gets or creates a browser folder by name.
+    ''' </summary>
+    Public Function GetOrCreateFolder(oPane As BrowserPane, folderName As String) As BrowserFolder
+        ' Try to find existing folder
+        For Each f As BrowserFolder In oPane.TopNode.BrowserFolders
+            If f.Name = folderName Then
+                Return f
+            End If
+        Next
+        
+        ' Create new folder
+        Return oPane.AddBrowserFolder(folderName)
+    End Function
+
+    ''' <summary>
+    ''' Finds a browser folder by name. Returns Nothing if not found.
+    ''' </summary>
+    Public Function FindFolder(oPane As BrowserPane, folderName As String) As BrowserFolder
+        For Each f As BrowserFolder In oPane.TopNode.BrowserFolders
+            If f.Name = folderName Then Return f
+        Next
+        Return Nothing
+    End Function
+
+    ''' <summary>
+    ''' Gets the folder name a browser node is currently in, or empty string if not in a folder.
+    ''' </summary>
+    Public Function GetNodeFolder(node As BrowserNode) As String
+        Try
+            If node.Parent IsNot Nothing AndAlso node.Parent.NativeObject IsNot Nothing Then
+                If TypeName(node.Parent.NativeObject) = "BrowserFolder" Then
+                    Return CType(node.Parent.NativeObject, BrowserFolder).Name
+                End If
+            End If
+        Catch
+        End Try
+        Return ""
+    End Function
+
+    ''' <summary>
+    ''' Walks up the browser tree to find the node that can be moved.
+    ''' For standalone occurrences, returns the occurrence node itself.
+    ''' For occurrences nested in other structures, walks up to find the movable parent.
+    ''' </summary>
+    Public Function GetMovableParentNode(oPane As BrowserPane, oNode As BrowserNode) As BrowserNode
+        Dim current As BrowserNode = oNode
+        
+        ' Walk up until parent is TopNode or a BrowserFolder
+        While current.Parent IsNot Nothing
+            Dim parentNode As BrowserNode = current.Parent
+            
+            ' Check if parent is the TopNode
+            If parentNode Is oPane.TopNode Then
+                Return current
+            End If
+            
+            ' Check if parent is a BrowserFolder
+            If parentNode.NativeObject IsNot Nothing Then
+                If TypeName(parentNode.NativeObject) = "BrowserFolder" Then
+                    Return current
+                End If
+            End If
+            
+            ' Move up one level
+            current = parentNode
+        End While
+        
+        ' Fallback to original node
+        Return oNode
+    End Function
+
+    ''' <summary>
+    ''' Extracts the pattern name from a browser node FullPath.
+    ''' Example path: "00003.iam [Primary]:Mirror Component Pattern 1:1:Element:1:Selja põõn (00012):1"
+    ''' Returns: "Mirror Component Pattern 1:1"
+    ''' </summary>
+    Public Function ExtractPatternNameFromPath(fullPath As String) As String
+        ' Find the first ":" after the document name (which ends with "]")
+        Dim docEndPos As Integer = fullPath.IndexOf("]:")
+        If docEndPos < 0 Then Return ""
+        
+        Dim afterDoc As String = fullPath.Substring(docEndPos + 2)
+        
+        ' The pattern name is everything up to ":Element:"
+        Dim elementPos As Integer = afterDoc.IndexOf(":Element:")
+        If elementPos > 0 Then
+            Return afterDoc.Substring(0, elementPos)
+        End If
+        
+        ' Fallback - return everything before the occurrence name
+        Return afterDoc
+    End Function
+
+    ' ============================================================================
+    ' SECTION 8: Occurrence Utilities
+    ' ============================================================================
+
+    ''' <summary>
+    ''' Gets the material name from a component occurrence (parts only).
+    ''' Returns empty string for sub-assemblies or if no material is assigned.
+    ''' </summary>
+    Public Function GetOccurrenceMaterial(occ As ComponentOccurrence) As String
+        Try
+            If occ.DefinitionDocumentType = DocumentTypeEnum.kPartDocumentObject Then
+                Dim partCompDef As PartComponentDefinition = CType(occ.Definition, PartComponentDefinition)
+                If partCompDef.Material IsNot Nothing Then
+                    Return partCompDef.Material.Name
+                End If
+            End If
+        Catch
+        End Try
+        Return ""
+    End Function
+
+    ''' <summary>
+    ''' Suppresses or unsuppresses a single occurrence.
+    ''' </summary>
+    Public Sub SuppressOccurrence(occ As ComponentOccurrence, shouldSuppress As Boolean)
+        Try
+            If shouldSuppress Then
+                If Not occ.Suppressed Then occ.Suppress()
+            Else
+                If occ.Suppressed Then occ.Unsuppress()
+            End If
+        Catch
+        End Try
+    End Sub
+
+    ''' <summary>
+    ''' Matches a material name against a list of regex patterns (case-insensitive).
+    ''' Returns True if any pattern matches.
+    ''' </summary>
+    Public Function MaterialMatchesPatterns(materialName As String, patterns As System.Collections.Generic.List(Of String)) As Boolean
+        If String.IsNullOrEmpty(materialName) Then Return False
+        
+        For Each pattern As String In patterns
+            If Regex.IsMatch(materialName, pattern, RegexOptions.IgnoreCase) Then
+                Return True
+            End If
+        Next
+        
+        Return False
+    End Function
+
+    ''' <summary>
+    ''' Gets the current browser folder name for an occurrence, or empty string if not in a folder.
+    ''' </summary>
+    Public Function GetOccurrenceFolder(oPane As BrowserPane, occ As ComponentOccurrence) As String
+        Try
+            Dim oNode As BrowserNode = oPane.GetBrowserNodeFromObject(occ)
+            Return GetNodeFolder(oNode)
+        Catch
+        End Try
+        Return ""
     End Function
 
 End Module

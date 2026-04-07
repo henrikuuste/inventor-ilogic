@@ -7,11 +7,15 @@
 ' This makes occurrences easier to identify in the browser compared to the
 ' default Vault-assigned part numbers.
 '
-' Usage: AddVbFile "Lib/OccurrenceNamingLib.vb"
+' Usage: 
+'   AddVbFile "Lib/UtilsLib.vb"
+'   AddVbFile "Lib/OccurrenceNamingLib.vb"
+'   UtilsLib.SetLogger(Logger) ' In Sub Main
+'
+' Dependencies: UtilsLib (for logging)
 ' ============================================================================
 
 Imports Inventor
-Imports System.Collections.Generic
 
 Public Module OccurrenceNamingLib
 
@@ -114,7 +118,7 @@ Public Module OccurrenceNamingLib
     ''' Reads Description and Part Number from the occurrence's referenced document.
     ''' Returns True if renamed, False if skipped or failed.
     ''' </summary>
-    Public Function RenameOccurrence(occ As ComponentOccurrence, logs As List(Of String)) As Boolean
+    Public Function RenameOccurrence(occ As ComponentOccurrence) As Boolean
         Try
             ' Get the referenced document
             Dim refDoc As Document = Nothing
@@ -146,13 +150,13 @@ Public Module OccurrenceNamingLib
             If occ.Name <> newName Then
                 Dim oldName As String = occ.Name
                 occ.Name = newName
-                logs.Add("OccurrenceNamingLib: Renamed '" & oldName & "' -> '" & newName & "'")
+                UtilsLib.LogInfo("OccurrenceNamingLib: Renamed '" & oldName & "' -> '" & newName & "'")
                 Return True
             End If
             
             Return False
         Catch ex As Exception
-            logs.Add("OccurrenceNamingLib: Error renaming occurrence: " & ex.Message)
+            UtilsLib.LogWarn("OccurrenceNamingLib: Error renaming occurrence: " & ex.Message)
             Return False
         End Try
     End Function
@@ -161,17 +165,17 @@ Public Module OccurrenceNamingLib
     ''' Rename all top-level occurrences in an assembly.
     ''' Returns the count of occurrences that were renamed.
     ''' </summary>
-    Public Function RenameAllOccurrences(asmDoc As AssemblyDocument, logs As List(Of String)) As Integer
+    Public Function RenameAllOccurrences(asmDoc As AssemblyDocument) As Integer
         Dim renamedCount As Integer = 0
         
         Try
             For Each occ As ComponentOccurrence In asmDoc.ComponentDefinition.Occurrences
-                If RenameOccurrence(occ, logs) Then
+                If RenameOccurrence(occ) Then
                     renamedCount += 1
                 End If
             Next
         Catch ex As Exception
-            logs.Add("OccurrenceNamingLib: Error iterating occurrences: " & ex.Message)
+            UtilsLib.LogWarn("OccurrenceNamingLib: Error iterating occurrences: " & ex.Message)
         End Try
         
         Return renamedCount
@@ -181,20 +185,20 @@ Public Module OccurrenceNamingLib
     ''' Rename only the selected occurrences in an assembly.
     ''' Returns the count of occurrences that were renamed.
     ''' </summary>
-    Public Function RenameSelectedOccurrences(asmDoc As AssemblyDocument, logs As List(Of String)) As Integer
+    Public Function RenameSelectedOccurrences(asmDoc As AssemblyDocument) As Integer
         Dim renamedCount As Integer = 0
         
         Try
             For Each obj As Object In asmDoc.SelectSet
                 If TypeOf obj Is ComponentOccurrence Then
                     Dim occ As ComponentOccurrence = CType(obj, ComponentOccurrence)
-                    If RenameOccurrence(occ, logs) Then
+                    If RenameOccurrence(occ) Then
                         renamedCount += 1
                     End If
                 End If
             Next
         Catch ex As Exception
-            logs.Add("OccurrenceNamingLib: Error iterating selection: " & ex.Message)
+            UtilsLib.LogWarn("OccurrenceNamingLib: Error iterating selection: " & ex.Message)
         End Try
         
         Return renamedCount

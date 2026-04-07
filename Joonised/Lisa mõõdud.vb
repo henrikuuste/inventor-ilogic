@@ -10,6 +10,7 @@
 '        Select specific views or leave empty to dimension all views.
 ' ============================================================================
 
+AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/CAMDrawingLib.vb"
 
 Imports System.Collections.Generic
@@ -18,13 +19,12 @@ Imports Inventor
 
 Sub Main()
     Dim app As Inventor.Application = ThisApplication
-    Dim logs As New List(Of String)
-    
-    Logger.Info("Lisa mõõdud: Starting...")
+    UtilsLib.SetLogger(Logger)
+    UtilsLib.LogInfo("Lisa mõõdud: Starting...")
     
     ' Validate document
     If app.ActiveDocument Is Nothing Then
-        Logger.Error("Lisa mõõdud: No active document")
+        UtilsLib.LogError("Lisa mõõdud: No active document")
         MessageBox.Show("Aktiivne dokument puudub.", "Lisa mõõdud")
         Exit Sub
     End If
@@ -32,7 +32,7 @@ Sub Main()
     Dim doc As Document = app.ActiveDocument
     
     If doc.DocumentType <> DocumentTypeEnum.kDrawingDocumentObject Then
-        Logger.Error("Lisa mõõdud: Not a drawing document")
+        UtilsLib.LogError("Lisa mõõdud: Not a drawing document")
         MessageBox.Show("See reegel töötab ainult joonisega.", "Lisa mõõdud")
         Exit Sub
     End If
@@ -41,7 +41,7 @@ Sub Main()
     Dim sheet As Sheet = drawDoc.ActiveSheet
     
     If sheet.DrawingViews.Count = 0 Then
-        Logger.Error("Lisa mõõdud: No views on sheet")
+        UtilsLib.LogError("Lisa mõõdud: No views on sheet")
         MessageBox.Show("Lehel puuduvad vaated.", "Lisa mõõdud")
         Exit Sub
     End If
@@ -55,11 +55,11 @@ Sub Main()
     If selectedViews.Count > 0 Then
         views = selectedViews
         useSelection = True
-        Logger.Info("Lisa mõõdud: Using " & views.Count & " selected view(s)")
+        UtilsLib.LogInfo("Lisa mõõdud: Using " & views.Count & " selected view(s)")
     Else
         ' Use all views on sheet
         views = CAMDrawingLib.GetAllViewsFromSheet(sheet)
-        Logger.Info("Lisa mõõdud: Using all " & views.Count & " views on sheet")
+        UtilsLib.LogInfo("Lisa mõõdud: Using all " & views.Count & " views on sheet")
     End If
     
     ' Count existing dimensions
@@ -71,29 +71,26 @@ Sub Main()
     Dim dialogResult As DialogResult = ShowOptionsDialog(views, useSelection, offsetCm)
     
     If dialogResult <> DialogResult.OK Then
-        Logger.Info("Lisa mõõdud: Cancelled by user")
+        UtilsLib.LogInfo("Lisa mõõdud: Cancelled by user")
         Exit Sub
     End If
     
-    Logger.Info("Lisa mõõdud: Dimension offset: " & FormatNumber(offsetCm * 10, 1) & " mm")
-    Logger.Info("Lisa mõõdud: Processing " & views.Count & " view(s)")
+    UtilsLib.LogInfo("Lisa mõõdud: Dimension offset: " & FormatNumber(offsetCm * 10, 1) & " mm")
+    UtilsLib.LogInfo("Lisa mõõdud: Processing " & views.Count & " view(s)")
     
     ' Add extent dimensions to views
-    CAMDrawingLib.AddExtentDimensionsToViews(sheet, views, app, logs, offsetCm)
-    For Each log As String In logs : Logger.Info(log) : Next
-    logs.Clear()
-    
+    CAMDrawingLib.AddExtentDimensionsToViews(sheet, views, app, offsetCm)
     ' Count dimensions added
     Dim dimCountAfter As Integer = sheet.DrawingDimensions.Count
     Dim dimsAdded As Integer = dimCountAfter - dimCountBefore
     
     ' Summary
-    Logger.Info("Lisa mõõdud: ========================================")
-    Logger.Info("Lisa mõõdud: COMPLETE")
-    Logger.Info("Lisa mõõdud: Views processed: " & views.Count)
-    Logger.Info("Lisa mõõdud: Dimensions added: " & dimsAdded)
-    Logger.Info("Lisa mõõdud: Total dimensions: " & dimCountAfter)
-    Logger.Info("Lisa mõõdud: ========================================")
+    UtilsLib.LogInfo("Lisa mõõdud: ========================================")
+    UtilsLib.LogInfo("Lisa mõõdud: COMPLETE")
+    UtilsLib.LogInfo("Lisa mõõdud: Views processed: " & views.Count)
+    UtilsLib.LogInfo("Lisa mõõdud: Dimensions added: " & dimsAdded)
+    UtilsLib.LogInfo("Lisa mõõdud: Total dimensions: " & dimCountAfter)
+    UtilsLib.LogInfo("Lisa mõõdud: ========================================")
 End Sub
 
 ' ============================================================================

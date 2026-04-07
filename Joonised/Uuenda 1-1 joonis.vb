@@ -23,7 +23,8 @@ AddReference "Autodesk.DataManagement.Client.Framework.Vault"
 AddReference "Autodesk.DataManagement.Client.Framework.Vault.Forms"
 AddReference "Connectivity.InventorAddin.EdmAddin"
 
-' Libraries
+' Libraries (UtilsLib before VaultNumberingLib for Vault logging)
+AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/VaultNumberingLib.vb"
 AddVbFile "Lib/CAMDrawingLib.vb"
 
@@ -33,16 +34,15 @@ Imports Inventor
 
 Sub Main()
     Dim app As Inventor.Application = ThisApplication
-    Dim logs As New List(Of String)
-    
-    Logger.Info("Uuenda 1:1 joonis: Starting...")
+    UtilsLib.SetLogger(Logger)
+    UtilsLib.LogInfo("Uuenda 1:1 joonis: Starting...")
     
     ' Determine context and get the drawing to update
     Dim drawDoc As DrawingDocument = Nothing
     Dim partDoc As PartDocument = Nothing
     
     If app.ActiveDocument Is Nothing Then
-        Logger.Error("Uuenda 1:1 joonis: No active document")
+        UtilsLib.LogError("Uuenda 1:1 joonis: No active document")
         MessageBox.Show("Aktiivne dokument puudub.", "Uuenda 1:1 joonis")
         Exit Sub
     End If
@@ -53,7 +53,7 @@ Sub Main()
         Case DocumentTypeEnum.kDrawingDocumentObject
             ' Already in a drawing - use it directly
             drawDoc = CType(activeDoc, DrawingDocument)
-            Logger.Info("Uuenda 1:1 joonis: Using active drawing: " & drawDoc.DisplayName)
+            UtilsLib.LogInfo("Uuenda 1:1 joonis: Using active drawing: " & drawDoc.DisplayName)
             
         Case DocumentTypeEnum.kPartDocumentObject
             ' In a part - find associated drawing (open docs + disk)
@@ -61,41 +61,34 @@ Sub Main()
             Dim partNumber As String = CAMDrawingLib.GetPartNumber(partDoc)
             
             If String.IsNullOrEmpty(partNumber) Then
-                Logger.Warn("Uuenda 1:1 joonis: Part has no Part Number - cannot find drawing")
+                UtilsLib.LogWarn("Uuenda 1:1 joonis: Part has no Part Number - cannot find drawing")
                 MessageBox.Show("Detailil puudub artikli number. Joonist ei saa tuvastada.", "Uuenda 1:1 joonis")
                 Exit Sub
             End If
             
-            Logger.Info("Uuenda 1:1 joonis: Part: " & partDoc.DisplayName & " (" & partNumber & ")")
+            UtilsLib.LogInfo("Uuenda 1:1 joonis: Part: " & partDoc.DisplayName & " (" & partNumber & ")")
             
             ' Get workspace root for disk search
             Dim searchRoot As String = System.IO.Path.GetDirectoryName(partDoc.FullDocumentName)
             Dim vaultConn As Object = VaultNumberingLib.GetVaultConnection()
             If vaultConn IsNot Nothing Then
-                Dim workspaceRoot As String = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, searchRoot, logs)
-                For Each log As String In logs : Logger.Info(log) : Next
-                logs.Clear()
+                Dim workspaceRoot As String = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, searchRoot)
                 If Not String.IsNullOrEmpty(workspaceRoot) Then
                     searchRoot = workspaceRoot
                 End If
             End If
             
-            Logger.Info("Uuenda 1:1 joonis: Searching for drawing in: " & searchRoot)
+            UtilsLib.LogInfo("Uuenda 1:1 joonis: Searching for drawing in: " & searchRoot)
             
             ' Search in open documents AND on disk for 1:1 drawing
             Dim drawingPath As String = CAMDrawingLib.FindDrawingForPart( _
-                partNumber, searchRoot, app, logs, CAMDrawingLib.DRAWING_TYPE_1TO1, True)
-            For Each log As String In logs : Logger.Info(log) : Next
-            logs.Clear()
-            
+                partNumber, searchRoot, app, CAMDrawingLib.DRAWING_TYPE_1TO1, True)
             If Not String.IsNullOrEmpty(drawingPath) Then
                 ' Found - check if already open
-                drawDoc = CAMDrawingLib.FindDrawingForPartInOpenDocs(partNumber, app, logs, CAMDrawingLib.DRAWING_TYPE_1TO1)
+                drawDoc = CAMDrawingLib.FindDrawingForPartInOpenDocs(partNumber, app, CAMDrawingLib.DRAWING_TYPE_1TO1)
                 If drawDoc Is Nothing Then
                     ' Open from disk
-                    drawDoc = CAMDrawingLib.OpenExistingDrawing(app, drawingPath, logs)
-                    For Each log As String In logs : Logger.Info(log) : Next
-                    logs.Clear()
+                    drawDoc = CAMDrawingLib.OpenExistingDrawing(app, drawingPath)
                 End If
             End If
             
@@ -107,16 +100,13 @@ Sub Main()
                 ofd.InitialDirectory = System.IO.Path.GetDirectoryName(partDoc.FullDocumentName)
                 
                 If ofd.ShowDialog() <> DialogResult.OK Then
-                    Logger.Info("Uuenda 1:1 joonis: Cancelled by user")
+                    UtilsLib.LogInfo("Uuenda 1:1 joonis: Cancelled by user")
                     Exit Sub
                 End If
                 
-                drawDoc = CAMDrawingLib.OpenExistingDrawing(app, ofd.FileName, logs)
-                For Each log As String In logs : Logger.Info(log) : Next
-                logs.Clear()
-                
+                drawDoc = CAMDrawingLib.OpenExistingDrawing(app, ofd.FileName)
                 If drawDoc Is Nothing Then
-                    Logger.Error("Uuenda 1:1 joonis: Failed to open drawing")
+                    UtilsLib.LogError("Uuenda 1:1 joonis: Failed to open drawing")
                     MessageBox.Show("Joonise avamine ebaõnnestus.", "Uuenda 1:1 joonis")
                     Exit Sub
                 End If
@@ -124,7 +114,7 @@ Sub Main()
             
         Case DocumentTypeEnum.kAssemblyDocumentObject
             ' In an assembly - show list of parts with drawings (search open docs + disk)
-            Logger.Info("Uuenda 1:1 joonis: Assembly context - searching for parts with drawings")
+            UtilsLib.LogInfo("Uuenda 1:1 joonis: Assembly context - searching for parts with drawings")
             
             Dim asmDoc As AssemblyDocument = CType(activeDoc, AssemblyDocument)
             Dim partsWithDrawings As New List(Of Tuple(Of PartDocument, DrawingDocument))
@@ -135,15 +125,13 @@ Sub Main()
             Dim searchRoot As String = System.IO.Path.GetDirectoryName(asmDoc.FullDocumentName)
             Dim vaultConn As Object = VaultNumberingLib.GetVaultConnection()
             If vaultConn IsNot Nothing Then
-                Dim workspaceRoot As String = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, searchRoot, logs)
-                For Each log As String In logs : Logger.Info(log) : Next
-                logs.Clear()
+                Dim workspaceRoot As String = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, searchRoot)
                 If Not String.IsNullOrEmpty(workspaceRoot) Then
                     searchRoot = workspaceRoot
                 End If
             End If
             
-            Logger.Info("Uuenda 1:1 joonis: Searching for drawings in: " & searchRoot)
+            UtilsLib.LogInfo("Uuenda 1:1 joonis: Searching for drawings in: " & searchRoot)
             
             ' Find all unique parts and their drawings
             For Each occ As ComponentOccurrence In asmDoc.ComponentDefinition.Occurrences
@@ -158,13 +146,13 @@ Sub Main()
                             If Not String.IsNullOrEmpty(pn) Then
                                 ' First check open documents
                                 Dim dd As DrawingDocument = CAMDrawingLib.FindDrawingForPartInOpenDocs( _
-                                    pn, app, logs, CAMDrawingLib.DRAWING_TYPE_1TO1)
+                                    pn, app, CAMDrawingLib.DRAWING_TYPE_1TO1)
                                 If dd IsNot Nothing Then
                                     partsWithDrawings.Add(New Tuple(Of PartDocument, DrawingDocument)(pd, dd))
                                 Else
                                     ' Search on disk
                                     Dim drawingPath As String = CAMDrawingLib.FindDrawingForPart( _
-                                        pn, searchRoot, app, logs, CAMDrawingLib.DRAWING_TYPE_1TO1, True)
+                                        pn, searchRoot, app, CAMDrawingLib.DRAWING_TYPE_1TO1, True)
                                     If Not String.IsNullOrEmpty(drawingPath) Then
                                         partsWithDrawingPaths.Add(New Tuple(Of PartDocument, String)(pd, drawingPath))
                                     End If
@@ -175,19 +163,13 @@ Sub Main()
                 Catch
                 End Try
             Next
-            For Each log As String In logs : Logger.Info(log) : Next
-            logs.Clear()
-            
             ' Open drawings found on disk
             For Each pdPair As Tuple(Of PartDocument, String) In partsWithDrawingPaths
-                Dim dd As DrawingDocument = CAMDrawingLib.OpenExistingDrawing(app, pdPair.Item2, logs)
+                Dim dd As DrawingDocument = CAMDrawingLib.OpenExistingDrawing(app, pdPair.Item2)
                 If dd IsNot Nothing Then
                     partsWithDrawings.Add(New Tuple(Of PartDocument, DrawingDocument)(pdPair.Item1, dd))
                 End If
             Next
-            For Each log As String In logs : Logger.Info(log) : Next
-            logs.Clear()
-            
             If partsWithDrawings.Count = 0 Then
                 MessageBox.Show("1:1 jooniseid ei leitud (avatud ega kettal)." & vbCrLf & _
                                "Käivita 'Loo 1:1 joonised' uute jooniste loomiseks.", "Uuenda 1:1 joonis")
@@ -201,7 +183,7 @@ Sub Main()
             Else
                 Dim result As Tuple(Of PartDocument, DrawingDocument) = ShowPartDrawingSelectionDialog(partsWithDrawings)
                 If result Is Nothing Then
-                    Logger.Info("Uuenda 1:1 joonis: Cancelled by user")
+                    UtilsLib.LogInfo("Uuenda 1:1 joonis: Cancelled by user")
                     Exit Sub
                 End If
                 partDoc = result.Item1
@@ -209,28 +191,26 @@ Sub Main()
             End If
             
         Case Else
-            Logger.Error("Uuenda 1:1 joonis: Invalid document type")
+            UtilsLib.LogError("Uuenda 1:1 joonis: Invalid document type")
             MessageBox.Show("See reegel töötab ainult joonise, detaili või koostuga.", "Uuenda 1:1 joonis")
             Exit Sub
     End Select
     
     If drawDoc Is Nothing Then
-        Logger.Error("Uuenda 1:1 joonis: No drawing to update")
+        UtilsLib.LogError("Uuenda 1:1 joonis: No drawing to update")
         MessageBox.Show("Joonist ei leitud.", "Uuenda 1:1 joonis")
         Exit Sub
     End If
     
     ' Get the referenced part document from drawing if not already known
     If partDoc Is Nothing Then
-        partDoc = CAMDrawingLib.GetReferencedPartDocument(drawDoc, logs)
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
+        partDoc = CAMDrawingLib.GetReferencedPartDocument(drawDoc)
     End If
     
     If partDoc Is Nothing Then
-        Logger.Warn("Uuenda 1:1 joonis: No referenced part found in drawing")
+        UtilsLib.LogWarn("Uuenda 1:1 joonis: No referenced part found in drawing")
     Else
-        Logger.Info("Uuenda 1:1 joonis: Referenced part: " & partDoc.DisplayName)
+        UtilsLib.LogInfo("Uuenda 1:1 joonis: Referenced part: " & partDoc.DisplayName)
     End If
     
     ' Get the active sheet
@@ -242,15 +222,15 @@ Sub Main()
     Dim currentHeight As Double = sheet.Height * 10
     Dim dimCount As Integer = sheet.DrawingDimensions.Count
     
-    Logger.Info("Uuenda 1:1 joonis: Current sheet: " & FormatNumber(currentWidth, 1) & " x " & _
+    UtilsLib.LogInfo("Uuenda 1:1 joonis: Current sheet: " & FormatNumber(currentWidth, 1) & " x " & _
                 FormatNumber(currentHeight, 1) & " mm")
-    Logger.Info("Uuenda 1:1 joonis: Views: " & viewCount & ", Dimensions: " & dimCount)
+    UtilsLib.LogInfo("Uuenda 1:1 joonis: Views: " & viewCount & ", Dimensions: " & dimCount)
     
     ' Show confirmation dialog
     Dim dlgResult As DialogResult = ShowUpdateDialog(drawDoc, partDoc, sheet, viewCount, dimCount)
     
     If dlgResult <> DialogResult.OK Then
-        Logger.Info("Uuenda 1:1 joonis: Cancelled by user")
+        UtilsLib.LogInfo("Uuenda 1:1 joonis: Cancelled by user")
         Exit Sub
     End If
     
@@ -258,43 +238,32 @@ Sub Main()
     ' Update Process
     ' ========================================================================
     
-    Logger.Info("Uuenda 1:1 joonis: Starting update process...")
+    UtilsLib.LogInfo("Uuenda 1:1 joonis: Starting update process...")
     
     ' Step 1: Sync properties from part to drawing (if part is available)
     If partDoc IsNot Nothing Then
-        Logger.Info("Uuenda 1:1 joonis: Syncing properties from part...")
-        CAMDrawingLib.CopyPropertiesToDrawing(partDoc, drawDoc, logs)
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
+        UtilsLib.LogInfo("Uuenda 1:1 joonis: Syncing properties from part...")
+        CAMDrawingLib.CopyPropertiesToDrawing(partDoc, drawDoc)
     End If
     
     ' Step 2: Reposition views (geometry may have changed)
-    Logger.Info("Uuenda 1:1 joonis: Repositioning views...")
-    CAMDrawingLib.RepositionViews(sheet, app, logs)
-    For Each log As String In logs : Logger.Info(log) : Next
-    logs.Clear()
-    
+    UtilsLib.LogInfo("Uuenda 1:1 joonis: Repositioning views...")
+    CAMDrawingLib.RepositionViews(sheet, app)
     ' Step 3: Update tagged extent dimensions (smart update)
     ' - Only recreates dimensions that were auto-generated and still exist
     ' - Preserves user-added dimensions (no tag)
     ' - Doesn't recreate dimensions user deleted (not in tagged list)
-    Logger.Info("Uuenda 1:1 joonis: Updating tagged extent dimensions...")
-    CAMDrawingLib.UpdateTaggedExtentDimensions(drawDoc, sheet, app, logs)
-    For Each log As String In logs : Logger.Info(log) : Next
-    logs.Clear()
-    
+    UtilsLib.LogInfo("Uuenda 1:1 joonis: Updating tagged extent dimensions...")
+    CAMDrawingLib.UpdateTaggedExtentDimensions(drawDoc, sheet, app)
     ' Step 4: Fit sheet to content
-    Logger.Info("Uuenda 1:1 joonis: Fitting sheet to content...")
-    CAMDrawingLib.FitSheetToContent(sheet, app, logs)
-    For Each log As String In logs : Logger.Info(log) : Next
-    logs.Clear()
-    
+    UtilsLib.LogInfo("Uuenda 1:1 joonis: Fitting sheet to content...")
+    CAMDrawingLib.FitSheetToContent(sheet, app)
     ' Step 5: Save the drawing
     Try
         drawDoc.Save()
-        Logger.Info("Uuenda 1:1 joonis: Drawing saved")
+        UtilsLib.LogInfo("Uuenda 1:1 joonis: Drawing saved")
     Catch ex As Exception
-        Logger.Error("Uuenda 1:1 joonis: Failed to save: " & ex.Message)
+        UtilsLib.LogError("Uuenda 1:1 joonis: Failed to save: " & ex.Message)
     End Try
     
     ' Final sizes
@@ -303,14 +272,14 @@ Sub Main()
     Dim newDimCount As Integer = sheet.DrawingDimensions.Count
     
     ' Summary
-    Logger.Info("Uuenda 1:1 joonis: ========================================")
-    Logger.Info("Uuenda 1:1 joonis: UPDATE COMPLETE")
-    Logger.Info("Uuenda 1:1 joonis: ========================================")
-    Logger.Info("Uuenda 1:1 joonis: Sheet size: " & FormatNumber(currentWidth, 0) & "x" & FormatNumber(currentHeight, 0) & _
+    UtilsLib.LogInfo("Uuenda 1:1 joonis: ========================================")
+    UtilsLib.LogInfo("Uuenda 1:1 joonis: UPDATE COMPLETE")
+    UtilsLib.LogInfo("Uuenda 1:1 joonis: ========================================")
+    UtilsLib.LogInfo("Uuenda 1:1 joonis: Sheet size: " & FormatNumber(currentWidth, 0) & "x" & FormatNumber(currentHeight, 0) & _
                 " -> " & FormatNumber(newWidth, 0) & "x" & FormatNumber(newHeight, 0) & " mm")
-    Logger.Info("Uuenda 1:1 joonis: Dimensions: " & dimCount & " -> " & newDimCount)
-    Logger.Info("Uuenda 1:1 joonis: Properties synced: " & If(partDoc IsNot Nothing, "Yes", "No"))
-    Logger.Info("Uuenda 1:1 joonis: ========================================")
+    UtilsLib.LogInfo("Uuenda 1:1 joonis: Dimensions: " & dimCount & " -> " & newDimCount)
+    UtilsLib.LogInfo("Uuenda 1:1 joonis: Properties synced: " & If(partDoc IsNot Nothing, "Yes", "No"))
+    UtilsLib.LogInfo("Uuenda 1:1 joonis: ========================================")
 End Sub
 
 ' ============================================================================

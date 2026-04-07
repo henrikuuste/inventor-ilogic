@@ -7,9 +7,11 @@
 ' Ref: https://help.autodesk.com/view/INVNTOR/2026/ENU/?guid=110f3019-404c-4fc4-8b5d-7a3143f129da
 ' ============================================================================
 
+AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/BoundingBoxStockLib.vb"
 
 Sub Main()
+    UtilsLib.SetLogger(Logger)
     Dim app As Inventor.Application = ThisApplication
     Dim doc As Document = app.ActiveDocument
 

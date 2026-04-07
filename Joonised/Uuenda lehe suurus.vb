@@ -9,6 +9,7 @@
 ' Usage: Run on an open drawing to resize the sheet to fit content.
 ' ============================================================================
 
+AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/CAMDrawingLib.vb"
 
 Imports System.Collections.Generic
@@ -17,13 +18,12 @@ Imports Inventor
 
 Sub Main()
     Dim app As Inventor.Application = ThisApplication
-    Dim logs As New List(Of String)
-    
-    Logger.Info("Uuenda lehe suurus: Starting...")
+    UtilsLib.SetLogger(Logger)
+    UtilsLib.LogInfo("Uuenda lehe suurus: Starting...")
     
     ' Validate document
     If app.ActiveDocument Is Nothing Then
-        Logger.Error("Uuenda lehe suurus: No active document")
+        UtilsLib.LogError("Uuenda lehe suurus: No active document")
         MessageBox.Show("Aktiivne dokument puudub.", "Uuenda lehe suurus")
         Exit Sub
     End If
@@ -31,7 +31,7 @@ Sub Main()
     Dim doc As Document = app.ActiveDocument
     
     If doc.DocumentType <> DocumentTypeEnum.kDrawingDocumentObject Then
-        Logger.Error("Uuenda lehe suurus: Not a drawing document")
+        UtilsLib.LogError("Uuenda lehe suurus: Not a drawing document")
         MessageBox.Show("See reegel töötab ainult joonisega.", "Uuenda lehe suurus")
         Exit Sub
     End If
@@ -45,12 +45,12 @@ Sub Main()
     Dim currentHeight As Double = sheet.Height * 10
     
     If viewCount = 0 Then
-        Logger.Warn("Uuenda lehe suurus: No views on sheet")
+        UtilsLib.LogWarn("Uuenda lehe suurus: No views on sheet")
         MessageBox.Show("Lehel puuduvad vaated.", "Uuenda lehe suurus")
         Exit Sub
     End If
     
-    Logger.Info("Uuenda lehe suurus: Current sheet: " & FormatNumber(currentWidth, 1) & " x " & _
+    UtilsLib.LogInfo("Uuenda lehe suurus: Current sheet: " & FormatNumber(currentWidth, 1) & " x " & _
                 FormatNumber(currentHeight, 1) & " mm, views: " & viewCount)
     
     ' Show dialog for padding
@@ -60,28 +60,24 @@ Sub Main()
     Dim dialogResult As DialogResult = ShowPaddingDialog(sheet, paddingPercent, excludeTitleBlock)
     
     If dialogResult <> DialogResult.OK Then
-        Logger.Info("Uuenda lehe suurus: Cancelled by user")
+        UtilsLib.LogInfo("Uuenda lehe suurus: Cancelled by user")
         Exit Sub
     End If
     
-    Logger.Info("Uuenda lehe suurus: Padding: " & FormatNumber(paddingPercent * 100, 0) & "%, Exclude title block: " & excludeTitleBlock)
+    UtilsLib.LogInfo("Uuenda lehe suurus: Padding: " & FormatNumber(paddingPercent * 100, 0) & "%, Exclude title block: " & excludeTitleBlock)
     
     ' Fit sheet to content
-    CAMDrawingLib.FitSheetToContent(sheet, app, logs, paddingPercent, CAMDrawingLib.DEFAULT_BORDER_PADDING, excludeTitleBlock)
-    For Each log As String In logs
-        Logger.Info(log)
-    Next
-    
+    CAMDrawingLib.FitSheetToContent(sheet, app, paddingPercent, CAMDrawingLib.DEFAULT_BORDER_PADDING, excludeTitleBlock)
     ' Get new sheet size
     Dim newWidth As Double = sheet.Width * 10
     Dim newHeight As Double = sheet.Height * 10
     
     ' Summary
-    Logger.Info("Uuenda lehe suurus: ========================================")
-    Logger.Info("Uuenda lehe suurus: COMPLETE")
-    Logger.Info("Uuenda lehe suurus: " & FormatNumber(currentWidth, 0) & "x" & FormatNumber(currentHeight, 0) & _
+    UtilsLib.LogInfo("Uuenda lehe suurus: ========================================")
+    UtilsLib.LogInfo("Uuenda lehe suurus: COMPLETE")
+    UtilsLib.LogInfo("Uuenda lehe suurus: " & FormatNumber(currentWidth, 0) & "x" & FormatNumber(currentHeight, 0) & _
                 " -> " & FormatNumber(newWidth, 0) & "x" & FormatNumber(newHeight, 0) & " mm")
-    Logger.Info("Uuenda lehe suurus: ========================================")
+    UtilsLib.LogInfo("Uuenda lehe suurus: ========================================")
 End Sub
 
 ' ============================================================================

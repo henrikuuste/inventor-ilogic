@@ -1,5 +1,6 @@
+AddVbFile "Lib/UtilsLib.vb"
+
 Imports Inventor
-Imports System.Text
 
 ' Inventor 2026+ iLogic
 ' Create "A_" planes from selected work planes or planar faces with offset = 0
@@ -16,41 +17,41 @@ Imports System.Text
 Sub Main()
 
     Dim app As Inventor.Application = ThisApplication
+    
+    ' Enable immediate logging
+    UtilsLib.SetLogger(Logger)
+    
     Dim doc As Document = app.ActiveDocument
 
     If doc Is Nothing Then
-        Logger.Error("Kopeeri pinnad: No active document.")
+        UtilsLib.LogError("Kopeeri pinnad: No active document.")
         MessageBox.Show("Aktiivne dokument puudub.", "Kopeeri pinnad")
         Exit Sub
     End If
 
     Dim sel As SelectSet = doc.SelectSet
     If sel Is Nothing OrElse sel.Count = 0 Then
-        Logger.Warn("Kopeeri pinnad: No work planes or faces selected.")
+        UtilsLib.LogWarn("Kopeeri pinnad: No work planes or faces selected.")
         MessageBox.Show("Vali üks või mitu tööpinda või tasapinda, seejärel käivita reegel.", "Kopeeri pinnad")
         Exit Sub
     End If
 
     Dim created As Integer = 0
     Dim skipped As Integer = 0
-    Dim log As New StringBuilder()
 
     If doc.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
-        RunInAssembly(CType(doc, AssemblyDocument), sel, created, skipped, log)
+        RunInAssembly(CType(doc, AssemblyDocument), sel, created, skipped)
 
     ElseIf doc.DocumentType = DocumentTypeEnum.kPartDocumentObject Then
-        RunInPart(CType(doc, PartDocument), sel, created, skipped, log)
+        RunInPart(CType(doc, PartDocument), sel, created, skipped)
 
     Else
-        Logger.Error("Kopeeri pinnad: Unsupported document type.")
+        UtilsLib.LogError("Kopeeri pinnad: Unsupported document type.")
         MessageBox.Show("Toetatud ainult koostes (.iam) ja detailis (.ipt).", "Kopeeri pinnad")
         Exit Sub
     End If
 
-    Logger.Info("Kopeeri pinnad: Done. Created: " & created & ", Skipped: " & skipped)
-    If log.Length > 0 Then
-        Logger.Info("Kopeeri pinnad: " & log.ToString().TrimEnd())
-    End If
+    UtilsLib.LogInfo("Kopeeri pinnad: Done. Created: " & created & ", Skipped: " & skipped)
 
 End Sub
 
@@ -58,7 +59,7 @@ End Sub
 ' Assembly implementation
 '========================
 Private Sub RunInAssembly(asmDoc As AssemblyDocument, sel As SelectSet, _
-                          ByRef created As Integer, ByRef skipped As Integer, log As StringBuilder)
+                          ByRef created As Integer, ByRef skipped As Integer)
 
     Dim asmDef As AssemblyComponentDefinition = asmDoc.ComponentDefinition
 
@@ -79,7 +80,7 @@ Private Sub RunInAssembly(asmDoc As AssemblyDocument, sel As SelectSet, _
                 wpP.GetPosition(origin, xAxis, yAxis)
             Catch ex As Exception
                 skipped += 1
-                log.AppendLine("Skipped '" & srcName & "': GetPosition failed: " & ex.Message)
+                UtilsLib.LogWarn("Kopeeri pinnad: Skipped '" & srcName & "': GetPosition failed: " & ex.Message)
                 Continue For
             End Try
 
@@ -91,7 +92,7 @@ Private Sub RunInAssembly(asmDoc As AssemblyDocument, sel As SelectSet, _
                 wp.GetPosition(origin, xAxis, yAxis)
             Catch ex As Exception
                 skipped += 1
-                log.AppendLine("Skipped '" & srcName & "': GetPosition failed: " & ex.Message)
+                UtilsLib.LogWarn("Kopeeri pinnad: Skipped '" & srcName & "': GetPosition failed: " & ex.Message)
                 Continue For
             End Try
 
@@ -99,7 +100,7 @@ Private Sub RunInAssembly(asmDoc As AssemblyDocument, sel As SelectSet, _
             Dim faceProxy As FaceProxy = CType(obj, FaceProxy)
             If faceProxy.SurfaceType <> SurfaceTypeEnum.kPlaneSurface Then
                 skipped += 1
-                log.AppendLine("Skipped: face is not planar.")
+                UtilsLib.LogWarn("Kopeeri pinnad: Skipped: face is not planar.")
                 Continue For
             End If
             Dim plane As Plane = CType(faceProxy.Geometry, Plane)
@@ -113,7 +114,7 @@ Private Sub RunInAssembly(asmDoc As AssemblyDocument, sel As SelectSet, _
             Dim face As Face = CType(obj, Face)
             If face.SurfaceType <> SurfaceTypeEnum.kPlaneSurface Then
                 skipped += 1
-                log.AppendLine("Skipped: face is not planar.")
+                UtilsLib.LogWarn("Kopeeri pinnad: Skipped: face is not planar.")
                 Continue For
             End If
             Dim plane As Plane = CType(face.Geometry, Plane)
@@ -125,7 +126,7 @@ Private Sub RunInAssembly(asmDoc As AssemblyDocument, sel As SelectSet, _
 
         Else
             skipped += 1
-            log.AppendLine("Skipped: not a WorkPlane, WorkPlaneProxy, or planar Face.")
+            UtilsLib.LogWarn("Kopeeri pinnad: Skipped: not a WorkPlane, WorkPlaneProxy, or planar Face.")
             Continue For
         End If
 
@@ -134,14 +135,14 @@ Private Sub RunInAssembly(asmDoc As AssemblyDocument, sel As SelectSet, _
             newWp = asmDef.WorkPlanes.AddFixed(origin, xAxis, yAxis)
         Catch ex As Exception
             skipped += 1
-            log.AppendLine("Failed AddFixed for '" & srcName & "': " & ex.Message)
+            UtilsLib.LogWarn("Kopeeri pinnad: Failed AddFixed for '" & srcName & "': " & ex.Message)
             Continue For
         End Try
 
         Try
             asmDef.Constraints.AddFlushConstraint(newWp, srcForConstraint, 0)
         Catch ex As Exception
-            log.AppendLine("Warning: Flush constraint failed for '" & srcName & "': " & ex.Message)
+            UtilsLib.LogWarn("Kopeeri pinnad: Flush constraint failed for '" & srcName & "': " & ex.Message)
         End Try
 
         Try
@@ -154,7 +155,7 @@ Private Sub RunInAssembly(asmDoc As AssemblyDocument, sel As SelectSet, _
         Try : newWp.Name = finalName : Catch : End Try
 
         created += 1
-        log.AppendLine("Created: '" & finalName & "' from '" & srcName & "' (assembly)")
+        UtilsLib.LogInfo("Kopeeri pinnad: Created '" & finalName & "' from '" & srcName & "' (assembly)")
     Next
 
 End Sub
@@ -163,7 +164,7 @@ End Sub
 ' Part implementation
 '====================
 Private Sub RunInPart(partDoc As PartDocument, sel As SelectSet, _
-                      ByRef created As Integer, ByRef skipped As Integer, log As StringBuilder)
+                      ByRef created As Integer, ByRef skipped As Integer)
 
     Dim partDef As PartComponentDefinition = partDoc.ComponentDefinition
 
@@ -181,7 +182,7 @@ Private Sub RunInPart(partDoc As PartDocument, sel As SelectSet, _
             Dim face As Face = CType(obj, Face)
             If face.SurfaceType <> SurfaceTypeEnum.kPlaneSurface Then
                 skipped += 1
-                log.AppendLine("Skipped: face is not planar.")
+                UtilsLib.LogWarn("Kopeeri pinnad: Skipped: face is not planar.")
                 Continue For
             End If
             srcName = "Pind"
@@ -189,7 +190,7 @@ Private Sub RunInPart(partDoc As PartDocument, sel As SelectSet, _
 
         Else
             skipped += 1
-            log.AppendLine("Skipped: not a WorkPlane or planar Face.")
+            UtilsLib.LogWarn("Kopeeri pinnad: Skipped: not a WorkPlane or planar Face.")
             Continue For
         End If
 
@@ -198,7 +199,7 @@ Private Sub RunInPart(partDoc As PartDocument, sel As SelectSet, _
             newWp = partDef.WorkPlanes.AddByPlaneAndOffset(srcForPlane, 0)
         Catch ex As Exception
             skipped += 1
-            log.AppendLine("Failed AddByPlaneAndOffset for '" & srcName & "': " & ex.Message)
+            UtilsLib.LogWarn("Kopeeri pinnad: Failed AddByPlaneAndOffset for '" & srcName & "': " & ex.Message)
             Continue For
         End Try
 
@@ -212,7 +213,7 @@ Private Sub RunInPart(partDoc As PartDocument, sel As SelectSet, _
         Try : newWp.Name = finalName : Catch : End Try
 
         created += 1
-        log.AppendLine("Created: '" & finalName & "' from '" & srcName & "' (part)")
+        UtilsLib.LogInfo("Kopeeri pinnad: Created '" & finalName & "' from '" & srcName & "' (part)")
     Next
 
 End Sub

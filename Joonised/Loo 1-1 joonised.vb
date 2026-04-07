@@ -24,7 +24,8 @@ AddReference "Autodesk.DataManagement.Client.Framework.Vault"
 AddReference "Autodesk.DataManagement.Client.Framework.Vault.Forms"
 AddReference "Connectivity.InventorAddin.EdmAddin"
 
-' Libraries
+' Libraries (UtilsLib before VaultNumberingLib for Vault logging)
+AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/VaultNumberingLib.vb"
 AddVbFile "Lib/CAMDrawingLib.vb"
 
@@ -34,11 +35,10 @@ Imports Inventor
 
 Sub Main()
     Dim app As Inventor.Application = ThisApplication
-    Dim logs As New List(Of String)
-    
+    UtilsLib.SetLogger(Logger)
     ' Validate document
     If app.ActiveDocument Is Nothing Then
-        Logger.Error("Loo 1:1 joonised: No active document")
+        UtilsLib.LogError("Loo 1:1 joonised: No active document")
         MessageBox.Show("Ava esmalt detail või koost.", "Loo 1:1 joonised")
         Exit Sub
     End If
@@ -48,30 +48,28 @@ Sub Main()
     
     If docType <> DocumentTypeEnum.kPartDocumentObject AndAlso _
        docType <> DocumentTypeEnum.kAssemblyDocumentObject Then
-        Logger.Error("Loo 1:1 joonised: Invalid document type")
+        UtilsLib.LogError("Loo 1:1 joonised: Invalid document type")
         MessageBox.Show("See reegel töötab ainult detaili või koostuga.", "Loo 1:1 joonised")
         Exit Sub
     End If
     
-    Logger.Info("Loo 1:1 joonised: Starting for " & doc.DisplayName)
+    UtilsLib.LogInfo("Loo 1:1 joonised: Starting for " & doc.DisplayName)
     
     ' Get Vault connection
     Dim vaultConn As Object = VaultNumberingLib.GetVaultConnection()
     Dim vaultConnected As Boolean = (vaultConn IsNot Nothing)
     
     If vaultConnected Then
-        Logger.Info("Loo 1:1 joonised: Vault connected - " & VaultNumberingLib.GetConnectionInfo(vaultConn))
+        UtilsLib.LogInfo("Loo 1:1 joonised: Vault connected - " & VaultNumberingLib.GetConnectionInfo(vaultConn))
     Else
-        Logger.Warn("Loo 1:1 joonised: Vault not connected")
+        UtilsLib.LogWarn("Loo 1:1 joonised: Vault not connected")
     End If
     
     ' Get workspace root for Vault path conversion
     Dim workspaceRoot As String = ""
     If vaultConnected Then
         Dim docFolder As String = System.IO.Path.GetDirectoryName(doc.FullDocumentName)
-        workspaceRoot = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, docFolder, logs)
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
+        workspaceRoot = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, docFolder)
     End If
     
     ' Collect part data: List of (PartDocument, PartNumber, DisplayName, HasDrawing, Selected)
@@ -107,12 +105,12 @@ Sub Main()
         Dim occurrencesToProcess As New List(Of ComponentOccurrence)
         If selectedOccurrences.Count > 0 Then
             occurrencesToProcess = selectedOccurrences
-            Logger.Info("Loo 1:1 joonised: Using " & selectedOccurrences.Count & " selected occurrence(s)")
+            UtilsLib.LogInfo("Loo 1:1 joonised: Using " & selectedOccurrences.Count & " selected occurrence(s)")
         Else
             For Each occ As ComponentOccurrence In asmDoc.ComponentDefinition.Occurrences
                 occurrencesToProcess.Add(occ)
             Next
-            Logger.Info("Loo 1:1 joonised: No selection, using all occurrences")
+            UtilsLib.LogInfo("Loo 1:1 joonised: No selection, using all occurrences")
         End If
         
         For Each occ As ComponentOccurrence In occurrencesToProcess
@@ -135,12 +133,12 @@ Sub Main()
     End If
     
     If partDocs.Count = 0 Then
-        Logger.Error("Loo 1:1 joonised: No parts found")
+        UtilsLib.LogError("Loo 1:1 joonised: No parts found")
         MessageBox.Show("Detaile ei leitud.", "Loo 1:1 joonised")
         Exit Sub
     End If
     
-    Logger.Info("Loo 1:1 joonised: Found " & partDocs.Count & " part(s)")
+    UtilsLib.LogInfo("Loo 1:1 joonised: Found " & partDocs.Count & " part(s)")
     
     ' Default output folder (same as part/assembly folder)
     Dim outputFolder As String = System.IO.Path.GetDirectoryName(doc.FullDocumentName)
@@ -153,13 +151,13 @@ Sub Main()
     
     ' Search root for existing drawings - use workspace root if available, otherwise doc folder
     Dim searchRoot As String = If(Not String.IsNullOrEmpty(workspaceRoot), workspaceRoot, outputFolder)
-    Logger.Info("Loo 1:1 joonised: Drawing search root: " & searchRoot)
+    UtilsLib.LogInfo("Loo 1:1 joonised: Drawing search root: " & searchRoot)
     
     ' Check for existing 1:1 drawings (in open documents and on disk)
     For i As Integer = 0 To partDocs.Count - 1
         If Not String.IsNullOrEmpty(partNumbers(i)) Then
             Dim foundPath As String = CAMDrawingLib.FindDrawingForPart( _
-                partNumbers(i), searchRoot, app, logs, CAMDrawingLib.DRAWING_TYPE_1TO1, True)
+                partNumbers(i), searchRoot, app, CAMDrawingLib.DRAWING_TYPE_1TO1, True)
             
             If Not String.IsNullOrEmpty(foundPath) Then
                 hasDrawings(i) = True
@@ -167,9 +165,6 @@ Sub Main()
             End If
         End If
     Next
-    For Each log As String In logs : Logger.Info(log) : Next
-    logs.Clear()
-    
     ' ========================================================================
     ' Show Dialog
     ' ========================================================================
@@ -433,7 +428,7 @@ Sub Main()
     frm.Dispose()
     
     If dlgResult <> DialogResult.OK Then
-        Logger.Info("Loo 1:1 joonised: Cancelled by user")
+        UtilsLib.LogInfo("Loo 1:1 joonised: Cancelled by user")
         Exit Sub
     End If
     
@@ -444,33 +439,28 @@ Sub Main()
     Next
     
     If selectedIndices.Count = 0 Then
-        Logger.Warn("Loo 1:1 joonised: No parts selected")
+        UtilsLib.LogWarn("Loo 1:1 joonised: No parts selected")
         Exit Sub
     End If
     
-    Logger.Info("Loo 1:1 joonised: Processing " & selectedIndices.Count & " part(s)")
+    UtilsLib.LogInfo("Loo 1:1 joonised: Processing " & selectedIndices.Count & " part(s)")
     
     ' Ensure output folder exists
     If Not System.IO.Directory.Exists(outputFolder) Then
-        Logger.Error("Loo 1:1 joonised: Output folder does not exist: " & outputFolder)
+        UtilsLib.LogError("Loo 1:1 joonised: Output folder does not exist: " & outputFolder)
         MessageBox.Show("Väljundkausta ei leitud: " & vbCrLf & outputFolder, "Loo 1:1 joonised")
         Exit Sub
     End If
     
     ' Ensure folder exists in Vault
     If vaultConnected Then
-        VaultNumberingLib.EnsureFolderInVault(outputFolder, vaultConn, workspaceRoot, logs)
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
+        VaultNumberingLib.EnsureFolderInVault(outputFolder, vaultConn, workspaceRoot)
     End If
     
     ' Find drawing template
-    Dim templatePath As String = CAMDrawingLib.FindDrawingTemplate(app, "Drawing.1.1.idw", logs)
-    For Each log As String In logs : Logger.Info(log) : Next
-    logs.Clear()
-    
+    Dim templatePath As String = CAMDrawingLib.FindDrawingTemplate(app, "Drawing.1.1.idw")
     If String.IsNullOrEmpty(templatePath) Then
-        Logger.Error("Loo 1:1 joonised: Drawing template not found")
+        UtilsLib.LogError("Loo 1:1 joonised: Drawing template not found")
         MessageBox.Show("Joonise šablooni 'Drawing.1.1.idw' ei leitud.", "Loo 1:1 joonised")
         Exit Sub
     End If
@@ -482,94 +472,64 @@ Sub Main()
     For Each idx As Integer In selectedIndices
         Dim partDoc As PartDocument = partDocs(idx)
         Dim action As String = partActions(idx)
-        Logger.Info("Loo 1:1 joonised: Processing " & partDoc.DisplayName & " (action: " & action & ")")
+        UtilsLib.LogInfo("Loo 1:1 joonised: Processing " & partDoc.DisplayName & " (action: " & action & ")")
         
         ' Check if action is "Uuenda" - update existing drawing
         If action = "Uuenda" AndAlso hasDrawings(idx) Then
-            Logger.Info("Loo 1:1 joonised: Updating existing drawing...")
+            UtilsLib.LogInfo("Loo 1:1 joonised: Updating existing drawing...")
             
             ' Open the existing drawing
             Dim existingPath As String = existingDrawingPaths(idx)
-            Dim existingDrawDoc As DrawingDocument = CAMDrawingLib.OpenExistingDrawing(app, existingPath, logs)
-            For Each log As String In logs : Logger.Info(log) : Next
-            logs.Clear()
-            
+            Dim existingDrawDoc As DrawingDocument = CAMDrawingLib.OpenExistingDrawing(app, existingPath)
             If existingDrawDoc Is Nothing Then
-                Logger.Error("Loo 1:1 joonised: Failed to open drawing: " & existingPath)
+                UtilsLib.LogError("Loo 1:1 joonised: Failed to open drawing: " & existingPath)
                 Continue For
             End If
             
             Dim existingSheet As Sheet = existingDrawDoc.ActiveSheet
             
             ' Sync properties from part to drawing
-            CAMDrawingLib.CopyPropertiesToDrawing(partDoc, existingDrawDoc, logs)
-            For Each log As String In logs : Logger.Info(log) : Next
-            logs.Clear()
-            
+            CAMDrawingLib.CopyPropertiesToDrawing(partDoc, existingDrawDoc)
             ' Reposition views (geometry may have changed)
-            CAMDrawingLib.RepositionViews(existingSheet, app, logs)
-            For Each log As String In logs : Logger.Info(log) : Next
-            logs.Clear()
-            
+            CAMDrawingLib.RepositionViews(existingSheet, app)
             ' Update tagged extent dimensions
-            CAMDrawingLib.UpdateTaggedExtentDimensions(existingDrawDoc, existingSheet, app, logs)
-            For Each log As String In logs : Logger.Info(log) : Next
-            logs.Clear()
-            
+            CAMDrawingLib.UpdateTaggedExtentDimensions(existingDrawDoc, existingSheet, app)
             ' Fit sheet to content
-            CAMDrawingLib.FitSheetToContent(existingSheet, app, logs)
-            For Each log As String In logs : Logger.Info(log) : Next
-            logs.Clear()
-            
+            CAMDrawingLib.FitSheetToContent(existingSheet, app)
             ' Save
             Try
                 existingDrawDoc.Save()
-                Logger.Info("Loo 1:1 joonised: Updated drawing saved")
+                UtilsLib.LogInfo("Loo 1:1 joonised: Updated drawing saved")
                 updatedDrawings.Add(existingDrawDoc.FullDocumentName)
             Catch ex As Exception
-                Logger.Error("Loo 1:1 joonised: Failed to save: " & ex.Message)
+                UtilsLib.LogError("Loo 1:1 joonised: Failed to save: " & ex.Message)
             End Try
             
             Continue For
         End If
         
         ' Create new drawing from template
-        Dim newDrawDoc As DrawingDocument = CAMDrawingLib.CreateDrawingFromTemplate(app, templatePath, logs)
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
-        
+        Dim newDrawDoc As DrawingDocument = CAMDrawingLib.CreateDrawingFromTemplate(app, templatePath)
         If newDrawDoc Is Nothing Then
-            Logger.Error("Loo 1:1 joonised: Failed to create drawing for " & partDoc.DisplayName)
+            UtilsLib.LogError("Loo 1:1 joonised: Failed to create drawing for " & partDoc.DisplayName)
             Continue For
         End If
         
         Dim newSheet As Sheet = newDrawDoc.ActiveSheet
         
         ' Set drawing association (copies properties + sets BB_SourcePartNumber)
-        CAMDrawingLib.SetDrawingAssociation(newDrawDoc, partDoc, logs)
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
-        
+        CAMDrawingLib.SetDrawingAssociation(newDrawDoc, partDoc)
         ' Add all 6 views at 1:1 scale
-        Dim views As List(Of DrawingView) = CAMDrawingLib.AddAllViews(newSheet, partDoc, app, logs)
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
-        
+        Dim views As List(Of DrawingView) = CAMDrawingLib.AddAllViews(newSheet, partDoc, app)
         ' Tag views as auto-generated (for future smart updates)
         For Each view As DrawingView In views
             CAMDrawingLib.TagAutoGeneratedView(view)
         Next
         
         ' Add extent dimensions to all views (dimensions are auto-tagged)
-        CAMDrawingLib.AddExtentDimensionsToViews(newSheet, views, app, logs)
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
-        
+        CAMDrawingLib.AddExtentDimensionsToViews(newSheet, views, app)
         ' Fit sheet to content with 50% padding
-        CAMDrawingLib.FitSheetToContent(newSheet, app, logs, 0.5)
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
-        
+        CAMDrawingLib.FitSheetToContent(newSheet, app, 0.5)
         ' Generate filename based on part name (Vault will assign number on save)
         Dim partName As String = System.IO.Path.GetFileNameWithoutExtension(partDoc.FullDocumentName)
         Dim drawingFileName As String = partName & ".idw"
@@ -581,22 +541,22 @@ Sub Main()
             
             ' Get actual path after save (Vault may have renamed)
             Dim actualPath As String = newDrawDoc.FullDocumentName
-            Logger.Info("Loo 1:1 joonised: Saved " & actualPath)
+            UtilsLib.LogInfo("Loo 1:1 joonised: Saved " & actualPath)
             createdDrawings.Add(actualPath)
             
         Catch ex As Exception
-            Logger.Error("Loo 1:1 joonised: Failed to save: " & ex.Message)
+            UtilsLib.LogError("Loo 1:1 joonised: Failed to save: " & ex.Message)
         End Try
     Next
     
     ' Summary
-    Logger.Info("Loo 1:1 joonised: ========================================")
-    Logger.Info("Loo 1:1 joonised: SUMMARY")
-    Logger.Info("Loo 1:1 joonised: ========================================")
-    Logger.Info("Loo 1:1 joonised: Parts selected: " & selectedIndices.Count)
-    Logger.Info("Loo 1:1 joonised: Drawings created: " & createdDrawings.Count)
-    Logger.Info("Loo 1:1 joonised: Drawings updated: " & updatedDrawings.Count)
-    Logger.Info("Loo 1:1 joonised: ========================================")
+    UtilsLib.LogInfo("Loo 1:1 joonised: ========================================")
+    UtilsLib.LogInfo("Loo 1:1 joonised: SUMMARY")
+    UtilsLib.LogInfo("Loo 1:1 joonised: ========================================")
+    UtilsLib.LogInfo("Loo 1:1 joonised: Parts selected: " & selectedIndices.Count)
+    UtilsLib.LogInfo("Loo 1:1 joonised: Drawings created: " & createdDrawings.Count)
+    UtilsLib.LogInfo("Loo 1:1 joonised: Drawings updated: " & updatedDrawings.Count)
+    UtilsLib.LogInfo("Loo 1:1 joonised: ========================================")
 End Sub
 
 Function GetDescription(partDoc As PartDocument) As String

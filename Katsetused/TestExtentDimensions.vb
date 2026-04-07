@@ -13,6 +13,7 @@
 '        Creates a drawing with multiple views and extent dimensions.
 ' ============================================================================
 
+AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/CAMDrawingLib.vb"
 
 Imports Inventor
@@ -20,9 +21,8 @@ Imports System.Collections.Generic
 
 Sub Main()
     Dim app As Inventor.Application = ThisApplication
+    UtilsLib.SetLogger(Logger)
     Dim doc As Document = app.ActiveDocument
-    Dim logs As New List(Of String)
-    
     Logger.Info("TestExtentDimensions: Starting extent dimension tests...")
     
     ' Validate document type
@@ -46,13 +46,7 @@ Sub Main()
     ' ========================================================================
     Logger.Info("TestExtentDimensions: Test 1 - Create drawing with all views...")
     
-    Dim drawDoc As DrawingDocument = CAMDrawingLib.CreateDrawingFromTemplate(app, logs)
-    
-    For Each logMsg As String In logs
-        Logger.Info("TestExtentDimensions: [LIB] " & logMsg)
-    Next
-    logs.Clear()
-    
+    Dim drawDoc As DrawingDocument = CAMDrawingLib.CreateDrawingFromTemplate(app)
     If drawDoc Is Nothing Then
         Logger.Error("TestExtentDimensions: Failed to create drawing")
         MessageBox.Show("Joonise loomine ebaõnnestus.", "TestExtentDimensions")
@@ -63,13 +57,7 @@ Sub Main()
     
     ' Add all views (front, projected, flat pattern if sheet metal)
     ' The library now uses dimSpace that accounts for dimension space
-    Dim views As List(Of DrawingView) = CAMDrawingLib.AddAllViews(sheet, partDoc, app, logs)
-    
-    For Each logMsg As String In logs
-        Logger.Info("TestExtentDimensions: [LIB] " & logMsg)
-    Next
-    logs.Clear()
-    
+    Dim views As List(Of DrawingView) = CAMDrawingLib.AddAllViews(sheet, partDoc, app)
     Logger.Info("TestExtentDimensions: Views created: " & views.Count)
     
     ' Log view info
@@ -146,13 +134,7 @@ Sub Main()
     Dim dimCountBefore As Integer = sheet.DrawingDimensions.Count
     
     ' Add dimensions to all views - view spacing should account for this
-    CAMDrawingLib.AddExtentDimensionsToAllViews(sheet, app, logs)
-    
-    For Each logMsg As String In logs
-        Logger.Info("TestExtentDimensions: [LIB] " & logMsg)
-    Next
-    logs.Clear()
-    
+    CAMDrawingLib.AddExtentDimensionsToAllViews(sheet, app)
     Dim dimCountAfter As Integer = sheet.DrawingDimensions.Count
     Dim dimsCreated As Integer = dimCountAfter - dimCountBefore
     
@@ -174,13 +156,7 @@ Sub Main()
     Dim dimOffset As Double = CAMDrawingLib.DIMENSION_OFFSET * 10  ' mm
     Dim borderPadding As Double = 15  ' mm
     
-    Dim requiredSize() As Double = CAMDrawingLib.CalculateSheetSizeFromViews(views, logs, dimOffset, borderPadding)
-    
-    For Each logMsg As String In logs
-        Logger.Info("TestExtentDimensions: [LIB] " & logMsg)
-    Next
-    logs.Clear()
-    
+    Dim requiredSize() As Double = CAMDrawingLib.CalculateSheetSizeFromViews(views, dimOffset, borderPadding)
     Dim requiredWidth As Double = requiredSize(0)
     Dim requiredHeight As Double = requiredSize(1)
     
@@ -192,13 +168,7 @@ Sub Main()
     ' ========================================================================
     Logger.Info("TestExtentDimensions: Test 5 - FitSheetToViews...")
     
-    CAMDrawingLib.FitSheetToViews(sheet, views, app, logs, dimOffset, borderPadding)
-    
-    For Each logMsg As String In logs
-        Logger.Info("TestExtentDimensions: [LIB] " & logMsg)
-    Next
-    logs.Clear()
-    
+    CAMDrawingLib.FitSheetToViews(sheet, views, app, dimOffset, borderPadding)
     Dim finalWidth As Double = sheet.Width * 10
     Dim finalHeight As Double = sheet.Height * 10
     

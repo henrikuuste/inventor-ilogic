@@ -10,6 +10,7 @@
 '        Creates a new drawing with all 6 orthographic views.
 ' ============================================================================
 
+AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/CAMDrawingLib.vb"
 
 Imports Inventor
@@ -17,9 +18,8 @@ Imports System.Collections.Generic
 
 Sub Main()
     Dim app As Inventor.Application = ThisApplication
+    UtilsLib.SetLogger(Logger)
     Dim doc As Document = app.ActiveDocument
-    Dim logs As New List(Of String)
-    
     Logger.Info("TestDrawingViewPlacement: Starting view placement tests...")
     
     ' Validate document type
@@ -54,30 +54,18 @@ Sub Main()
     
     Dim isSheetMetal As Boolean = CAMDrawingLib.IsSheetMetal(partDoc)
     Dim hasFlatPattern As Boolean = CAMDrawingLib.HasFlatPattern(partDoc)
-    Dim baseOrientation As ViewOrientationTypeEnum = CAMDrawingLib.DetermineBaseViewOrientation(partDoc, logs)
+    Dim baseOrientation As ViewOrientationTypeEnum = CAMDrawingLib.DetermineBaseViewOrientation(partDoc)
     
     Logger.Info("TestDrawingViewPlacement: Sheet metal: " & isSheetMetal)
     Logger.Info("TestDrawingViewPlacement: Has flat pattern: " & hasFlatPattern)
     Logger.Info("TestDrawingViewPlacement: Base orientation: " & baseOrientation.ToString())
-    
-    ' Log library messages
-    For Each logMsg As String In logs
-        Logger.Info("TestDrawingViewPlacement: [LIB] " & logMsg)
-    Next
-    logs.Clear()
     
     ' ========================================================================
     ' Test 2: Create drawing from template (using library)
     ' ========================================================================
     Logger.Info("TestDrawingViewPlacement: Test 2 - Create drawing from template...")
     
-    Dim drawDoc As DrawingDocument = CAMDrawingLib.CreateDrawingFromTemplate(app, logs)
-    
-    For Each logMsg As String In logs
-        Logger.Info("TestDrawingViewPlacement: [LIB] " & logMsg)
-    Next
-    logs.Clear()
-    
+    Dim drawDoc As DrawingDocument = CAMDrawingLib.CreateDrawingFromTemplate(app)
     If drawDoc Is Nothing Then
         Logger.Error("TestDrawingViewPlacement: Failed to create drawing")
         MessageBox.Show("Joonise loomine ebaõnnestus.", "TestDrawingViewPlacement")
@@ -94,32 +82,14 @@ Sub Main()
     Logger.Info("TestDrawingViewPlacement: Test 3 - Calculate sheet size...")
     
     Dim dimSpaceMm As Double = Math.Max(30, Math.Max(xSize, Math.Max(ySize, zSize)) * 0.08)
-    Dim sheetSize() As Double = CAMDrawingLib.CalculateSheetSize(partDoc, dimSpaceMm, logs)
-    
-    For Each logMsg As String In logs
-        Logger.Info("TestDrawingViewPlacement: [LIB] " & logMsg)
-    Next
-    logs.Clear()
-    
-    CAMDrawingLib.ResizeSheet(sheet, sheetSize(0), sheetSize(1), logs)
-    
-    For Each logMsg As String In logs
-        Logger.Info("TestDrawingViewPlacement: [LIB] " & logMsg)
-    Next
-    logs.Clear()
-    
+    Dim sheetSize() As Double = CAMDrawingLib.CalculateSheetSize(partDoc, dimSpaceMm)
+    CAMDrawingLib.ResizeSheet(sheet, sheetSize(0), sheetSize(1))
     ' ========================================================================
     ' Test 4: Add all views (using library)
     ' ========================================================================
     Logger.Info("TestDrawingViewPlacement: Test 4 - Add all views...")
     
-    Dim views As List(Of DrawingView) = CAMDrawingLib.AddAllViews(sheet, partDoc, app, logs)
-    
-    For Each logMsg As String In logs
-        Logger.Info("TestDrawingViewPlacement: [LIB] " & logMsg)
-    Next
-    logs.Clear()
-    
+    Dim views As List(Of DrawingView) = CAMDrawingLib.AddAllViews(sheet, partDoc, app)
     Logger.Info("TestDrawingViewPlacement: Views created: " & views.Count)
     
     ' Log view details

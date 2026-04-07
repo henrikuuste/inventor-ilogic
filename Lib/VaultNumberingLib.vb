@@ -7,16 +7,18 @@
 ' - Generate file numbers from a specific scheme
 ' - Create and manage folders in Vault
 '
+' Dependencies:
+'   UtilsLib - logging via UtilsLib.LogInfo / UtilsLib.LogWarn (set logger in caller:
+'              UtilsLib.SetLogger(Logger) from Sub Main)
+'
 ' Usage: 
 '   In calling script (BEFORE AddVbFile):
 '     AddReference "Autodesk.Connectivity.WebServices"
 '     AddReference "Autodesk.DataManagement.Client.Framework.Vault"
 '     AddReference "Autodesk.DataManagement.Client.Framework.Vault.Forms"
 '     AddReference "Connectivity.InventorAddin.EdmAddin"
+'     AddVbFile "Lib/UtilsLib.vb"
 '     AddVbFile "Lib/VaultNumberingLib.vb"
-'
-' Note: Logger is not available in library modules.
-'       Pass a List(Of String) to collect log messages.
 ' ============================================================================
 
 Public Module VaultNumberingLib
@@ -46,28 +48,26 @@ Public Module VaultNumberingLib
     End Function
     
     ' Get available numbering schemes for files
-    Public Function GetNumberingSchemes(conn As Object, _
-                                        logs As System.Collections.Generic.List(Of String)) As Object()
+    Public Function GetNumberingSchemes(conn As Object) As Object()
         If conn Is Nothing Then
-            logs.Add("VaultNumberingLib: No Vault connection")
+            UtilsLib.LogWarn("VaultNumberingLib: No Vault connection")
             Return Nothing
         End If
         
         Try
             Dim schemes As Object() = conn.WebServiceManager.NumberingService.GetNumberingSchemes("FILE", Nothing)
-            logs.Add("VaultNumberingLib: Found " & schemes.Length & " numbering scheme(s)")
+            UtilsLib.LogInfo("VaultNumberingLib: Found " & schemes.Length & " numbering scheme(s)")
             Return schemes
         Catch ex As Exception
-            logs.Add("VaultNumberingLib: Error getting schemes: " & ex.Message)
+            UtilsLib.LogWarn("VaultNumberingLib: Error getting schemes: " & ex.Message)
             Return Nothing
         End Try
     End Function
     
     ' Get scheme names as a list (for dropdown)
-    Public Function GetSchemeNames(conn As Object, _
-                                   logs As System.Collections.Generic.List(Of String)) As System.Collections.Generic.List(Of String)
+    Public Function GetSchemeNames(conn As Object) As System.Collections.Generic.List(Of String)
         Dim names As New System.Collections.Generic.List(Of String)
-        Dim schemes As Object() = GetNumberingSchemes(conn, logs)
+        Dim schemes As Object() = GetNumberingSchemes(conn)
         
         If schemes IsNot Nothing Then
             For Each scheme As Object In schemes
@@ -80,73 +80,69 @@ Public Module VaultNumberingLib
     
     ' Find a scheme by name
     Public Function FindSchemeByName(conn As Object, _
-                                     schemeName As String, _
-                                     logs As System.Collections.Generic.List(Of String)) As Object
-        Dim schemes As Object() = GetNumberingSchemes(conn, logs)
+                                     schemeName As String) As Object
+        Dim schemes As Object() = GetNumberingSchemes(conn)
         
         If schemes Is Nothing Then Return Nothing
         
         Dim searchName As String = schemeName.Trim()
-        logs.Add("VaultNumberingLib: Looking for scheme '" & searchName & "' (len=" & searchName.Length & ")")
+        UtilsLib.LogInfo("VaultNumberingLib: Looking for scheme '" & searchName & "' (len=" & searchName.Length & ")")
         
         For Each scheme As Object In schemes
             Dim schName As String = CStr(scheme.Name).Trim()
-            logs.Add("VaultNumberingLib:   Comparing with '" & schName & "' (len=" & schName.Length & ")")
+            UtilsLib.LogInfo("VaultNumberingLib:   Comparing with '" & schName & "' (len=" & schName.Length & ")")
             If schName.Equals(searchName, StringComparison.OrdinalIgnoreCase) Then
-                logs.Add("VaultNumberingLib: Found matching scheme")
+                UtilsLib.LogInfo("VaultNumberingLib: Found matching scheme")
                 Return scheme
             End If
         Next
         
-        logs.Add("VaultNumberingLib: Scheme '" & searchName & "' not found")
+        UtilsLib.LogWarn("VaultNumberingLib: Scheme '" & searchName & "' not found")
         Return Nothing
     End Function
     
     ' Generate a file number from a specific scheme
     Public Function GenerateFileNumber(conn As Object, _
-                                       scheme As Object, _
-                                       logs As System.Collections.Generic.List(Of String)) As String
+                                       scheme As Object) As String
         If conn Is Nothing Then
-            logs.Add("VaultNumberingLib: No Vault connection")
+            UtilsLib.LogWarn("VaultNumberingLib: No Vault connection")
             Return ""
         End If
         
         If scheme Is Nothing Then
-            logs.Add("VaultNumberingLib: No scheme specified")
+            UtilsLib.LogWarn("VaultNumberingLib: No scheme specified")
             Return ""
         End If
         
         Try
             Dim numGenArgs() As String = {""}
             Dim number As String = conn.WebServiceManager.DocumentService.GenerateFileNumber(scheme.SchmID, numGenArgs)
-            logs.Add("VaultNumberingLib: Generated number: " & number)
+            UtilsLib.LogInfo("VaultNumberingLib: Generated number: " & number)
             Return number
         Catch ex As Exception
-            logs.Add("VaultNumberingLib: Error generating number: " & ex.Message)
+            UtilsLib.LogWarn("VaultNumberingLib: Error generating number: " & ex.Message)
             Return ""
         End Try
     End Function
     
     ' Generate a file number by scheme name (convenience function)
     Public Function GenerateFileNumberByName(conn As Object, _
-                                             schemeName As String, _
-                                             logs As System.Collections.Generic.List(Of String)) As String
-        Dim scheme As Object = FindSchemeByName(conn, schemeName, logs)
+                                             schemeName As String) As String
+        Dim scheme As Object = FindSchemeByName(conn, schemeName)
         If scheme Is Nothing Then Return ""
-        Return GenerateFileNumber(conn, scheme, logs)
+        Return GenerateFileNumber(conn, scheme)
     End Function
     
     ' Generate multiple file numbers at once
     Public Function GenerateFileNumbers(conn As Object, _
                                         scheme As Object, _
-                                        count As Integer, _
-                                        logs As System.Collections.Generic.List(Of String)) As System.Collections.Generic.List(Of String)
+                                        count As Integer) As System.Collections.Generic.List(Of String)
         Dim numbers As New System.Collections.Generic.List(Of String)
         
         For i As Integer = 1 To count
-            Dim num As String = GenerateFileNumber(conn, scheme, logs)
+            Dim num As String = GenerateFileNumber(conn, scheme)
             If String.IsNullOrEmpty(num) Then
-                logs.Add("VaultNumberingLib: Failed to generate number " & i & " of " & count)
+                UtilsLib.LogWarn("VaultNumberingLib: Failed to generate number " & i & " of " & count)
                 Exit For
             End If
             numbers.Add(num)
@@ -186,18 +182,16 @@ Public Module VaultNumberingLib
     
     ' Get workspace root path - the local folder that maps to $/ in Vault
     ' This detects the root by testing path prefixes against Vault
-    Public Function GetWorkspaceRoot(app As Object, _
-                                     logs As System.Collections.Generic.List(Of String)) As String
+    Public Function GetWorkspaceRoot(app As Object) As String
         ' Try to get from Inventor project first (just for logging)
-        Dim projectWorkspace As String = ""
         Try
             Dim project As Object = app.DesignProjectManager.ActiveDesignProject
-            projectWorkspace = project.WorkspacePath
+            Dim projectWorkspace As String = project.WorkspacePath
             If Not String.IsNullOrEmpty(projectWorkspace) Then
-                logs.Add("VaultNumberingLib: Project workspace: " & projectWorkspace)
+                UtilsLib.LogInfo("VaultNumberingLib: Project workspace: " & projectWorkspace)
             End If
         Catch ex As Exception
-            logs.Add("VaultNumberingLib: Could not get workspace from project: " & ex.Message)
+            UtilsLib.LogWarn("VaultNumberingLib: Could not get workspace from project: " & ex.Message)
         End Try
         
         Return ""
@@ -206,15 +200,14 @@ Public Module VaultNumberingLib
     ' Detect the Vault workspace root by testing path prefixes against Vault
     ' Returns the local path that corresponds to $/ in Vault
     Public Function DetectWorkspaceRoot(conn As Object, _
-                                        localPath As String, _
-                                        logs As System.Collections.Generic.List(Of String)) As String
+                                        localPath As String) As String
         If conn Is Nothing Then
-            logs.Add("VaultNumberingLib: No Vault connection for DetectWorkspaceRoot")
+            UtilsLib.LogWarn("VaultNumberingLib: No Vault connection for DetectWorkspaceRoot")
             Return ""
         End If
         
         If String.IsNullOrEmpty(localPath) Then
-            logs.Add("VaultNumberingLib: No local path for DetectWorkspaceRoot")
+            UtilsLib.LogWarn("VaultNumberingLib: No local path for DetectWorkspaceRoot")
             Return ""
         End If
         
@@ -239,8 +232,8 @@ Public Module VaultNumberingLib
             Try
                 Dim folder As Object = conn.WebServiceManager.DocumentService.GetFolderByPath(vaultPath)
                 If folder IsNot Nothing Then
-                    logs.Add("VaultNumberingLib: Detected workspace root: " & prefix)
-                    logs.Add("VaultNumberingLib: Vault path test succeeded: " & vaultPath)
+                    UtilsLib.LogInfo("VaultNumberingLib: Detected workspace root: " & prefix)
+                    UtilsLib.LogInfo("VaultNumberingLib: Vault path test succeeded: " & vaultPath)
                     Return prefix
                 End If
             Catch
@@ -252,26 +245,25 @@ Public Module VaultNumberingLib
         Dim possibleRoots() As String = {"C:\_SoftcomVault", "C:\VaultWS", "C:\Vault"}
         For Each root As String In possibleRoots
             If localPath.StartsWith(root, StringComparison.OrdinalIgnoreCase) Then
-                logs.Add("VaultNumberingLib: Using fallback workspace root: " & root)
+                UtilsLib.LogInfo("VaultNumberingLib: Using fallback workspace root: " & root)
                 Return root
             End If
         Next
         
-        logs.Add("VaultNumberingLib: Could not detect workspace root")
+        UtilsLib.LogWarn("VaultNumberingLib: Could not detect workspace root")
         Return ""
     End Function
     
     ' Get folder by Vault path, returns folder object or Nothing if not found
     Public Function GetVaultFolder(conn As Object, _
-                                   vaultPath As String, _
-                                   logs As System.Collections.Generic.List(Of String)) As Object
+                                   vaultPath As String) As Object
         If conn Is Nothing Then
-            logs.Add("VaultNumberingLib: No Vault connection for GetVaultFolder")
+            UtilsLib.LogWarn("VaultNumberingLib: No Vault connection for GetVaultFolder")
             Return Nothing
         End If
         
         If String.IsNullOrEmpty(vaultPath) Then
-            logs.Add("VaultNumberingLib: Empty vault path for GetVaultFolder")
+            UtilsLib.LogWarn("VaultNumberingLib: Empty vault path for GetVaultFolder")
             Return Nothing
         End If
         
@@ -280,7 +272,7 @@ Public Module VaultNumberingLib
             Return folder
         Catch ex As Exception
             ' Folder not found is expected in some cases, don't log as error
-            logs.Add("VaultNumberingLib: Folder not found: " & vaultPath)
+            UtilsLib.LogInfo("VaultNumberingLib: Folder not found: " & vaultPath)
             Return Nothing
         End Try
     End Function
@@ -288,29 +280,28 @@ Public Module VaultNumberingLib
     ' Ensure a folder exists in Vault, creating it if necessary
     ' Returns the folder object, or Nothing if creation failed
     Public Function EnsureVaultFolder(conn As Object, _
-                                      vaultPath As String, _
-                                      logs As System.Collections.Generic.List(Of String)) As Object
+                                      vaultPath As String) As Object
         If conn Is Nothing Then
-            logs.Add("VaultNumberingLib: No Vault connection for EnsureVaultFolder")
+            UtilsLib.LogWarn("VaultNumberingLib: No Vault connection for EnsureVaultFolder")
             Return Nothing
         End If
         
         If String.IsNullOrEmpty(vaultPath) Then
-            logs.Add("VaultNumberingLib: Empty vault path for EnsureVaultFolder")
+            UtilsLib.LogWarn("VaultNumberingLib: Empty vault path for EnsureVaultFolder")
             Return Nothing
         End If
         
         ' First check if folder already exists
-        Dim existingFolder As Object = GetVaultFolder(conn, vaultPath, logs)
+        Dim existingFolder As Object = GetVaultFolder(conn, vaultPath)
         If existingFolder IsNot Nothing Then
-            logs.Add("VaultNumberingLib: Vault folder already exists: " & vaultPath)
+            UtilsLib.LogInfo("VaultNumberingLib: Vault folder already exists: " & vaultPath)
             Return existingFolder
         End If
         
         ' Parse path to get parent and folder name
         Dim lastSlash As Integer = vaultPath.LastIndexOf("/")
         If lastSlash <= 0 Then
-            logs.Add("VaultNumberingLib: Cannot parse parent path from: " & vaultPath)
+            UtilsLib.LogWarn("VaultNumberingLib: Cannot parse parent path from: " & vaultPath)
             Return Nothing
         End If
         
@@ -318,14 +309,14 @@ Public Module VaultNumberingLib
         Dim folderName As String = vaultPath.Substring(lastSlash + 1)
         
         If String.IsNullOrEmpty(folderName) Then
-            logs.Add("VaultNumberingLib: Empty folder name in path: " & vaultPath)
+            UtilsLib.LogWarn("VaultNumberingLib: Empty folder name in path: " & vaultPath)
             Return Nothing
         End If
         
         ' Get parent folder (it must exist)
-        Dim parentFolder As Object = GetVaultFolder(conn, parentPath, logs)
+        Dim parentFolder As Object = GetVaultFolder(conn, parentPath)
         If parentFolder Is Nothing Then
-            logs.Add("VaultNumberingLib: Parent folder not found in Vault: " & parentPath)
+            UtilsLib.LogWarn("VaultNumberingLib: Parent folder not found in Vault: " & parentPath)
             Return Nothing
         End If
         
@@ -333,17 +324,17 @@ Public Module VaultNumberingLib
         Try
             ' AddFolder(name, parentId, isLibrary)
             Dim newFolder As Object = conn.WebServiceManager.DocumentService.AddFolder(folderName, parentFolder.Id, False)
-            logs.Add("VaultNumberingLib: Created Vault folder: " & vaultPath)
+            UtilsLib.LogInfo("VaultNumberingLib: Created Vault folder: " & vaultPath)
             Return newFolder
         Catch ex As Exception
             ' Check for "folder exists" error (error code 1011)
             If ex.Message.Contains("1011") OrElse ex.Message.ToLower().Contains("exists") Then
-                logs.Add("VaultNumberingLib: Folder already exists (concurrent creation): " & vaultPath)
+                UtilsLib.LogInfo("VaultNumberingLib: Folder already exists (concurrent creation): " & vaultPath)
                 ' Try to get the folder again
-                Return GetVaultFolder(conn, vaultPath, logs)
+                Return GetVaultFolder(conn, vaultPath)
             End If
             
-            logs.Add("VaultNumberingLib: Failed to create folder: " & ex.Message)
+            UtilsLib.LogWarn("VaultNumberingLib: Failed to create folder: " & ex.Message)
             Return Nothing
         End Try
     End Function
@@ -352,18 +343,17 @@ Public Module VaultNumberingLib
     ' Returns the local path of the folder
     Public Function EnsureLocalAndVaultFolder(localPath As String, _
                                               conn As Object, _
-                                              workspaceRoot As String, _
-                                              logs As System.Collections.Generic.List(Of String)) As Boolean
+                                              workspaceRoot As String) As Boolean
         Dim success As Boolean = True
         
         ' Create local folder if it doesn't exist
         Try
             If Not System.IO.Directory.Exists(localPath) Then
                 System.IO.Directory.CreateDirectory(localPath)
-                logs.Add("VaultNumberingLib: Created local folder: " & localPath)
+                UtilsLib.LogInfo("VaultNumberingLib: Created local folder: " & localPath)
             End If
         Catch ex As Exception
-            logs.Add("VaultNumberingLib: Failed to create local folder: " & ex.Message)
+            UtilsLib.LogWarn("VaultNumberingLib: Failed to create local folder: " & ex.Message)
             success = False
         End Try
         
@@ -371,13 +361,13 @@ Public Module VaultNumberingLib
         If conn IsNot Nothing AndAlso Not String.IsNullOrEmpty(workspaceRoot) Then
             Dim vaultPath As String = ConvertLocalPathToVaultPath(localPath, workspaceRoot)
             If Not String.IsNullOrEmpty(vaultPath) Then
-                Dim vaultFolder As Object = EnsureVaultFolder(conn, vaultPath, logs)
+                Dim vaultFolder As Object = EnsureVaultFolder(conn, vaultPath)
                 If vaultFolder Is Nothing Then
-                    logs.Add("VaultNumberingLib: Could not ensure Vault folder: " & vaultPath)
+                    UtilsLib.LogWarn("VaultNumberingLib: Could not ensure Vault folder: " & vaultPath)
                     ' Don't fail completely - local folder may still work
                 End If
             Else
-                logs.Add("VaultNumberingLib: Could not convert path to Vault format: " & localPath)
+                UtilsLib.LogWarn("VaultNumberingLib: Could not convert path to Vault format: " & localPath)
             End If
         End If
         
@@ -390,27 +380,25 @@ Public Module VaultNumberingLib
     '   localPath - The full local folder path (must exist on disk)
     '   conn - Vault connection object (from GetVaultConnection)
     '   workspaceRoot - Local workspace root path (maps to $/ in Vault)
-    '   logs - List to collect log messages
     ' Returns: True if folder is ready (exists in Vault or was created)
     Public Function EnsureFolderInVault(localPath As String, _
                                         conn As Object, _
-                                        workspaceRoot As String, _
-                                        logs As System.Collections.Generic.List(Of String)) As Boolean
+                                        workspaceRoot As String) As Boolean
         ' Skip if folder doesn't exist on disk
         If Not System.IO.Directory.Exists(localPath) Then
-            logs.Add("VaultNumberingLib: Folder does not exist on disk: " & localPath)
+            UtilsLib.LogWarn("VaultNumberingLib: Folder does not exist on disk: " & localPath)
             Return False
         End If
         
         ' Skip if no Vault connection
         If conn Is Nothing Then
-            logs.Add("VaultNumberingLib: No Vault connection, skipping Vault folder creation")
+            UtilsLib.LogInfo("VaultNumberingLib: No Vault connection, skipping Vault folder creation")
             Return True
         End If
         
         ' Skip if no workspace root
         If String.IsNullOrEmpty(workspaceRoot) Then
-            logs.Add("VaultNumberingLib: No workspace root, skipping Vault folder creation")
+            UtilsLib.LogInfo("VaultNumberingLib: No workspace root, skipping Vault folder creation")
             Return True
         End If
         
@@ -418,17 +406,17 @@ Public Module VaultNumberingLib
         Dim vaultPath As String = ConvertLocalPathToVaultPath(localPath, workspaceRoot)
         
         If String.IsNullOrEmpty(vaultPath) Then
-            logs.Add("VaultNumberingLib: Path not in workspace, cannot create Vault folder: " & localPath)
+            UtilsLib.LogWarn("VaultNumberingLib: Path not in workspace, cannot create Vault folder: " & localPath)
             Return True
         End If
         
         ' Ensure folder exists in Vault
-        Dim vaultFolder As Object = EnsureVaultFolder(conn, vaultPath, logs)
+        Dim vaultFolder As Object = EnsureVaultFolder(conn, vaultPath)
         If vaultFolder IsNot Nothing Then
-            logs.Add("VaultNumberingLib: Vault folder ready: " & vaultPath)
+            UtilsLib.LogInfo("VaultNumberingLib: Vault folder ready: " & vaultPath)
             Return True
         Else
-            logs.Add("VaultNumberingLib: Could not create Vault folder: " & vaultPath)
+            UtilsLib.LogWarn("VaultNumberingLib: Could not create Vault folder: " & vaultPath)
             Return False
         End If
     End Function

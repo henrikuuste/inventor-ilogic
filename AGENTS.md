@@ -750,4 +750,6 @@ ctrlDef.Execute()  ' Shows checkout dialog
 | Drawing view spacing/positioning | Use `view.Width` and `view.Height`, not model `RangeBox` dimensions |
 | Extent dimension spacing | Use `CAMDrawingLib.DIMENSION_OFFSET` (25mm) for spacing from model |
 | Sheet resize fails | Move views within new bounds FIRST, then resize sheet |
+| Component patterns to browser folder | `BrowserFolder.Add()` fails with E_FAIL for all pattern types (Mirror, Rectangular, Circular). Patterns must be moved manually. |
+| Mirror Component Pattern suppression | Mirror Component Patterns (Inventor 2026 associative) cannot be suppressed via API. `NativeObject` throws E_NOTIMPL, and suppressing individual occurrences breaks/flips the pattern. User must manually configure model states for Mirror patterns. |
 

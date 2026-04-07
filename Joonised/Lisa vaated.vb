@@ -10,6 +10,7 @@
 '        Select the base view or the first view will be used.
 ' ============================================================================
 
+AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/CAMDrawingLib.vb"
 
 Imports System.Collections.Generic
@@ -18,13 +19,12 @@ Imports Inventor
 
 Sub Main()
     Dim app As Inventor.Application = ThisApplication
-    Dim logs As New List(Of String)
-    
-    Logger.Info("Lisa vaated: Starting...")
+    UtilsLib.SetLogger(Logger)
+    UtilsLib.LogInfo("Lisa vaated: Starting...")
     
     ' Validate document
     If app.ActiveDocument Is Nothing Then
-        Logger.Error("Lisa vaated: No active document")
+        UtilsLib.LogError("Lisa vaated: No active document")
         MessageBox.Show("Aktiivne dokument puudub.", "Lisa vaated")
         Exit Sub
     End If
@@ -32,7 +32,7 @@ Sub Main()
     Dim doc As Document = app.ActiveDocument
     
     If doc.DocumentType <> DocumentTypeEnum.kDrawingDocumentObject Then
-        Logger.Error("Lisa vaated: Not a drawing document")
+        UtilsLib.LogError("Lisa vaated: Not a drawing document")
         MessageBox.Show("See reegel töötab ainult joonisega.", "Lisa vaated")
         Exit Sub
     End If
@@ -41,7 +41,7 @@ Sub Main()
     Dim sheet As Sheet = drawDoc.ActiveSheet
     
     If sheet.DrawingViews.Count = 0 Then
-        Logger.Error("Lisa vaated: No views on sheet")
+        UtilsLib.LogError("Lisa vaated: No views on sheet")
         MessageBox.Show("Lehel puuduvad vaated. Kasuta 'Loo 1:1 joonised' uue joonise loomiseks.", "Lisa vaated")
         Exit Sub
     End If
@@ -53,20 +53,17 @@ Sub Main()
     Dim selectedViews As List(Of DrawingView) = CAMDrawingLib.GetSelectedViews(drawDoc)
     If selectedViews.Count > 0 Then
         baseView = selectedViews(0)
-        Logger.Info("Lisa vaated: Using selected view: " & baseView.Name)
+        UtilsLib.LogInfo("Lisa vaated: Using selected view: " & baseView.Name)
     Else
         ' Use first view on sheet
         baseView = sheet.DrawingViews.Item(1)
-        Logger.Info("Lisa vaated: Using first view: " & baseView.Name)
+        UtilsLib.LogInfo("Lisa vaated: Using first view: " & baseView.Name)
     End If
     
     ' Get the referenced part document
-    Dim partDoc As PartDocument = CAMDrawingLib.GetReferencedPartDocument(drawDoc, logs)
-    For Each log As String In logs : Logger.Info(log) : Next
-    logs.Clear()
-    
+    Dim partDoc As PartDocument = CAMDrawingLib.GetReferencedPartDocument(drawDoc)
     If partDoc Is Nothing Then
-        Logger.Error("Lisa vaated: No referenced part document found")
+        UtilsLib.LogError("Lisa vaated: No referenced part document found")
         MessageBox.Show("Jooniselt ei leitud viidet detailile.", "Lisa vaated")
         Exit Sub
     End If
@@ -82,35 +79,30 @@ Sub Main()
     Dim dialogResult As DialogResult = ShowOptionsDialog(baseView, partDoc, dimOffsetCm, viewGapCm, fitSheet)
     
     If dialogResult <> DialogResult.OK Then
-        Logger.Info("Lisa vaated: Cancelled by user")
+        UtilsLib.LogInfo("Lisa vaated: Cancelled by user")
         Exit Sub
     End If
     
-    Logger.Info("Lisa vaated: Base view: " & baseView.Name)
-    Logger.Info("Lisa vaated: Dimension offset: " & FormatNumber(dimOffsetCm * 10, 1) & " mm")
-    Logger.Info("Lisa vaated: View gap: " & FormatNumber(viewGapCm * 10, 1) & " mm")
+    UtilsLib.LogInfo("Lisa vaated: Base view: " & baseView.Name)
+    UtilsLib.LogInfo("Lisa vaated: Dimension offset: " & FormatNumber(dimOffsetCm * 10, 1) & " mm")
+    UtilsLib.LogInfo("Lisa vaated: View gap: " & FormatNumber(viewGapCm * 10, 1) & " mm")
     
     ' Add projected views
-    Dim allViews As List(Of DrawingView) = CAMDrawingLib.AddViewsToExistingBase(sheet, baseView, partDoc, app, logs, dimOffsetCm, viewGapCm)
-    For Each log As String In logs : Logger.Info(log) : Next
-    logs.Clear()
-    
+    Dim allViews As List(Of DrawingView) = CAMDrawingLib.AddViewsToExistingBase(sheet, baseView, partDoc, app, dimOffsetCm, viewGapCm)
     Dim viewsAdded As Integer = allViews.Count - 1  ' Subtract base view
     
     ' Optionally fit sheet to content
     If fitSheet Then
-        Logger.Info("Lisa vaated: Fitting sheet to content...")
-        CAMDrawingLib.FitSheetToContent(sheet, app, logs)
-        For Each log As String In logs : Logger.Info(log) : Next
-        logs.Clear()
+        UtilsLib.LogInfo("Lisa vaated: Fitting sheet to content...")
+        CAMDrawingLib.FitSheetToContent(sheet, app)
     End If
     
     ' Summary
-    Logger.Info("Lisa vaated: ========================================")
-    Logger.Info("Lisa vaated: COMPLETE")
-    Logger.Info("Lisa vaated: Views added: " & viewsAdded)
-    Logger.Info("Lisa vaated: Total views: " & sheet.DrawingViews.Count)
-    Logger.Info("Lisa vaated: ========================================")
+    UtilsLib.LogInfo("Lisa vaated: ========================================")
+    UtilsLib.LogInfo("Lisa vaated: COMPLETE")
+    UtilsLib.LogInfo("Lisa vaated: Views added: " & viewsAdded)
+    UtilsLib.LogInfo("Lisa vaated: Total views: " & sheet.DrawingViews.Count)
+    UtilsLib.LogInfo("Lisa vaated: ========================================")
 End Sub
 
 ' ============================================================================

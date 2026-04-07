@@ -12,6 +12,7 @@
 ' Note: Creates temporary files in the same folder as the part.
 ' ============================================================================
 
+AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/CAMDrawingLib.vb"
 
 Imports Inventor
@@ -19,9 +20,8 @@ Imports System.Collections.Generic
 
 Sub Main()
     Dim app As Inventor.Application = ThisApplication
+    UtilsLib.SetLogger(Logger)
     Dim doc As Document = app.ActiveDocument
-    Dim logs As New List(Of String)
-    
     Logger.Info("TestDwgExport: Starting DWG/DXF export tests...")
     
     ' Validate document type
@@ -52,13 +52,7 @@ Sub Main()
     ' ========================================================================
     Logger.Info("TestDwgExport: Test 1 - Create drawing with view...")
     
-    Dim drawDoc As DrawingDocument = CAMDrawingLib.CreateDrawingFromTemplate(app, logs)
-    
-    For Each logMsg As String In logs
-        Logger.Info("TestDwgExport: [LIB] " & logMsg)
-    Next
-    logs.Clear()
-    
+    Dim drawDoc As DrawingDocument = CAMDrawingLib.CreateDrawingFromTemplate(app)
     If drawDoc Is Nothing Then
         Logger.Error("TestDwgExport: Failed to create drawing")
         MessageBox.Show("Joonise loomine ebaõnnestus.", "TestDwgExport")
@@ -68,12 +62,7 @@ Sub Main()
     Dim sheet As Sheet = drawDoc.ActiveSheet
     
     ' Add a view at 1:1 scale with determined orientation
-    Dim baseOrientation As ViewOrientationTypeEnum = CAMDrawingLib.DetermineBaseViewOrientation(partDoc, logs)
-    For Each logMsg As String In logs
-        Logger.Info("TestDwgExport: [LIB] " & logMsg)
-    Next
-    logs.Clear()
-    
+    Dim baseOrientation As ViewOrientationTypeEnum = CAMDrawingLib.DetermineBaseViewOrientation(partDoc)
     Try
         Dim frontView As DrawingView = sheet.DrawingViews.AddBaseView( _
             partDoc, _
@@ -95,13 +84,7 @@ Sub Main()
     Dim dwgPath As String = System.IO.Path.Combine(outputFolder, baseName & ".dwg")
     Dim dwgExportSuccess As Boolean = False
     
-    CAMDrawingLib.ExportToDwgOrDxf(app, drawDoc, dwgPath, "DWG", logs)
-    
-    For Each logMsg As String In logs
-        Logger.Info("TestDwgExport: [LIB] " & logMsg)
-    Next
-    logs.Clear()
-    
+    CAMDrawingLib.ExportToDwgOrDxf(app, drawDoc, dwgPath, "DWG")
     If System.IO.File.Exists(dwgPath) Then
         Dim fileInfo As New System.IO.FileInfo(dwgPath)
         dwgExportSuccess = True
@@ -120,13 +103,7 @@ Sub Main()
     Dim dxfPath As String = System.IO.Path.Combine(outputFolder, baseName & ".dxf")
     Dim dxfExportSuccess As Boolean = False
     
-    CAMDrawingLib.ExportToDwgOrDxf(app, drawDoc, dxfPath, "DXF", logs)
-    
-    For Each logMsg As String In logs
-        Logger.Info("TestDwgExport: [LIB] " & logMsg)
-    Next
-    logs.Clear()
-    
+    CAMDrawingLib.ExportToDwgOrDxf(app, drawDoc, dxfPath, "DXF")
     If System.IO.File.Exists(dxfPath) Then
         Dim fileInfo As New System.IO.FileInfo(dxfPath)
         dxfExportSuccess = True

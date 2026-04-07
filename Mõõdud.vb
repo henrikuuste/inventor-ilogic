@@ -9,9 +9,11 @@
 ' iProperties väärtusi (Paksus, Laius, Pikkus) gabariitmõõtude alusel.
 ' ============================================================================
 
+AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/BoundingBoxStockLib.vb"
 
 Sub Main()
+    UtilsLib.SetLogger(Logger)
     Dim app As Inventor.Application = ThisApplication
     Dim doc As Document = app.ActiveDocument
 
@@ -27,6 +29,7 @@ Sub Main()
         ' Assembly document - process selected parts
         ProcessAssemblySelection(app, CType(doc, AssemblyDocument))
     Else
+        UtilsLib.LogError("Mõõdud: Unsupported document type.")
         MessageBox.Show("See reegel töötab ainult detaili (.ipt) või koostu (.iam) dokumentidega.", "Mõõdud")
     End If
 End Sub

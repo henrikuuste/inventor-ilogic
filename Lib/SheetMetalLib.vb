@@ -9,10 +9,12 @@
 '
 ' Based on Lehtmetall.vb but with automated A-side detection.
 '
-' Usage: AddVbFile "Lib/SheetMetalLib.vb"
+' Usage: 
+'   AddVbFile "Lib/UtilsLib.vb"
+'   AddVbFile "Lib/SheetMetalLib.vb"
+'   UtilsLib.SetLogger(Logger) ' In Sub Main
 '
-' Note: Logger is not available in library modules.
-'       Pass a List(Of String) to collect log messages.
+' Dependencies: UtilsLib (for logging)
 ' ============================================================================
 
 Imports Inventor
@@ -25,11 +27,8 @@ Public Module SheetMetalLib
     ' Thickness Detection
     ' ============================================================================
     
-    ' Detect thickness direction for a solid body
-    ' Returns the thickness vector as a string (e.g., "V:0,0,1" or "Z")
     Public Function DetectThicknessVector(body As SurfaceBody, _
-                                          ByRef thicknessValue As Double, _
-                                          logs As System.Collections.Generic.List(Of String)) As String
+                                          ByRef thicknessValue As Double) As String
         Dim bestNormalX As Double = 0, bestNormalY As Double = 0, bestNormalZ As Double = 0
         Dim minExtent As Double = Double.MaxValue
         Dim checkedNormals As New System.Collections.Generic.List(Of String)
@@ -49,7 +48,6 @@ Public Module SheetMetalLib
                     nx = -nx : ny = -ny : nz = -nz
                 End If
                 
-                ' Create key for this normal direction
                 Dim normalKey As String = Math.Round(nx, 3).ToString() & "," & _
                                           Math.Round(ny, 3).ToString() & "," & _
                                           Math.Round(nz, 3).ToString()
@@ -57,7 +55,6 @@ Public Module SheetMetalLib
                 If checkedNormals.Contains(normalKey) Then Continue For
                 checkedNormals.Add(normalKey)
                 
-                ' Calculate extent along this normal
                 Dim extent As Double = GetOrientedExtentForBody(body, nx, ny, nz)
                 
                 If extent > 0 AndAlso extent < minExtent Then
@@ -70,13 +67,13 @@ Public Module SheetMetalLib
         Next
         
         If minExtent = Double.MaxValue Then
-            logs.Add("SheetMetalLib: Could not detect thickness direction")
+            UtilsLib.LogWarn("SheetMetalLib: Could not detect thickness direction")
             thicknessValue = 0
             Return ""
         End If
         
         thicknessValue = minExtent
-        logs.Add("SheetMetalLib: Detected thickness: " & FormatNumber(minExtent * 10, 2) & " mm")
+        UtilsLib.LogInfo("SheetMetalLib: Detected thickness: " & FormatNumber(minExtent * 10, 2) & " mm")
         
         Return VectorToString(bestNormalX, bestNormalY, bestNormalZ)
     End Function
@@ -85,12 +82,10 @@ Public Module SheetMetalLib
     ' Face Finding
     ' ============================================================================
     
-    ' Find a face whose normal matches the given vector (for A-side)
-    Public Function FindFaceByNormal(partDoc As PartDocument, thicknessVector As String, _
-                                     logs As System.Collections.Generic.List(Of String)) As Face
+    Public Function FindFaceByNormal(partDoc As PartDocument, thicknessVector As String) As Face
         Dim nx As Double = 0, ny As Double = 0, nz As Double = 0
         If Not ParseVectorComponents(thicknessVector, nx, ny, nz) Then
-            logs.Add("SheetMetalLib: Invalid thickness vector format")
+            UtilsLib.LogWarn("SheetMetalLib: Invalid thickness vector format")
             Return Nothing
         End If
         
@@ -98,32 +93,27 @@ Public Module SheetMetalLib
             For Each face As Face In body.Faces
                 Dim fx As Double = 0, fy As Double = 0, fz As Double = 0
                 If GetFaceNormal(face, fx, fy, fz) Then
-                    ' Normalize
                     Dim len As Double = Math.Sqrt(fx * fx + fy * fy + fz * fz)
                     If len > 0.0001 Then
                         fx /= len : fy /= len : fz /= len
                     End If
                     
-                    ' Check if normals are parallel (dot product ~1 or ~-1)
                     Dim dot As Double = nx * fx + ny * fy + nz * fz
                     If Math.Abs(Math.Abs(dot) - 1) < 0.001 Then
-                        logs.Add("SheetMetalLib: Found A-side face")
+                        UtilsLib.LogInfo("SheetMetalLib: Found A-side face")
                         Return face
                     End If
                 End If
             Next
         Next
         
-        logs.Add("SheetMetalLib: Could not find A-side face")
+        UtilsLib.LogWarn("SheetMetalLib: Could not find A-side face")
         Return Nothing
     End Function
     
-    ' Find A-side face on a specific body
-    Public Function FindFaceByNormalOnBody(body As SurfaceBody, thicknessVector As String, _
-                                           logs As System.Collections.Generic.List(Of String)) As Face
+    Public Function FindFaceByNormalOnBody(body As SurfaceBody, thicknessVector As String) As Face
         Dim nx As Double = 0, ny As Double = 0, nz As Double = 0
         If Not ParseVectorComponents(thicknessVector, nx, ny, nz) Then
-            logs.Add("SheetMetalLib: Invalid thickness vector format")
             Return Nothing
         End If
         
@@ -149,128 +139,102 @@ Public Module SheetMetalLib
     ' Sheet Metal Conversion
     ' ============================================================================
     
-    ' Check if a part is already sheet metal
     Public Function IsSheetMetal(partDoc As PartDocument) As Boolean
         Return partDoc.SubType = SHEET_METAL_GUID
     End Function
     
-    ' Convert a part to sheet metal with auto-detected A-side
     Public Function ConvertToSheetMetal(partDoc As PartDocument, _
                                         thicknessVector As String, _
-                                        thickness As Double, _
-                                        logs As System.Collections.Generic.List(Of String)) As Boolean
-        ' Check if already sheet metal
+                                        thickness As Double) As Boolean
         If IsSheetMetal(partDoc) Then
-            logs.Add("SheetMetalLib: Part is already sheet metal")
+            UtilsLib.LogInfo("SheetMetalLib: Part is already sheet metal")
             Return False
         End If
         
-        ' Convert to sheet metal subtype
         Try
             partDoc.SubType = SHEET_METAL_GUID
             partDoc.Update()
-            logs.Add("SheetMetalLib: Converted to sheet metal subtype")
+            UtilsLib.LogInfo("SheetMetalLib: Converted to sheet metal subtype")
         Catch ex As Exception
-            logs.Add("SheetMetalLib: Failed to convert to sheet metal: " & ex.Message)
+            UtilsLib.LogWarn("SheetMetalLib: Failed to convert to sheet metal: " & ex.Message)
             Return False
         End Try
         
-        ' Get sheet metal component definition
         Dim smCompDef As SheetMetalComponentDefinition = partDoc.ComponentDefinition
         
-        ' Set sheet metal style
-        SetSheetMetalStyle(smCompDef, "Default_mm", logs)
+        SetSheetMetalStyle(smCompDef, "Default_mm")
+        SetThickness(smCompDef, thickness)
+        ExportThicknessAsProperty(smCompDef)
+        SetWidthLengthProperties(partDoc)
         
-        ' Set thickness
-        SetThickness(smCompDef, thickness, logs)
-        
-        ' Export thickness as iProperty
-        ExportThicknessAsProperty(smCompDef, logs)
-        
-        ' Set Width/Length properties
-        SetWidthLengthProperties(partDoc, logs)
-        
-        ' Find A-side face and create flat pattern
-        Dim aSideFace As Face = FindFaceByNormal(partDoc, thicknessVector, logs)
+        Dim aSideFace As Face = FindFaceByNormal(partDoc, thicknessVector)
         If aSideFace IsNot Nothing Then
-            CreateFlatPattern(smCompDef, aSideFace, logs)
+            CreateFlatPattern(smCompDef, aSideFace)
         Else
-            logs.Add("SheetMetalLib: Could not create flat pattern - A-side face not found")
+            UtilsLib.LogWarn("SheetMetalLib: Could not create flat pattern - A-side face not found")
         End If
         
         partDoc.Update()
-        logs.Add("SheetMetalLib: Sheet metal conversion complete")
+        UtilsLib.LogInfo("SheetMetalLib: Sheet metal conversion complete")
         Return True
     End Function
     
-    ' Set sheet metal style
-    Public Sub SetSheetMetalStyle(smCompDef As SheetMetalComponentDefinition, styleName As String, _
-                                  logs As System.Collections.Generic.List(Of String))
+    Public Sub SetSheetMetalStyle(smCompDef As SheetMetalComponentDefinition, styleName As String)
         Try
             Dim style As SheetMetalStyle = smCompDef.SheetMetalStyles.Item(styleName)
             style.Activate()
-            logs.Add("SheetMetalLib: Set style to " & styleName)
+            UtilsLib.LogInfo("SheetMetalLib: Set style to " & styleName)
         Catch
-            logs.Add("SheetMetalLib: Style '" & styleName & "' not found, using default")
+            UtilsLib.LogInfo("SheetMetalLib: Style '" & styleName & "' not found, using default")
         End Try
     End Sub
     
-    ' Set thickness value
-    Public Sub SetThickness(smCompDef As SheetMetalComponentDefinition, thickness As Double, _
-                            logs As System.Collections.Generic.List(Of String))
+    Public Sub SetThickness(smCompDef As SheetMetalComponentDefinition, thickness As Double)
         Try
             smCompDef.UseSheetMetalStyleThickness = False
             smCompDef.Thickness.Value = thickness
-            logs.Add("SheetMetalLib: Set thickness to " & FormatNumber(thickness * 10, 2) & " mm")
+            UtilsLib.LogInfo("SheetMetalLib: Set thickness to " & FormatNumber(thickness * 10, 2) & " mm")
         Catch ex As Exception
-            logs.Add("SheetMetalLib: Could not set thickness: " & ex.Message)
+            UtilsLib.LogWarn("SheetMetalLib: Could not set thickness: " & ex.Message)
         End Try
     End Sub
     
-    ' Export thickness parameter as iProperty
-    Public Sub ExportThicknessAsProperty(smCompDef As SheetMetalComponentDefinition, _
-                                         logs As System.Collections.Generic.List(Of String))
+    Public Sub ExportThicknessAsProperty(smCompDef As SheetMetalComponentDefinition)
         Try
             Dim thicknessParam As Parameter = smCompDef.Thickness
             thicknessParam.ExposedAsProperty = True
             thicknessParam.CustomPropertyFormat.PropertyType = CustomPropertyTypeEnum.kTextPropertyType
             thicknessParam.CustomPropertyFormat.ShowUnitsString = True
             thicknessParam.CustomPropertyFormat.Units = "mm"
-            logs.Add("SheetMetalLib: Exported Thickness as iProperty")
+            UtilsLib.LogInfo("SheetMetalLib: Exported Thickness as iProperty")
         Catch ex As Exception
-            logs.Add("SheetMetalLib: Could not export Thickness: " & ex.Message)
+            UtilsLib.LogWarn("SheetMetalLib: Could not export Thickness: " & ex.Message)
         End Try
     End Sub
     
-    ' Set Width and Length custom properties with sheet metal expressions
-    Public Sub SetWidthLengthProperties(partDoc As PartDocument, _
-                                        logs As System.Collections.Generic.List(Of String))
+    Public Sub SetWidthLengthProperties(partDoc As PartDocument)
         Try
             Dim propSet As PropertySet = partDoc.PropertySets.Item("Inventor User Defined Properties")
             SetOrAddProperty(propSet, "Width", "=<Sheet Metal Width>")
             SetOrAddProperty(propSet, "Length", "=<Sheet Metal Length>")
-            logs.Add("SheetMetalLib: Set Width/Length properties")
+            UtilsLib.LogInfo("SheetMetalLib: Set Width/Length properties")
         Catch ex As Exception
-            logs.Add("SheetMetalLib: Could not set Width/Length: " & ex.Message)
+            UtilsLib.LogWarn("SheetMetalLib: Could not set Width/Length: " & ex.Message)
         End Try
     End Sub
     
-    ' Create flat pattern and return to folded view
-    Public Sub CreateFlatPattern(smCompDef As SheetMetalComponentDefinition, aSideFace As Face, _
-                                 logs As System.Collections.Generic.List(Of String))
+    Public Sub CreateFlatPattern(smCompDef As SheetMetalComponentDefinition, aSideFace As Face)
         Try
             smCompDef.ASideFace = aSideFace
             smCompDef.Unfold()
-            logs.Add("SheetMetalLib: Flat pattern created")
+            UtilsLib.LogInfo("SheetMetalLib: Flat pattern created")
             
-            ' Return to folded model view (required before save)
-            ' Use FlatPattern.ExitEdit instead of FoldedModel
             If smCompDef.HasFlatPattern Then
                 smCompDef.FlatPattern.ExitEdit()
-                logs.Add("SheetMetalLib: Returned to folded view")
+                UtilsLib.LogInfo("SheetMetalLib: Returned to folded view")
             End If
         Catch ex As Exception
-            logs.Add("SheetMetalLib: Could not create flat pattern: " & ex.Message)
+            UtilsLib.LogWarn("SheetMetalLib: Could not create flat pattern: " & ex.Message)
         End Try
     End Sub
     

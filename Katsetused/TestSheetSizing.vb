@@ -16,6 +16,7 @@
 ' Usage: Open a part document, then run this rule.
 ' ============================================================================
 
+AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/CAMDrawingLib.vb"
 
 Imports Inventor
@@ -23,9 +24,8 @@ Imports System.Collections.Generic
 
 Sub Main()
     Dim app As Inventor.Application = ThisApplication
+    UtilsLib.SetLogger(Logger)
     Dim doc As Document = app.ActiveDocument
-    Dim logs As New List(Of String)
-    
     Logger.Info("TestSheetSizing: Starting sheet size tests...")
     
     ' Validate document type
@@ -54,13 +54,7 @@ Sub Main()
     ' ========================================================================
     Logger.Info("TestSheetSizing: Test 1 - Create drawing from template...")
     
-    Dim drawDoc As DrawingDocument = CAMDrawingLib.CreateDrawingFromTemplate(app, logs)
-    
-    For Each logMsg As String In logs
-        Logger.Info("TestSheetSizing: [LIB] " & logMsg)
-    Next
-    logs.Clear()
-    
+    Dim drawDoc As DrawingDocument = CAMDrawingLib.CreateDrawingFromTemplate(app)
     If drawDoc Is Nothing Then
         Logger.Error("TestSheetSizing: Failed to create drawing")
         MessageBox.Show("Joonise loomine ebaõnnestus.", "TestSheetSizing")
@@ -79,13 +73,7 @@ Sub Main()
     ' ========================================================================
     Logger.Info("TestSheetSizing: Test 2 - Add all views...")
     
-    Dim views As List(Of DrawingView) = CAMDrawingLib.AddAllViews(sheet, partDoc, app, logs)
-    
-    For Each logMsg As String In logs
-        Logger.Info("TestSheetSizing: [LIB] " & logMsg)
-    Next
-    logs.Clear()
-    
+    Dim views As List(Of DrawingView) = CAMDrawingLib.AddAllViews(sheet, partDoc, app)
     Logger.Info("TestSheetSizing: Views created: " & views.Count)
     
     ' Log view positions and sizes
@@ -102,13 +90,7 @@ Sub Main()
     Logger.Info("TestSheetSizing: Test 3 - Calculate sheet size from view bounds...")
     
     ' Use default dimension offset (25mm) and 10mm border padding
-    Dim requiredSize() As Double = CAMDrawingLib.CalculateSheetSizeFromViews(views, logs)
-    
-    For Each logMsg As String In logs
-        Logger.Info("TestSheetSizing: [LIB] " & logMsg)
-    Next
-    logs.Clear()
-    
+    Dim requiredSize() As Double = CAMDrawingLib.CalculateSheetSizeFromViews(views)
     Dim requiredWidth As Double = requiredSize(0)
     Dim requiredHeight As Double = requiredSize(1)
     
@@ -167,13 +149,7 @@ Sub Main()
     ' ========================================================================
     Logger.Info("TestSheetSizing: Test 5 - Resize sheet to fit views...")
     
-    CAMDrawingLib.ResizeSheet(sheet, requiredWidth, requiredHeight, logs)
-    
-    For Each logMsg As String In logs
-        Logger.Info("TestSheetSizing: [LIB] " & logMsg)
-    Next
-    logs.Clear()
-    
+    CAMDrawingLib.ResizeSheet(sheet, requiredWidth, requiredHeight)
     Dim afterWidth As Double = sheet.Width * 10
     Dim afterHeight As Double = sheet.Height * 10
     

@@ -5,7 +5,12 @@
 ' - BoundingBoxStock.vb (standalone part processing)
 ' - BoundingBoxStockBatch.vb (batch processing from assembly)
 '
-' Usage: AddVbFile "BoundingBoxStockLib.vb"
+' Usage:
+'   AddVbFile "Lib/UtilsLib.vb"
+'   AddVbFile "Lib/BoundingBoxStockLib.vb"
+'   UtilsLib.SetLogger(Logger) ' In Sub Main
+'
+' Dependencies: UtilsLib (logging via UtilsLib.LogInfo / UtilsLib.LogWarn; no List(Of String) log parameters)
 ' ============================================================================
 
 Imports Inventor
@@ -300,11 +305,15 @@ Public Module BoundingBoxStockLib
                     End If
                 Next
             Next
-        Catch
+        Catch ex As Exception
+            UtilsLib.LogWarn("BoundingBoxStockLib: AutoDetectAxesFromGeometry failed: " & ex.Message)
             Return False
         End Try
         
-        If Not foundNormal Then Return False
+        If Not foundNormal Then
+            UtilsLib.LogInfo("BoundingBoxStockLib: No suitable face normal for geometry-based detection; using axis-aligned fallback.")
+            Return False
+        End If
         
         ' Check if the best normal is close to a principal axis (within 1 degree)
         Dim tolerance As Double = 0.0175  ' cos(89°) ≈ 0.0175, so dot product > 0.9998 means < 1°
@@ -938,6 +947,7 @@ Public Module BoundingBoxStockLib
         End If
 
         iLogicAuto.RunRule(partDoc, ruleName)
+        UtilsLib.LogInfo("BoundingBoxStockLib: Ran rule '" & ruleName & "'")
     End Sub
 
     Public Sub SetCustomProperty(ByVal doc As Document, ByVal propName As String, ByVal propValue As String)

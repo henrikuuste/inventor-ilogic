@@ -3,15 +3,20 @@
 ' exports Thickness as iProperty, sets Width/Length custom properties
 ' with sheet metal expressions, and creates flat pattern.
 
+AddVbFile "Lib/UtilsLib.vb"
+
 Sub Main()
     Dim app As Inventor.Application = ThisApplication
     Dim doc As Document = ThisDoc.Document
     
-    Logger.Info("Lehtmetall: Starting conversion...")
+    ' Enable immediate logging
+    UtilsLib.SetLogger(Logger)
+    
+    UtilsLib.LogInfo("Lehtmetall: Starting conversion...")
     
     ' Validate document type
     If doc.DocumentType <> DocumentTypeEnum.kPartDocumentObject Then
-        Logger.Error("Lehtmetall: This rule can only be run on a part document.")
+        UtilsLib.LogError("Lehtmetall: This rule can only be run on a part document.")
         Exit Sub
     End If
     
@@ -20,7 +25,7 @@ Sub Main()
     
     ' Check if solid body exists
     If compDef.SurfaceBodies.Count = 0 Then
-        Logger.Error("Lehtmetall: Part has no solid body. Ensure the part contains geometry before converting to sheet metal.")
+        UtilsLib.LogError("Lehtmetall: Part has no solid body. Ensure the part contains geometry before converting to sheet metal.")
         Exit Sub
     End If
     
@@ -34,14 +39,14 @@ Sub Main()
     Next
     
     If Not hasSolidBody Then
-        Logger.Error("Lehtmetall: Part has no solid body. Only surfaces found, which are not suitable for sheet metal conversion.")
+        UtilsLib.LogError("Lehtmetall: Part has no solid body. Only surfaces found, which are not suitable for sheet metal conversion.")
         Exit Sub
     End If
     
     ' Check if already sheet metal
     Const SHEET_METAL_GUID As String = "{9C464203-9BAE-11D3-8BAD-0060B0CE6BB4}"
     If partDoc.SubType = SHEET_METAL_GUID Then
-        Logger.Warn("Lehtmetall: This part is already sheet metal.")
+        UtilsLib.LogWarn("Lehtmetall: This part is already sheet metal.")
         Exit Sub
     End If
     
@@ -53,15 +58,15 @@ Sub Main()
     
     ' Measure thickness along normal
     Dim thickness As Double = MeasureThicknessAlongNormal(app, aSideFace)
-    Logger.Info("Lehtmetall: Measured thickness = " & FormatNumber(thickness * 10, 2) & " mm")
+    UtilsLib.LogInfo("Lehtmetall: Measured thickness = " & FormatNumber(thickness * 10, 2) & " mm")
     
     If thickness <= 0 Then
-        Logger.Error("Lehtmetall: Could not measure thickness. Check that the selected face has an opposite face.")
+        UtilsLib.LogError("Lehtmetall: Could not measure thickness. Check that the selected face has an opposite face.")
         Exit Sub
     End If
     
     ' Convert to sheet metal
-    Logger.Info("Lehtmetall: Converting to sheet metal...")
+    UtilsLib.LogInfo("Lehtmetall: Converting to sheet metal...")
     partDoc.SubType = SHEET_METAL_GUID
     partDoc.Update()
     
@@ -70,25 +75,25 @@ Sub Main()
     
     ' Set active sheet metal style to Default_mm
     SetSheetMetalStyle(smCompDef, "Default_mm")
-    Logger.Info("Lehtmetall: Set style to Default_mm")
+    UtilsLib.LogInfo("Lehtmetall: Set style to Default_mm")
     
     ' Set measured thickness
     SetMeasuredThickness(smCompDef, thickness)
     
     ' Export Thickness parameter as iProperty (in mm)
     ExportThicknessAsProperty(smCompDef)
-    Logger.Info("Lehtmetall: Exported Thickness as iProperty")
+    UtilsLib.LogInfo("Lehtmetall: Exported Thickness as iProperty")
     
     ' Set Width and Length custom properties with expressions
     SetSheetMetalProperties(partDoc)
-    Logger.Info("Lehtmetall: Set Width and Length properties")
+    UtilsLib.LogInfo("Lehtmetall: Set Width and Length properties")
     
     ' Create flat pattern using the already selected A-side face
     CreateFlatPattern(smCompDef, aSideFace)
     
     partDoc.Update()
     
-    Logger.Info("Lehtmetall: Conversion complete! Thickness: " & FormatNumber(thickness * 10, 2) & " mm")
+    UtilsLib.LogInfo("Lehtmetall: Conversion complete! Thickness: " & FormatNumber(thickness * 10, 2) & " mm")
 End Sub
 
 Function PickASideFace(app As Inventor.Application) As Face
@@ -98,12 +103,12 @@ Function PickASideFace(app As Inventor.Application) As Face
         aSideFace = app.CommandManager.Pick(SelectionFilterEnum.kPartFacePlanarFilter, _
             "Vali A-külje pind (ülemine pind) - ESC tühistamiseks")
     Catch
-        Logger.Warn("Lehtmetall: Face selection cancelled.")
+        UtilsLib.LogWarn("Lehtmetall: Face selection cancelled.")
         Return Nothing
     End Try
     
     If aSideFace Is Nothing Then
-        Logger.Error("Lehtmetall: No face selected.")
+        UtilsLib.LogError("Lehtmetall: No face selected.")
         Return Nothing
     End If
     
@@ -171,7 +176,7 @@ Sub SetMeasuredThickness(smCompDef As SheetMetalComponentDefinition, thickness A
         smCompDef.UseSheetMetalStyleThickness = False
         smCompDef.Thickness.Value = thickness
     Catch ex As Exception
-        Logger.Warn("Lehtmetall: Could not set thickness. " & ex.Message)
+        UtilsLib.LogWarn("Lehtmetall: Could not set thickness. " & ex.Message)
     End Try
 End Sub
 
@@ -183,7 +188,7 @@ Sub ExportThicknessAsProperty(smCompDef As SheetMetalComponentDefinition)
         thicknessParam.CustomPropertyFormat.ShowUnitsString = True
         thicknessParam.CustomPropertyFormat.Units = "mm"
     Catch ex As Exception
-        Logger.Warn("Lehtmetall: Could not export Thickness as iProperty. " & ex.Message)
+        UtilsLib.LogWarn("Lehtmetall: Could not export Thickness as iProperty. " & ex.Message)
     End Try
 End Sub
 
@@ -197,7 +202,7 @@ Sub SetSheetMetalProperties(partDoc As PartDocument)
         ' Set Length property with expression linking to Sheet Metal Length parameter
         SetOrAddProperty(propSet, "Length", "=<Sheet Metal Length>")
     Catch ex As Exception
-        Logger.Warn("Lehtmetall: Could not set Width/Length properties. " & ex.Message)
+        UtilsLib.LogWarn("Lehtmetall: Could not set Width/Length properties. " & ex.Message)
     End Try
 End Sub
 
@@ -216,8 +221,8 @@ Sub CreateFlatPattern(smCompDef As SheetMetalComponentDefinition, aSideFace As F
     Try
         smCompDef.ASideFace = aSideFace
         smCompDef.Unfold()
-        Logger.Info("Lehtmetall: Flat pattern created")
+        UtilsLib.LogInfo("Lehtmetall: Flat pattern created")
     Catch ex As Exception
-        Logger.Error("Lehtmetall: Could not create flat pattern: " & ex.Message)
+        UtilsLib.LogError("Lehtmetall: Could not create flat pattern: " & ex.Message)
     End Try
 End Sub

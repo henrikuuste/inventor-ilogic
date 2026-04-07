@@ -8,12 +8,14 @@
 ' - Add extent dimensions
 ' - Export to DWG/DXF (2010 format)
 '
-' Usage: 
-'   In calling script:
-'     AddVbFile "Lib/CAMDrawingLib.vb"
+' Dependencies:
+'   UtilsLib (logging). AddVbFile "Lib/UtilsLib.vb" BEFORE this file.
+'   In Sub Main: UtilsLib.SetLogger(Logger)
 '
-' Note: Logger is not available in library modules.
-'       Pass a List(Of String) to collect log messages.
+' Usage:
+'   In calling script:
+'     AddVbFile "Lib/UtilsLib.vb"
+'     AddVbFile "Lib/CAMDrawingLib.vb"
 ' ============================================================================
 
 Imports Inventor
@@ -68,11 +70,10 @@ Public Module CAMDrawingLib
     
     ' Determine the appropriate base view orientation for a part
     ' Priority: 1) Sheet metal flat pattern, 2) BB_ThicknessAxis property, 3) Default front
-    Public Function DetermineBaseViewOrientation(partDoc As PartDocument, _
-                                                  logs As List(Of String)) As ViewOrientationTypeEnum
+    Public Function DetermineBaseViewOrientation(partDoc As PartDocument) As ViewOrientationTypeEnum
         ' Check if sheet metal with flat pattern
         If IsSheetMetal(partDoc) AndAlso HasFlatPattern(partDoc) Then
-            logs.Add("CAMDrawingLib: Part is sheet metal with flat pattern - using Top view")
+            UtilsLib.LogInfo("CAMDrawingLib: Part is sheet metal with flat pattern - using Top view")
             Return ViewOrientationTypeEnum.kTopViewOrientation  ' Flat pattern uses top view + SetFlatPatternView
         End If
         
@@ -80,12 +81,12 @@ Public Module CAMDrawingLib
         Dim thicknessAxis As String = GetCustomPropertyValue(partDoc, "BB_ThicknessAxis", "")
         
         If Not String.IsNullOrEmpty(thicknessAxis) Then
-            logs.Add("CAMDrawingLib: Found BB_ThicknessAxis = " & thicknessAxis)
-            Return GetViewOrientationFromThicknessAxis(thicknessAxis, logs)
+            UtilsLib.LogInfo("CAMDrawingLib: Found BB_ThicknessAxis = " & thicknessAxis)
+            Return GetViewOrientationFromThicknessAxis(thicknessAxis)
         End If
         
         ' Default to front view
-        logs.Add("CAMDrawingLib: Using default front view orientation")
+        UtilsLib.LogInfo("CAMDrawingLib: Using default front view orientation")
         Return ViewOrientationTypeEnum.kFrontViewOrientation
     End Function
     
@@ -111,10 +112,9 @@ Public Module CAMDrawingLib
     Public Function CreateFlatPatternView(sheet As Sheet, _
                                           partDoc As PartDocument, _
                                           app As Inventor.Application, _
-                                          position As Point2d, _
-                                          logs As List(Of String)) As DrawingView
+                                          position As Point2d) As DrawingView
         If Not IsSheetMetal(partDoc) OrElse Not HasFlatPattern(partDoc) Then
-            logs.Add("CAMDrawingLib: Part is not sheet metal with flat pattern")
+            UtilsLib.LogWarn("CAMDrawingLib: Part is not sheet metal with flat pattern")
             Return Nothing
         End If
         
@@ -122,8 +122,8 @@ Public Module CAMDrawingLib
         Dim flatPatternCreated As Boolean = False
         
         ' Log info about the part for debugging
-        logs.Add("CAMDrawingLib: Part full path: " & partDoc.FullDocumentName)
-        logs.Add("CAMDrawingLib: Part SubType: " & partDoc.SubType)
+        UtilsLib.LogInfo("CAMDrawingLib: Part full path: " & partDoc.FullDocumentName)
+        UtilsLib.LogInfo("CAMDrawingLib: Part SubType: " & partDoc.SubType)
         
         
         ' SOLUTION: Use NameValueMap with named parameter AdditionalOptions
@@ -141,10 +141,10 @@ Public Module CAMDrawingLib
                 DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
                 AdditionalOptions := viewOptions)
             
-            logs.Add("CAMDrawingLib: Created flat pattern view with kDefaultViewOrientation")
-            flatPatternCreated = CheckIfFlatPattern(view, logs)
+            UtilsLib.LogInfo("CAMDrawingLib: Created flat pattern view with kDefaultViewOrientation")
+            flatPatternCreated = CheckIfFlatPattern(view)
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: kDefaultViewOrientation method failed: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: kDefaultViewOrientation method failed: " & ex.Message)
         End Try
         
         ' Fallback: Try with kCurrentViewOrientation
@@ -161,10 +161,10 @@ Public Module CAMDrawingLib
                     DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
                     AdditionalOptions := viewOptions)
                 
-                logs.Add("CAMDrawingLib: Created flat pattern view with kCurrentViewOrientation")
-                flatPatternCreated = CheckIfFlatPattern(view, logs)
+                UtilsLib.LogInfo("CAMDrawingLib: Created flat pattern view with kCurrentViewOrientation")
+                flatPatternCreated = CheckIfFlatPattern(view)
             Catch ex As Exception
-                logs.Add("CAMDrawingLib: kCurrentViewOrientation method failed: " & ex.Message)
+                UtilsLib.LogWarn("CAMDrawingLib: kCurrentViewOrientation method failed: " & ex.Message)
             End Try
         End If
         
@@ -178,9 +178,9 @@ Public Module CAMDrawingLib
                     ViewOrientationTypeEnum.kTopViewOrientation, _
                     DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle)
                 
-                logs.Add("CAMDrawingLib: Created fallback folded view (flat pattern not available)")
+                UtilsLib.LogWarn("CAMDrawingLib: Created fallback folded view (flat pattern not available)")
             Catch ex As Exception
-                logs.Add("CAMDrawingLib: Fallback view creation also failed: " & ex.Message)
+                UtilsLib.LogWarn("CAMDrawingLib: Fallback view creation also failed: " & ex.Message)
             End Try
         End If
         
@@ -194,9 +194,9 @@ Public Module CAMDrawingLib
                     ViewOrientationTypeEnum.kTopViewOrientation, _
                     DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
                     Nothing, Nothing)
-                logs.Add("CAMDrawingLib: Created fallback folded view")
+                UtilsLib.LogInfo("CAMDrawingLib: Created fallback folded view")
             Catch ex As Exception
-                logs.Add("CAMDrawingLib: Fallback also failed: " & ex.Message)
+                UtilsLib.LogWarn("CAMDrawingLib: Fallback also failed: " & ex.Message)
             End Try
         End If
         
@@ -206,23 +206,23 @@ Public Module CAMDrawingLib
         End If
         
         If flatPatternCreated Then
-            logs.Add("CAMDrawingLib: Flat pattern view created successfully")
+            UtilsLib.LogInfo("CAMDrawingLib: Flat pattern view created successfully")
         Else
-            logs.Add("CAMDrawingLib: WARNING - Could not create flat pattern view")
+            UtilsLib.LogWarn("CAMDrawingLib: WARNING - Could not create flat pattern view")
         End If
         
         Return view
     End Function
     
     ' Helper to check if view is flat pattern
-    Private Function CheckIfFlatPattern(view As DrawingView, logs As List(Of String)) As Boolean
+    Private Function CheckIfFlatPattern(view As DrawingView) As Boolean
         If view Is Nothing Then Return False
         Try
             Dim isFP As Boolean = view.IsFlatPatternView
-            logs.Add("CAMDrawingLib: IsFlatPatternView = " & isFP.ToString())
+            UtilsLib.LogInfo("CAMDrawingLib: IsFlatPatternView = " & isFP.ToString())
             Return isFP
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Could not check IsFlatPatternView: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Could not check IsFlatPatternView: " & ex.Message)
             Return False
         End Try
     End Function
@@ -235,8 +235,7 @@ Public Module CAMDrawingLib
                                                    partDoc As PartDocument, _
                                                    app As Inventor.Application, _
                                                    views As List(Of DrawingView), _
-                                                   dimSpace As Double, _
-                                                   logs As List(Of String)) As List(Of DrawingView)
+                                                   dimSpace As Double) As List(Of DrawingView)
         ' Get actual drawing view dimensions (in cm, at 1:1 scale)
         ' Use the view's Width and Height properties which reflect the actual on-sheet size
         Dim viewWidth As Double = baseView.Width    ' Horizontal extent on sheet (cm)
@@ -246,7 +245,7 @@ Public Module CAMDrawingLib
         Dim smCompDef As SheetMetalComponentDefinition = CType(partDoc.ComponentDefinition, SheetMetalComponentDefinition)
         Dim thickness As Double = smCompDef.Thickness.Value  ' Material thickness in cm
         
-        logs.Add("CAMDrawingLib: View dimensions on sheet: " & (viewWidth * 10).ToString("F1") & " x " & (viewHeight * 10).ToString("F1") & " mm, thickness: " & (thickness * 10).ToString("F2") & " mm")
+        UtilsLib.LogInfo("CAMDrawingLib: View dimensions on sheet: " & (viewWidth * 10).ToString("F1") & " x " & (viewHeight * 10).ToString("F1") & " mm, thickness: " & (thickness * 10).ToString("F2") & " mm")
         
         Dim baseX As Double = baseView.Position.X
         Dim baseY As Double = baseView.Position.Y
@@ -261,9 +260,9 @@ Public Module CAMDrawingLib
                 Nothing)
             Try : frontView.Name = "Front" : Catch : End Try
             views.Add(frontView)
-            logs.Add("CAMDrawingLib: Front edge view created")
+            UtilsLib.LogInfo("CAMDrawingLib: Front edge view created")
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to create Front view: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to create Front view: " & ex.Message)
         End Try
         
         ' Add Back view (below base - opposite edge)
@@ -276,9 +275,9 @@ Public Module CAMDrawingLib
                 Nothing)
             Try : backView.Name = "Back" : Catch : End Try
             views.Add(backView)
-            logs.Add("CAMDrawingLib: Back edge view created")
+            UtilsLib.LogInfo("CAMDrawingLib: Back edge view created")
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to create Back view: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to create Back view: " & ex.Message)
         End Try
         
         ' Add Left view (left of base - looking at edge)
@@ -291,9 +290,9 @@ Public Module CAMDrawingLib
                 Nothing)
             Try : leftView.Name = "Left" : Catch : End Try
             views.Add(leftView)
-            logs.Add("CAMDrawingLib: Left edge view created")
+            UtilsLib.LogInfo("CAMDrawingLib: Left edge view created")
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to create Left view: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to create Left view: " & ex.Message)
         End Try
         
         ' Add Right view (right of base - opposite edge)
@@ -306,13 +305,13 @@ Public Module CAMDrawingLib
                 Nothing)
             Try : rightView.Name = "Right" : Catch : End Try
             views.Add(rightView)
-            logs.Add("CAMDrawingLib: Right edge view created")
+            UtilsLib.LogInfo("CAMDrawingLib: Right edge view created")
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to create Right view: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to create Right view: " & ex.Message)
         End Try
         
         ' No Bottom view needed - for flat pattern, bottom is identical to top (Flat Pattern)
-        logs.Add("CAMDrawingLib: Flat pattern views complete (5 total: Flat Pattern + 4 edges)")
+        UtilsLib.LogInfo("CAMDrawingLib: Flat pattern views complete (5 total: Flat Pattern + 4 edges)")
         
         Return views
     End Function
@@ -363,18 +362,17 @@ Public Module CAMDrawingLib
     ' Convert BB_ThicknessAxis to view orientation
     ' The thickness axis is the direction we look ALONG to see the flat face
     ' Returns Nothing for custom vectors (requires arbitrary camera)
-    Private Function GetViewOrientationFromThicknessAxis(thicknessAxis As String, _
-                                                          logs As List(Of String)) As ViewOrientationTypeEnum
+    Private Function GetViewOrientationFromThicknessAxis(thicknessAxis As String) As ViewOrientationTypeEnum
         ' Check for simple axis format (X, Y, Z)
         Select Case thicknessAxis.ToUpper()
             Case "X"
-                logs.Add("CAMDrawingLib: Thickness along X - using Right view")
+                UtilsLib.LogInfo("CAMDrawingLib: Thickness along X - using Right view")
                 Return ViewOrientationTypeEnum.kRightViewOrientation
             Case "Y"
-                logs.Add("CAMDrawingLib: Thickness along Y - using Front view")
+                UtilsLib.LogInfo("CAMDrawingLib: Thickness along Y - using Front view")
                 Return ViewOrientationTypeEnum.kFrontViewOrientation
             Case "Z"
-                logs.Add("CAMDrawingLib: Thickness along Z - using Top view")
+                UtilsLib.LogInfo("CAMDrawingLib: Thickness along Z - using Top view")
                 Return ViewOrientationTypeEnum.kTopViewOrientation
         End Select
         
@@ -390,24 +388,24 @@ Public Module CAMDrawingLib
                 
                 ' Check for axis-aligned vectors
                 If absY < tolerance AndAlso absZ < tolerance Then
-                    logs.Add("CAMDrawingLib: Thickness vector along X - using Right view")
+                    UtilsLib.LogInfo("CAMDrawingLib: Thickness vector along X - using Right view")
                     Return ViewOrientationTypeEnum.kRightViewOrientation
                 ElseIf absX < tolerance AndAlso absZ < tolerance Then
-                    logs.Add("CAMDrawingLib: Thickness vector along Y - using Front view")
+                    UtilsLib.LogInfo("CAMDrawingLib: Thickness vector along Y - using Front view")
                     Return ViewOrientationTypeEnum.kFrontViewOrientation
                 ElseIf absX < tolerance AndAlso absY < tolerance Then
-                    logs.Add("CAMDrawingLib: Thickness vector along Z - using Top view")
+                    UtilsLib.LogInfo("CAMDrawingLib: Thickness vector along Z - using Top view")
                     Return ViewOrientationTypeEnum.kTopViewOrientation
                 End If
                 
                 ' Vector is NOT axis-aligned - need arbitrary camera
-                logs.Add("CAMDrawingLib: Thickness vector is custom (" & thicknessAxis & ") - needs arbitrary camera")
+                UtilsLib.LogInfo("CAMDrawingLib: Thickness vector is custom (" & thicknessAxis & ") - needs arbitrary camera")
                 Return ViewOrientationTypeEnum.kArbitraryViewOrientation
             End If
         End If
         
         ' Default to front view
-        logs.Add("CAMDrawingLib: Could not parse thickness axis, using Front view")
+        UtilsLib.LogWarn("CAMDrawingLib: Could not parse thickness axis, using Front view")
         Return ViewOrientationTypeEnum.kFrontViewOrientation
     End Function
     
@@ -437,27 +435,26 @@ Public Module CAMDrawingLib
     ' Create a camera for arbitrary view direction based on thickness axis
     ' The camera looks ALONG the thickness axis direction
     Public Function CreateArbitraryCameraFromThicknessAxis(partDoc As PartDocument, _
-                                                            app As Inventor.Application, _
-                                                            logs As List(Of String)) As Camera
+                                                            app As Inventor.Application) As Camera
         Dim thicknessAxis As String = GetCustomPropertyValue(partDoc, "BB_ThicknessAxis", "")
         If String.IsNullOrEmpty(thicknessAxis) OrElse Not thicknessAxis.StartsWith("V:") Then
-            logs.Add("CAMDrawingLib: No valid vector thickness axis found")
+            UtilsLib.LogWarn("CAMDrawingLib: No valid vector thickness axis found")
             Return Nothing
         End If
         
         Dim vx As Double = 0, vy As Double = 0, vz As Double = 0
         If Not ParseVectorComponents(thicknessAxis, vx, vy, vz) Then
-            logs.Add("CAMDrawingLib: Failed to parse thickness vector")
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to parse thickness vector")
             Return Nothing
         End If
         
-        logs.Add("CAMDrawingLib: Creating arbitrary camera for vector (" & _
+        UtilsLib.LogInfo("CAMDrawingLib: Creating arbitrary camera for vector (" & _
                  vx.ToString("F4") & ", " & vy.ToString("F4") & ", " & vz.ToString("F4") & ")")
         
         ' Normalize the view direction vector
         Dim length As Double = Math.Sqrt(vx * vx + vy * vy + vz * vz)
         If length < 0.0001 Then
-            logs.Add("CAMDrawingLib: Vector length too small")
+            UtilsLib.LogWarn("CAMDrawingLib: Vector length too small")
             Return Nothing
         End If
         vx /= length
@@ -526,78 +523,77 @@ Public Module CAMDrawingLib
         
         Try
             camera = app.TransientObjects.CreateCamera()
-            logs.Add("CAMDrawingLib: Camera object created")
+            UtilsLib.LogInfo("CAMDrawingLib: Camera object created")
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to create Camera object: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to create Camera object: " & ex.Message)
             Return Nothing
         End Try
         
         Try
             camera.Eye = tg.CreatePoint(eyeX, eyeY, eyeZ)
-            logs.Add("CAMDrawingLib: Eye set to (" & eyeX.ToString("F2") & ", " & eyeY.ToString("F2") & ", " & eyeZ.ToString("F2") & ")")
+            UtilsLib.LogInfo("CAMDrawingLib: Eye set to (" & eyeX.ToString("F2") & ", " & eyeY.ToString("F2") & ", " & eyeZ.ToString("F2") & ")")
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to set Eye: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to set Eye: " & ex.Message)
             Return Nothing
         End Try
         
         Try
             camera.Target = tg.CreatePoint(centerX, centerY, centerZ)
-            logs.Add("CAMDrawingLib: Target set to (" & centerX.ToString("F2") & ", " & centerY.ToString("F2") & ", " & centerZ.ToString("F2") & ")")
+            UtilsLib.LogInfo("CAMDrawingLib: Target set to (" & centerX.ToString("F2") & ", " & centerY.ToString("F2") & ", " & centerZ.ToString("F2") & ")")
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to set Target: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to set Target: " & ex.Message)
             Return Nothing
         End Try
         
         Try
             camera.UpVector = tg.CreateUnitVector(upX, upY, upZ)
-            logs.Add("CAMDrawingLib: UpVector set to (" & upX.ToString("F4") & ", " & upY.ToString("F4") & ", " & upZ.ToString("F4") & ")")
+            UtilsLib.LogInfo("CAMDrawingLib: UpVector set to (" & upX.ToString("F4") & ", " & upY.ToString("F4") & ", " & upZ.ToString("F4") & ")")
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to set UpVector: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to set UpVector: " & ex.Message)
             ' Try setting individual components instead
             Try
-                logs.Add("CAMDrawingLib: Trying alternative up vector approach...")
+                UtilsLib.LogInfo("CAMDrawingLib: Trying alternative up vector approach...")
                 Dim upVec As UnitVector = tg.CreateUnitVector(upX, upY, upZ)
                 camera.UpVector = upVec
-                logs.Add("CAMDrawingLib: UpVector set successfully via UnitVector")
+                UtilsLib.LogInfo("CAMDrawingLib: UpVector set successfully via UnitVector")
             Catch ex2 As Exception
-                logs.Add("CAMDrawingLib: Alternative also failed: " & ex2.Message)
+                UtilsLib.LogWarn("CAMDrawingLib: Alternative also failed: " & ex2.Message)
                 Return Nothing
             End Try
         End Try
         
         Try
             camera.ViewOrientationType = ViewOrientationTypeEnum.kArbitraryViewOrientation
-            logs.Add("CAMDrawingLib: ViewOrientationType set to kArbitraryViewOrientation")
+            UtilsLib.LogInfo("CAMDrawingLib: ViewOrientationType set to kArbitraryViewOrientation")
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to set ViewOrientationType: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to set ViewOrientationType: " & ex.Message)
             ' This might be read-only, continue anyway
         End Try
         
         Try
             camera.Perspective = False
-            logs.Add("CAMDrawingLib: Perspective set to False (orthographic)")
+            UtilsLib.LogInfo("CAMDrawingLib: Perspective set to False (orthographic)")
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to set Perspective: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to set Perspective: " & ex.Message)
             ' Continue anyway
         End Try
         
-        logs.Add("CAMDrawingLib: Arbitrary camera created successfully")
+        UtilsLib.LogInfo("CAMDrawingLib: Arbitrary camera created successfully")
         Return camera
     End Function
     
     ' Create a camera for the OPPOSITE view direction (looking from the other side)
     Public Function CreateOppositeCameraFromThicknessAxis(partDoc As PartDocument, _
-                                                           app As Inventor.Application, _
-                                                           logs As List(Of String)) As Camera
+                                                           app As Inventor.Application) As Camera
         Dim thicknessAxis As String = GetCustomPropertyValue(partDoc, "BB_ThicknessAxis", "")
         If String.IsNullOrEmpty(thicknessAxis) OrElse Not thicknessAxis.StartsWith("V:") Then
-            logs.Add("CAMDrawingLib: No valid vector thickness axis found for opposite camera")
+            UtilsLib.LogWarn("CAMDrawingLib: No valid vector thickness axis found for opposite camera")
             Return Nothing
         End If
         
         Dim vx As Double = 0, vy As Double = 0, vz As Double = 0
         If Not ParseVectorComponents(thicknessAxis, vx, vy, vz) Then
-            logs.Add("CAMDrawingLib: Failed to parse thickness vector for opposite camera")
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to parse thickness vector for opposite camera")
             Return Nothing
         End If
         
@@ -606,13 +602,13 @@ Public Module CAMDrawingLib
         vy = -vy
         vz = -vz
         
-        logs.Add("CAMDrawingLib: Creating opposite camera for vector (" & _
+        UtilsLib.LogInfo("CAMDrawingLib: Creating opposite camera for vector (" & _
                  vx.ToString("F4") & ", " & vy.ToString("F4") & ", " & vz.ToString("F4") & ")")
         
         ' Normalize the view direction vector
         Dim length As Double = Math.Sqrt(vx * vx + vy * vy + vz * vz)
         If length < 0.0001 Then
-            logs.Add("CAMDrawingLib: Vector length too small")
+            UtilsLib.LogWarn("CAMDrawingLib: Vector length too small")
             Return Nothing
         End If
         vx /= length
@@ -675,7 +671,7 @@ Public Module CAMDrawingLib
         Try
             camera = app.TransientObjects.CreateCamera()
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to create opposite Camera object: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to create opposite Camera object: " & ex.Message)
             Return Nothing
         End Try
         
@@ -683,9 +679,9 @@ Public Module CAMDrawingLib
             camera.Eye = tg.CreatePoint(eyeX, eyeY, eyeZ)
             camera.Target = tg.CreatePoint(centerX, centerY, centerZ)
             camera.UpVector = tg.CreateUnitVector(upX, upY, upZ)
-            logs.Add("CAMDrawingLib: Opposite camera configured")
+            UtilsLib.LogInfo("CAMDrawingLib: Opposite camera configured")
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to configure opposite camera: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to configure opposite camera: " & ex.Message)
             Return Nothing
         End Try
         
@@ -723,23 +719,21 @@ Public Module CAMDrawingLib
     ' ============================================================================
     
     ' Create a new drawing from template (auto-find template)
-    Public Function CreateDrawingFromTemplate(app As Inventor.Application, _
-                                              logs As List(Of String)) As DrawingDocument
-        Dim templatePath As String = FindDrawingTemplate(app, logs)
-        Return CreateDrawingFromTemplate(app, templatePath, logs)
+    Public Function CreateDrawingFromTemplate(app As Inventor.Application) As DrawingDocument
+        Dim templatePath As String = FindDrawingTemplate(app)
+        Return CreateDrawingFromTemplate(app, templatePath)
     End Function
     
     ' Create a new drawing from specific template
     Public Function CreateDrawingFromTemplate(app As Inventor.Application, _
-                                              templatePath As String, _
-                                              logs As List(Of String)) As DrawingDocument
+                                              templatePath As String) As DrawingDocument
         If String.IsNullOrEmpty(templatePath) Then
-            logs.Add("CAMDrawingLib: Template path is empty")
+            UtilsLib.LogWarn("CAMDrawingLib: Template path is empty")
             Return Nothing
         End If
         
         If Not System.IO.File.Exists(templatePath) Then
-            logs.Add("CAMDrawingLib: Template not found: " & templatePath)
+            UtilsLib.LogWarn("CAMDrawingLib: Template not found: " & templatePath)
             Return Nothing
         End If
         
@@ -747,17 +741,16 @@ Public Module CAMDrawingLib
             Dim drawDoc As DrawingDocument = CType( _
                 app.Documents.Add(DocumentTypeEnum.kDrawingDocumentObject, templatePath, True), _
                 DrawingDocument)
-            logs.Add("CAMDrawingLib: Drawing created from template")
+            UtilsLib.LogInfo("CAMDrawingLib: Drawing created from template")
             Return drawDoc
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to create drawing: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to create drawing: " & ex.Message)
             Return Nothing
         End Try
     End Function
     
     ' Find the drawing template
-    Public Function FindDrawingTemplate(app As Inventor.Application, _
-                                        logs As List(Of String)) As String
+    Public Function FindDrawingTemplate(app As Inventor.Application) As String
         ' Try specific template first
         Try
             Dim templatePath As String = app.FileManager.GetTemplateFile(DocumentTypeEnum.kDrawingDocumentObject)
@@ -767,13 +760,13 @@ Public Module CAMDrawingLib
                 ' Look for our specific template
                 Dim specificPath As String = System.IO.Path.Combine(templateFolder, DEFAULT_TEMPLATE)
                 If System.IO.File.Exists(specificPath) Then
-                    logs.Add("CAMDrawingLib: Found template: " & specificPath)
+                    UtilsLib.LogInfo("CAMDrawingLib: Found template: " & specificPath)
                     Return specificPath
                 End If
                 
                 ' Fall back to default template
                 If System.IO.File.Exists(templatePath) Then
-                    logs.Add("CAMDrawingLib: Using default template: " & templatePath)
+                    UtilsLib.LogInfo("CAMDrawingLib: Using default template: " & templatePath)
                     Return templatePath
                 End If
             End If
@@ -787,35 +780,34 @@ Public Module CAMDrawingLib
             If Not String.IsNullOrEmpty(templatesPath) Then
                 Dim specificPath As String = System.IO.Path.Combine(templatesPath, DEFAULT_TEMPLATE)
                 If System.IO.File.Exists(specificPath) Then
-                    logs.Add("CAMDrawingLib: Found project template: " & specificPath)
+                    UtilsLib.LogInfo("CAMDrawingLib: Found project template: " & specificPath)
                     Return specificPath
                 End If
                 
                 ' Look for any .idw template
                 Dim idwFiles() As String = System.IO.Directory.GetFiles(templatesPath, "*.idw")
                 If idwFiles.Length > 0 Then
-                    logs.Add("CAMDrawingLib: Using first available template: " & idwFiles(0))
+                    UtilsLib.LogInfo("CAMDrawingLib: Using first available template: " & idwFiles(0))
                     Return idwFiles(0)
                 End If
             End If
         Catch
         End Try
         
-        logs.Add("CAMDrawingLib: No drawing template found")
+        UtilsLib.LogWarn("CAMDrawingLib: No drawing template found")
         Return ""
     End Function
     
     ' Open an existing drawing document
     Public Function OpenExistingDrawing(app As Inventor.Application, _
-                                        drawingPath As String, _
-                                        logs As List(Of String)) As DrawingDocument
+                                        drawingPath As String) As DrawingDocument
         If String.IsNullOrEmpty(drawingPath) Then
-            logs.Add("CAMDrawingLib: Drawing path is empty")
+            UtilsLib.LogWarn("CAMDrawingLib: Drawing path is empty")
             Return Nothing
         End If
         
         If Not System.IO.File.Exists(drawingPath) Then
-            logs.Add("CAMDrawingLib: Drawing not found: " & drawingPath)
+            UtilsLib.LogWarn("CAMDrawingLib: Drawing not found: " & drawingPath)
             Return Nothing
         End If
         
@@ -823,18 +815,17 @@ Public Module CAMDrawingLib
             Dim drawDoc As DrawingDocument = CType( _
                 app.Documents.Open(drawingPath, True), _
                 DrawingDocument)
-            logs.Add("CAMDrawingLib: Opened drawing: " & drawingPath)
+            UtilsLib.LogInfo("CAMDrawingLib: Opened drawing: " & drawingPath)
             Return drawDoc
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to open drawing: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to open drawing: " & ex.Message)
             Return Nothing
         End Try
     End Function
     
     ' Find drawing template by name
     Public Function FindDrawingTemplate(app As Inventor.Application, _
-                                        templateName As String, _
-                                        logs As List(Of String)) As String
+                                        templateName As String) As String
         If String.IsNullOrEmpty(templateName) Then
             templateName = DEFAULT_TEMPLATE
         End If
@@ -848,18 +839,18 @@ Public Module CAMDrawingLib
                 ' Look for specific template
                 Dim specificPath As String = System.IO.Path.Combine(templateFolder, templateName)
                 If System.IO.File.Exists(specificPath) Then
-                    logs.Add("CAMDrawingLib: Found template: " & specificPath)
+                    UtilsLib.LogInfo("CAMDrawingLib: Found template: " & specificPath)
                     Return specificPath
                 End If
                 
                 ' Fall back to default
                 If System.IO.File.Exists(defaultPath) Then
-                    logs.Add("CAMDrawingLib: Using default template: " & defaultPath)
+                    UtilsLib.LogInfo("CAMDrawingLib: Using default template: " & defaultPath)
                     Return defaultPath
                 End If
             End If
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Error accessing FileManager: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Error accessing FileManager: " & ex.Message)
         End Try
         
         ' Try project templates path
@@ -869,22 +860,22 @@ Public Module CAMDrawingLib
             If Not String.IsNullOrEmpty(templatesPath) Then
                 Dim specificPath As String = System.IO.Path.Combine(templatesPath, templateName)
                 If System.IO.File.Exists(specificPath) Then
-                    logs.Add("CAMDrawingLib: Found template in project: " & specificPath)
+                    UtilsLib.LogInfo("CAMDrawingLib: Found template in project: " & specificPath)
                     Return specificPath
                 End If
                 
                 ' Look for any .idw
                 Dim idwFiles() As String = System.IO.Directory.GetFiles(templatesPath, "*.idw")
                 If idwFiles.Length > 0 Then
-                    logs.Add("CAMDrawingLib: Using first available template: " & idwFiles(0))
+                    UtilsLib.LogInfo("CAMDrawingLib: Using first available template: " & idwFiles(0))
                     Return idwFiles(0)
                 End If
             End If
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Error accessing project templates: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Error accessing project templates: " & ex.Message)
         End Try
         
-        logs.Add("CAMDrawingLib: No drawing template found")
+        UtilsLib.LogWarn("CAMDrawingLib: No drawing template found")
         Return ""
     End Function
 
@@ -897,8 +888,7 @@ Public Module CAMDrawingLib
     ' Automatically sets portrait/landscape orientation based on which is larger
     Public Sub ResizeSheet(sheet As Sheet, _
                            widthMm As Double, _
-                           heightMm As Double, _
-                           logs As List(Of String))
+                           heightMm As Double)
         Dim widthCm As Double = widthMm / 10
         Dim heightCm As Double = heightMm / 10
         
@@ -906,17 +896,17 @@ Public Module CAMDrawingLib
         Dim needsPortrait As Boolean = (heightMm > widthMm)
         Dim orientationName As String = If(needsPortrait, "Portrait", "Landscape")
         
-        logs.Add("CAMDrawingLib: Attempting to resize sheet to " & widthMm.ToString("F1") & " x " & heightMm.ToString("F1") & " mm (" & orientationName & ")")
-        logs.Add("CAMDrawingLib: Current sheet size: " & (sheet.Width * 10).ToString("F1") & " x " & (sheet.Height * 10).ToString("F1") & " mm")
+        UtilsLib.LogInfo("CAMDrawingLib: Attempting to resize sheet to " & widthMm.ToString("F1") & " x " & heightMm.ToString("F1") & " mm (" & orientationName & ")")
+        UtilsLib.LogInfo("CAMDrawingLib: Current sheet size: " & (sheet.Width * 10).ToString("F1") & " x " & (sheet.Height * 10).ToString("F1") & " mm")
         
         ' Ensure sheet is set to custom size first
         Try
             If sheet.Size <> DrawingSheetSizeEnum.kCustomDrawingSheetSize Then
-                logs.Add("CAMDrawingLib: Setting sheet to custom size mode")
+                UtilsLib.LogInfo("CAMDrawingLib: Setting sheet to custom size mode")
                 sheet.Size = DrawingSheetSizeEnum.kCustomDrawingSheetSize
             End If
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Could not set custom size mode: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Could not set custom size mode: " & ex.Message)
         End Try
         
         ' Set orientation BEFORE setting dimensions
@@ -930,24 +920,24 @@ Public Module CAMDrawingLib
             End If
             
             If sheet.Orientation <> targetOrientation Then
-                logs.Add("CAMDrawingLib: Setting orientation to " & orientationName)
+                UtilsLib.LogInfo("CAMDrawingLib: Setting orientation to " & orientationName)
                 sheet.Orientation = targetOrientation
             End If
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Could not set orientation: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Could not set orientation: " & ex.Message)
         End Try
         
         ' Now set dimensions - with orientation set correctly, Width/Height should work properly
         Try
-            logs.Add("CAMDrawingLib: Before dimension changes: " & (sheet.Width * 10).ToString("F1") & " x " & (sheet.Height * 10).ToString("F1") & " mm")
+            UtilsLib.LogInfo("CAMDrawingLib: Before dimension changes: " & (sheet.Width * 10).ToString("F1") & " x " & (sheet.Height * 10).ToString("F1") & " mm")
             
             ' Set both dimensions
             sheet.Width = widthCm
             sheet.Height = heightCm
             
-            logs.Add("CAMDrawingLib: Sheet resized to " & (sheet.Width * 10).ToString("F1") & " x " & (sheet.Height * 10).ToString("F1") & " mm")
+            UtilsLib.LogInfo("CAMDrawingLib: Sheet resized to " & (sheet.Width * 10).ToString("F1") & " x " & (sheet.Height * 10).ToString("F1") & " mm")
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to resize sheet: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to resize sheet: " & ex.Message)
         End Try
     End Sub
     
@@ -959,11 +949,10 @@ Public Module CAMDrawingLib
     '                    Applied to right and bottom of EACH view for extent dimensions
     ' borderPaddingMm:   minimum border around all content (default 15mm)
     Public Function CalculateSheetSizeFromViews(views As List(Of DrawingView), _
-                                                 logs As List(Of String), _
                                                  Optional dimensionOffsetMm As Double = -1, _
                                                  Optional borderPaddingMm As Double = 15) As Double()
         If views Is Nothing OrElse views.Count = 0 Then
-            logs.Add("CAMDrawingLib: No views to calculate size from")
+            UtilsLib.LogWarn("CAMDrawingLib: No views to calculate size from")
             Return New Double() {100, 80}  ' Minimum default
         End If
         
@@ -999,7 +988,7 @@ Public Module CAMDrawingLib
         Dim contentWidth As Double = (maxX - minX) * 10
         Dim contentHeight As Double = (maxY - minY) * 10
         
-        logs.Add("CAMDrawingLib: Views bounding box (incl. " & FormatNumber(dimensionOffsetMm, 0) & "mm dim space): " & _
+        UtilsLib.LogInfo("CAMDrawingLib: Views bounding box (incl. " & FormatNumber(dimensionOffsetMm, 0) & "mm dim space): " & _
                  FormatNumber(contentWidth, 1) & " x " & FormatNumber(contentHeight, 1) & " mm")
         
         ' Add border padding on all sides
@@ -1010,7 +999,7 @@ Public Module CAMDrawingLib
         sheetWidth = Math.Max(sheetWidth, 100)
         sheetHeight = Math.Max(sheetHeight, 80)
         
-        logs.Add("CAMDrawingLib: Sheet size with " & FormatNumber(borderPaddingMm, 0) & "mm border: " & _
+        UtilsLib.LogInfo("CAMDrawingLib: Sheet size with " & FormatNumber(borderPaddingMm, 0) & "mm border: " & _
                  FormatNumber(sheetWidth, 1) & " x " & FormatNumber(sheetHeight, 1) & " mm")
         
         Return New Double() {sheetWidth, sheetHeight}
@@ -1019,10 +1008,9 @@ Public Module CAMDrawingLib
     ' DEPRECATED: Old signature for backward compatibility
     ' Use the new signature with named parameters instead
     Public Function CalculateSheetSizeFromViewsLegacy(views As List(Of DrawingView), _
-                                                       paddingPercent As Double, _
-                                                       logs As List(Of String)) As Double()
+                                                       paddingPercent As Double) As Double()
         If views Is Nothing OrElse views.Count = 0 Then
-            logs.Add("CAMDrawingLib: No views to calculate size from")
+            UtilsLib.LogWarn("CAMDrawingLib: No views to calculate size from")
             Return New Double() {100, 80}
         End If
         
@@ -1052,7 +1040,7 @@ Public Module CAMDrawingLib
         sheetWidth = Math.Max(sheetWidth, 100)
         sheetHeight = Math.Max(sheetHeight, 80)
         
-        logs.Add("CAMDrawingLib: (Legacy) Sheet size with " & FormatNumber(paddingPercent * 100, 0) & "% padding: " & _
+        UtilsLib.LogInfo("CAMDrawingLib: (Legacy) Sheet size with " & FormatNumber(paddingPercent * 100, 0) & "% padding: " & _
                  FormatNumber(sheetWidth, 1) & " x " & FormatNumber(sheetHeight, 1) & " mm")
         
         Return New Double() {sheetWidth, sheetHeight}
@@ -1065,16 +1053,15 @@ Public Module CAMDrawingLib
     Public Sub FitSheetToViews(sheet As Sheet, _
                                 views As List(Of DrawingView), _
                                 app As Inventor.Application, _
-                                logs As List(Of String), _
                                 Optional dimensionOffsetMm As Double = -1, _
                                 Optional borderPaddingMm As Double = 10)
         If views Is Nothing OrElse views.Count = 0 Then
-            logs.Add("CAMDrawingLib: No views to fit sheet to")
+            UtilsLib.LogWarn("CAMDrawingLib: No views to fit sheet to")
             Return
         End If
         
         ' Calculate required sheet size
-        Dim requiredSize() As Double = CalculateSheetSizeFromViews(views, logs, dimensionOffsetMm, borderPaddingMm)
+        Dim requiredSize() As Double = CalculateSheetSizeFromViews(views, dimensionOffsetMm, borderPaddingMm)
         Dim requiredWidthCm As Double = requiredSize(0) / 10
         Dim requiredHeightCm As Double = requiredSize(1) / 10
         
@@ -1118,20 +1105,19 @@ Public Module CAMDrawingLib
             view.Position = newPos
         Next
         
-        logs.Add("CAMDrawingLib: Views moved (offset: " & FormatNumber(offsetX * 10, 1) & ", " & _
+        UtilsLib.LogInfo("CAMDrawingLib: Views moved (offset: " & FormatNumber(offsetX * 10, 1) & ", " & _
                  FormatNumber(offsetY * 10, 1) & " mm)")
         
         ' NOW resize the sheet (views are within bounds)
-        ResizeSheet(sheet, requiredSize(0), requiredSize(1), logs)
+        ResizeSheet(sheet, requiredSize(0), requiredSize(1))
     End Sub
     
     ' Center all views on the sheet (current sheet size)
     Public Sub CenterViewsOnSheet(sheet As Sheet, _
                                    views As List(Of DrawingView), _
-                                   app As Inventor.Application, _
-                                   logs As List(Of String))
+                                   app As Inventor.Application)
         If views Is Nothing OrElse views.Count = 0 Then
-            logs.Add("CAMDrawingLib: No views to center")
+            UtilsLib.LogWarn("CAMDrawingLib: No views to center")
             Return
         End If
         
@@ -1170,7 +1156,7 @@ Public Module CAMDrawingLib
             view.Position = newPos
         Next
         
-        logs.Add("CAMDrawingLib: Views centered (offset: " & FormatNumber(offsetX * 10, 1) & ", " & _
+        UtilsLib.LogInfo("CAMDrawingLib: Views centered (offset: " & FormatNumber(offsetX * 10, 1) & ", " & _
                  FormatNumber(offsetY * 10, 1) & " mm)")
     End Sub
     
@@ -1178,11 +1164,10 @@ Public Module CAMDrawingLib
     ' Returns (width, height) in mm
     ' Handles sheet metal flat patterns (single view) and regular parts (T-layout)
     Public Function CalculateSheetSize(partDoc As PartDocument, _
-                                       dimSpaceMm As Double, _
-                                       logs As List(Of String)) As Double()
+                                       dimSpaceMm As Double) As Double()
         ' Check for sheet metal flat pattern
         If IsSheetMetal(partDoc) AndAlso HasFlatPattern(partDoc) Then
-            Return CalculateFlatPatternSheetSize(partDoc, dimSpaceMm, logs)
+            Return CalculateFlatPatternSheetSize(partDoc, dimSpaceMm)
         End If
         
         Dim partBox As Box = partDoc.ComponentDefinition.RangeBox
@@ -1192,7 +1177,7 @@ Public Module CAMDrawingLib
         Dim ySize As Double = (partBox.MaxPoint.Y - partBox.MinPoint.Y) * 10
         Dim zSize As Double = (partBox.MaxPoint.Z - partBox.MinPoint.Z) * 10
         
-        logs.Add("CAMDrawingLib: Part size: " & FormatNumber(xSize, 1) & " x " & _
+        UtilsLib.LogInfo("CAMDrawingLib: Part size: " & FormatNumber(xSize, 1) & " x " & _
                  FormatNumber(ySize, 1) & " x " & FormatNumber(zSize, 1) & " mm")
         
         ' T-layout: 
@@ -1228,7 +1213,7 @@ Public Module CAMDrawingLib
         sheetWidth = Math.Max(sheetWidth, 100)
         sheetHeight = Math.Max(sheetHeight, 80)
         
-        logs.Add("CAMDrawingLib: Calculated sheet size: " & FormatNumber(sheetWidth, 1) & " x " & _
+        UtilsLib.LogInfo("CAMDrawingLib: Calculated sheet size: " & FormatNumber(sheetWidth, 1) & " x " & _
                  FormatNumber(sheetHeight, 1) & " mm")
         
         Return New Double() {sheetWidth, sheetHeight}
@@ -1236,8 +1221,7 @@ Public Module CAMDrawingLib
     
     ' Calculate sheet size for sheet metal flat pattern (single view)
     Private Function CalculateFlatPatternSheetSize(partDoc As PartDocument, _
-                                                    dimSpaceMm As Double, _
-                                                    logs As List(Of String)) As Double()
+                                                    dimSpaceMm As Double) As Double()
         Dim fpWidth As Double = 100  ' Default fallback in mm
         Dim fpHeight As Double = 80
         
@@ -1251,16 +1235,16 @@ Public Module CAMDrawingLib
                 fpWidth = fp.Width * 10   ' Convert cm to mm
                 fpHeight = fp.Length * 10 ' Convert cm to mm
                 
-                logs.Add("CAMDrawingLib: Flat pattern size: " & FormatNumber(fpWidth, 1) & " x " & _
+                UtilsLib.LogInfo("CAMDrawingLib: Flat pattern size: " & FormatNumber(fpWidth, 1) & " x " & _
                          FormatNumber(fpHeight, 1) & " mm")
             End If
         Catch ex As Exception
             ' Fall back to bounding box if flat pattern dimensions not accessible
-            logs.Add("CAMDrawingLib: Could not get flat pattern dimensions: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Could not get flat pattern dimensions: " & ex.Message)
             Dim partBox As Box = partDoc.ComponentDefinition.RangeBox
             fpWidth = (partBox.MaxPoint.X - partBox.MinPoint.X) * 10
             fpHeight = (partBox.MaxPoint.Y - partBox.MinPoint.Y) * 10
-            logs.Add("CAMDrawingLib: Using bounding box: " & FormatNumber(fpWidth, 1) & " x " & _
+            UtilsLib.LogInfo("CAMDrawingLib: Using bounding box: " & FormatNumber(fpWidth, 1) & " x " & _
                      FormatNumber(fpHeight, 1) & " mm")
         End Try
         
@@ -1272,7 +1256,7 @@ Public Module CAMDrawingLib
         sheetWidth = Math.Max(sheetWidth, 100)
         sheetHeight = Math.Max(sheetHeight, 80)
         
-        logs.Add("CAMDrawingLib: Sheet size for flat pattern: " & FormatNumber(sheetWidth, 1) & " x " & _
+        UtilsLib.LogInfo("CAMDrawingLib: Sheet size for flat pattern: " & FormatNumber(sheetWidth, 1) & " x " & _
                  FormatNumber(sheetHeight, 1) & " mm")
         
         Return New Double() {sheetWidth, sheetHeight}
@@ -1289,7 +1273,6 @@ Public Module CAMDrawingLib
     Public Function AddAllViews(sheet As Sheet, _
                                 partDoc As PartDocument, _
                                 app As Inventor.Application, _
-                                logs As List(Of String), _
                                 Optional dimOffsetCm As Double = DEFAULT_DIMENSION_OFFSET, _
                                 Optional viewGapCm As Double = DEFAULT_VIEW_GAP) As List(Of DrawingView)
         
@@ -1298,12 +1281,12 @@ Public Module CAMDrawingLib
         Dim ySize As Double = (partBox.MaxPoint.Y - partBox.MinPoint.Y)  ' in cm
         
         ' Determine base view orientation
-        Dim baseOrientation As ViewOrientationTypeEnum = DetermineBaseViewOrientation(partDoc, logs)
+        Dim baseOrientation As ViewOrientationTypeEnum = DetermineBaseViewOrientation(partDoc)
         
         ' Check for sheet metal flat pattern
         Dim useSheetMetalFlatPattern As Boolean = IsSheetMetal(partDoc) AndAlso HasFlatPattern(partDoc)
         If useSheetMetalFlatPattern Then
-            logs.Add("CAMDrawingLib: Will use sheet metal flat pattern view")
+            UtilsLib.LogInfo("CAMDrawingLib: Will use sheet metal flat pattern view")
         End If
         
         ' Calculate front view position (center of sheet, adjusted for layout)
@@ -1316,26 +1299,26 @@ Public Module CAMDrawingLib
             If useSheetMetalFlatPattern Then
                 ' For sheet metal, create flat pattern view
                 baseView = CreateFlatPatternView(sheet, partDoc, app, _
-                    app.TransientGeometry.CreatePoint2d(frontX, frontY), logs)
+                    app.TransientGeometry.CreatePoint2d(frontX, frontY))
                 
                 If baseView Is Nothing Then
-                    logs.Add("CAMDrawingLib: Flat pattern failed, falling back to regular view")
+                    UtilsLib.LogWarn("CAMDrawingLib: Flat pattern failed, falling back to regular view")
                     useSheetMetalFlatPattern = False
                 Else
-                    logs.Add("CAMDrawingLib: Flat pattern base view added")
+                    UtilsLib.LogInfo("CAMDrawingLib: Flat pattern base view added")
                 End If
             End If
             
             If Not useSheetMetalFlatPattern Then
-                baseView = CreateBaseView(sheet, partDoc, app, frontX, frontY, baseOrientation, logs)
+                baseView = CreateBaseView(sheet, partDoc, app, frontX, frontY, baseOrientation)
             End If
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to create base view: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to create base view: " & ex.Message)
             Return New List(Of DrawingView)
         End Try
         
         If baseView Is Nothing Then
-            logs.Add("CAMDrawingLib: Base view creation failed")
+            UtilsLib.LogWarn("CAMDrawingLib: Base view creation failed")
             Return New List(Of DrawingView)
         End If
         
@@ -1344,11 +1327,11 @@ Public Module CAMDrawingLib
             Dim dimSpace As Double = CalculateViewSpacing(partDoc, dimOffsetCm, viewGapCm)
             Dim views As New List(Of DrawingView)
             views.Add(baseView)
-            Return AddFlatPatternProjectedViews(sheet, baseView, partDoc, app, views, dimSpace, logs)
+            Return AddFlatPatternProjectedViews(sheet, baseView, partDoc, app, views, dimSpace)
         End If
         
         ' For regular parts: add all projected views using shared function
-        Return AddViewsToExistingBase(sheet, baseView, partDoc, app, logs, dimOffsetCm, viewGapCm)
+        Return AddViewsToExistingBase(sheet, baseView, partDoc, app, dimOffsetCm, viewGapCm)
     End Function
     
     ' Create a base view with the specified orientation
@@ -1358,14 +1341,13 @@ Public Module CAMDrawingLib
                                      app As Inventor.Application, _
                                      posX As Double, _
                                      posY As Double, _
-                                     orientation As ViewOrientationTypeEnum, _
-                                     logs As List(Of String)) As DrawingView
+                                     orientation As ViewOrientationTypeEnum) As DrawingView
         Dim baseView As DrawingView = Nothing
         Dim baseName As String = "Front"
         
         ' Check if we need arbitrary camera for custom thickness axis
         If orientation = ViewOrientationTypeEnum.kArbitraryViewOrientation Then
-            Dim camera As Camera = CreateArbitraryCameraFromThicknessAxis(partDoc, app, logs)
+            Dim camera As Camera = CreateArbitraryCameraFromThicknessAxis(partDoc, app)
             
             If camera IsNot Nothing Then
                 Try
@@ -1378,14 +1360,14 @@ Public Module CAMDrawingLib
                         "", _
                         camera)
                     baseName = "Custom"
-                    logs.Add("CAMDrawingLib: Created base view with arbitrary camera")
+                    UtilsLib.LogInfo("CAMDrawingLib: Created base view with arbitrary camera")
                 Catch ex As Exception
-                    logs.Add("CAMDrawingLib: Arbitrary camera failed: " & ex.Message)
+                    UtilsLib.LogWarn("CAMDrawingLib: Arbitrary camera failed: " & ex.Message)
                 End Try
             End If
             
             If baseView Is Nothing Then
-                logs.Add("CAMDrawingLib: Falling back to Front view")
+                UtilsLib.LogInfo("CAMDrawingLib: Falling back to Front view")
                 orientation = ViewOrientationTypeEnum.kFrontViewOrientation
             End If
         End If
@@ -1404,7 +1386,7 @@ Public Module CAMDrawingLib
         End If
         
         Try : baseView.Name = baseName : Catch : End Try
-        logs.Add("CAMDrawingLib: Base view created: " & baseName)
+        UtilsLib.LogInfo("CAMDrawingLib: Base view created: " & baseName)
         
         Return baseView
     End Function
@@ -1413,11 +1395,10 @@ Public Module CAMDrawingLib
     ' Keeps base view in place, repositions projected views around it
     Public Sub RepositionViews(sheet As Sheet, _
                                app As Inventor.Application, _
-                               logs As List(Of String), _
                                Optional dimOffsetCm As Double = DEFAULT_DIMENSION_OFFSET, _
                                Optional viewGapCm As Double = DEFAULT_VIEW_GAP)
         If sheet.DrawingViews.Count = 0 Then
-            logs.Add("CAMDrawingLib: No views to reposition")
+            UtilsLib.LogWarn("CAMDrawingLib: No views to reposition")
             Return
         End If
         
@@ -1440,7 +1421,7 @@ Public Module CAMDrawingLib
             baseView = sheet.DrawingViews.Item(1)
         End If
         
-        logs.Add("CAMDrawingLib: Repositioning views around base: " & baseView.Name)
+        UtilsLib.LogInfo("CAMDrawingLib: Repositioning views around base: " & baseView.Name)
         
         ' Calculate spacing (dimension offset + view gap)
         Dim spacing As Double = dimOffsetCm + viewGapCm
@@ -1475,7 +1456,7 @@ Public Module CAMDrawingLib
                 ' Use a tolerance to avoid repositioning views that are directly aligned
                 Dim tolerance As Double = 0.5  ' 5mm tolerance
                 
-                logs.Add("CAMDrawingLib: View " & v.Name & " offset from base: dx=" & _
+                UtilsLib.LogInfo("CAMDrawingLib: View " & v.Name & " offset from base: dx=" & _
                          FormatNumber(dx * 10, 1) & "mm, dy=" & FormatNumber(dy * 10, 1) & "mm")
                 
                 ' Horizontal positioning (view is to left or right of base)
@@ -1483,11 +1464,11 @@ Public Module CAMDrawingLib
                     If dx > 0 Then
                         ' View is to the RIGHT of base center
                         newX = baseX + baseWidth / 2 + spacing + vw / 2
-                        logs.Add("CAMDrawingLib: " & v.Name & " -> RIGHT position")
+                        UtilsLib.LogInfo("CAMDrawingLib: " & v.Name & " -> RIGHT position")
                     Else
                         ' View is to the LEFT of base center
                         newX = baseX - baseWidth / 2 - spacing - vw / 2
-                        logs.Add("CAMDrawingLib: " & v.Name & " -> LEFT position")
+                        UtilsLib.LogInfo("CAMDrawingLib: " & v.Name & " -> LEFT position")
                     End If
                 End If
                 
@@ -1496,29 +1477,29 @@ Public Module CAMDrawingLib
                     If dy > 0 Then
                         ' View is ABOVE base center
                         newY = baseY + baseHeight / 2 + spacing + vh / 2
-                        logs.Add("CAMDrawingLib: " & v.Name & " -> TOP position")
+                        UtilsLib.LogInfo("CAMDrawingLib: " & v.Name & " -> TOP position")
                     Else
                         ' View is BELOW base center
                         newY = baseY - baseHeight / 2 - spacing - vh / 2
-                        logs.Add("CAMDrawingLib: " & v.Name & " -> BOTTOM position")
+                        UtilsLib.LogInfo("CAMDrawingLib: " & v.Name & " -> BOTTOM position")
                     End If
                 End If
                 
                 ' Move view if position changed significantly
                 If Math.Abs(newX - vx) > 0.01 OrElse Math.Abs(newY - vy) > 0.01 Then
                     v.Position = tg.CreatePoint2d(newX, newY)
-                    logs.Add("CAMDrawingLib: Repositioned " & v.Name & " from (" & _
+                    UtilsLib.LogInfo("CAMDrawingLib: Repositioned " & v.Name & " from (" & _
                              FormatNumber(vx * 10, 1) & ", " & FormatNumber(vy * 10, 1) & ") to (" & _
                              FormatNumber(newX * 10, 1) & ", " & FormatNumber(newY * 10, 1) & ") mm")
                 Else
-                    logs.Add("CAMDrawingLib: " & v.Name & " position unchanged")
+                    UtilsLib.LogInfo("CAMDrawingLib: " & v.Name & " position unchanged")
                 End If
             Catch ex As Exception
-                logs.Add("CAMDrawingLib: Could not reposition " & v.Name & ": " & ex.Message)
+                UtilsLib.LogWarn("CAMDrawingLib: Could not reposition " & v.Name & ": " & ex.Message)
             End Try
         Next
         
-        logs.Add("CAMDrawingLib: View repositioning complete")
+        UtilsLib.LogInfo("CAMDrawingLib: View repositioning complete")
     End Sub
 
     ' ============================================================================
@@ -1546,7 +1527,6 @@ Public Module CAMDrawingLib
     Public Sub AddExtentDimensions(sheet As Sheet, _
                                    view As DrawingView, _
                                    app As Inventor.Application, _
-                                   logs As List(Of String), _
                                    Optional offsetCm As Double = DEFAULT_DIMENSION_OFFSET)
         ' Get view bounds (the actual rendering area)
         Dim viewLeft As Double = view.Position.X - view.Width / 2
@@ -1662,9 +1642,9 @@ Public Module CAMDrawingLib
             End Try
         Next
         
-        logs.Add("CAMDrawingLib: Found " & curveCount & " curves, extent: " & _
+        UtilsLib.LogInfo("CAMDrawingLib: Found " & curveCount & " curves, extent: " & _
                  FormatNumber((maxX - minX) * 10, 1) & " x " & FormatNumber((maxY - minY) * 10, 1) & " mm")
-        logs.Add("CAMDrawingLib: View bounds: " & FormatNumber(view.Width * 10, 1) & " x " & _
+        UtilsLib.LogInfo("CAMDrawingLib: View bounds: " & FormatNumber(view.Width * 10, 1) & " x " & _
                  FormatNumber(view.Height * 10, 1) & " mm at (" & FormatNumber(view.Position.X * 10, 1) & ", " & _
                  FormatNumber(view.Position.Y * 10, 1) & ")")
         
@@ -1685,13 +1665,13 @@ Public Module CAMDrawingLib
                 
                 If hDim IsNot Nothing Then
                     TagExtentDimension(hDim, view.Name, ATTR_DIM_TYPE_H)
-                    logs.Add("CAMDrawingLib: Horizontal dimension created and tagged at Y=" & FormatNumber(dimY * 10, 1) & "mm")
+                    UtilsLib.LogInfo("CAMDrawingLib: Horizontal dimension created and tagged at Y=" & FormatNumber(dimY * 10, 1) & "mm")
                 End If
             Catch ex As Exception
-                logs.Add("CAMDrawingLib: Horizontal dimension failed: " & ex.Message)
+                UtilsLib.LogWarn("CAMDrawingLib: Horizontal dimension failed: " & ex.Message)
             End Try
         Else
-            logs.Add("CAMDrawingLib: Cannot create horizontal dimension - missing curve(s)")
+            UtilsLib.LogWarn("CAMDrawingLib: Cannot create horizontal dimension - missing curve(s)")
         End If
         
         ' Create vertical dimension (right of view)
@@ -1711,63 +1691,59 @@ Public Module CAMDrawingLib
                 
                 If vDim IsNot Nothing Then
                     TagExtentDimension(vDim, view.Name, ATTR_DIM_TYPE_V)
-                    logs.Add("CAMDrawingLib: Vertical dimension created and tagged at X=" & FormatNumber(dimX * 10, 1) & "mm")
+                    UtilsLib.LogInfo("CAMDrawingLib: Vertical dimension created and tagged at X=" & FormatNumber(dimX * 10, 1) & "mm")
                 End If
             Catch ex As Exception
-                logs.Add("CAMDrawingLib: Vertical dimension failed: " & ex.Message)
+                UtilsLib.LogWarn("CAMDrawingLib: Vertical dimension failed: " & ex.Message)
             End Try
         Else
-            logs.Add("CAMDrawingLib: Cannot create vertical dimension - missing curve(s)")
+            UtilsLib.LogWarn("CAMDrawingLib: Cannot create vertical dimension - missing curve(s)")
         End If
     End Sub
     
     ' Add extent dimensions to all views on a sheet
     ' View spacing (dimSpace) should account for dimension offset to prevent overlapping
     Public Sub AddExtentDimensionsToAllViews(sheet As Sheet, _
-                                             app As Inventor.Application, _
-                                             logs As List(Of String))
-        logs.Add("CAMDrawingLib: Adding dimensions to " & sheet.DrawingViews.Count & " views...")
+                                             app As Inventor.Application)
+        UtilsLib.LogInfo("CAMDrawingLib: Adding dimensions to " & sheet.DrawingViews.Count & " views...")
         For i As Integer = 1 To sheet.DrawingViews.Count
             Dim view As DrawingView = sheet.DrawingViews.Item(i)
-            logs.Add("CAMDrawingLib: Adding dimensions to view " & i & " (" & view.Name & ")")
-            AddExtentDimensions(sheet, view, app, logs)
+            UtilsLib.LogInfo("CAMDrawingLib: Adding dimensions to view " & i & " (" & view.Name & ")")
+            AddExtentDimensions(sheet, view, app)
         Next
     End Sub
     
     ' Add extent dimensions only to the base view (first view on sheet)
     ' This is the recommended approach to avoid overlapping dimensions
     Public Sub AddExtentDimensionsToBaseView(sheet As Sheet, _
-                                              app As Inventor.Application, _
-                                              logs As List(Of String))
+                                              app As Inventor.Application)
         If sheet.DrawingViews.Count = 0 Then
-            logs.Add("CAMDrawingLib: No views on sheet")
+            UtilsLib.LogWarn("CAMDrawingLib: No views on sheet")
             Return
         End If
         
         Dim baseView As DrawingView = sheet.DrawingViews.Item(1)
-        logs.Add("CAMDrawingLib: Adding dimensions to base view: " & baseView.Name)
-        AddExtentDimensions(sheet, baseView, app, logs)
+        UtilsLib.LogInfo("CAMDrawingLib: Adding dimensions to base view: " & baseView.Name)
+        AddExtentDimensions(sheet, baseView, app)
     End Sub
     
     ' Add extent dimensions to specific views by index (1-based)
     Public Sub AddExtentDimensionsToViews(sheet As Sheet, _
                                           viewIndices As List(Of Integer), _
-                                          app As Inventor.Application, _
-                                          logs As List(Of String))
+                                          app As Inventor.Application)
         For Each idx As Integer In viewIndices
             If idx >= 1 AndAlso idx <= sheet.DrawingViews.Count Then
                 Dim view As DrawingView = sheet.DrawingViews.Item(idx)
-                logs.Add("CAMDrawingLib: Adding dimensions to view " & idx & " (" & view.Name & ")")
-                AddExtentDimensions(sheet, view, app, logs)
+                UtilsLib.LogInfo("CAMDrawingLib: Adding dimensions to view " & idx & " (" & view.Name & ")")
+                AddExtentDimensions(sheet, view, app)
             Else
-                logs.Add("CAMDrawingLib: View index " & idx & " out of range")
+                UtilsLib.LogWarn("CAMDrawingLib: View index " & idx & " out of range")
             End If
         Next
     End Sub
     
     ' Remove all dimensions from a sheet
-    Public Sub RemoveAllDimensions(sheet As Sheet, _
-                                   logs As List(Of String))
+    Public Sub RemoveAllDimensions(sheet As Sheet)
         Dim count As Integer = 0
         
         ' Remove general dimensions
@@ -1780,15 +1756,14 @@ Public Module CAMDrawingLib
             End Try
         End While
         
-        logs.Add("CAMDrawingLib: Removed " & count & " dimensions")
+        UtilsLib.LogInfo("CAMDrawingLib: Removed " & count & " dimensions")
     End Sub
     
     ' Refresh dimensions on a sheet (remove and recreate)
     Public Sub RefreshDimensions(sheet As Sheet, _
-                                 app As Inventor.Application, _
-                                 logs As List(Of String))
-        RemoveAllDimensions(sheet, logs)
-        AddExtentDimensionsToAllViews(sheet, app, logs)
+                                 app As Inventor.Application)
+        RemoveAllDimensions(sheet)
+        AddExtentDimensionsToAllViews(sheet, app)
     End Sub
     
     ' ============================================================================
@@ -1857,7 +1832,6 @@ Public Module CAMDrawingLib
                                         ByVal view As DrawingView, _
                                         ByVal app As Inventor.Application, _
                                         ByVal dimType As String, _
-                                        ByVal logs As List(Of String), _
                                         Optional ByVal offsetCm As Double = DEFAULT_DIMENSION_OFFSET)
         ' Get view bounds
         Dim viewLeft As Double = view.Position.X - view.Width / 2
@@ -1931,10 +1905,10 @@ Public Module CAMDrawingLib
                     
                     If hDim IsNot Nothing Then
                         TagExtentDimension(hDim, view.Name, ATTR_DIM_TYPE_H)
-                        logs.Add("CAMDrawingLib: Created tagged horizontal dimension for " & view.Name)
+                        UtilsLib.LogInfo("CAMDrawingLib: Created tagged horizontal dimension for " & view.Name)
                     End If
                 Catch ex As Exception
-                    logs.Add("CAMDrawingLib: Horizontal dimension failed: " & ex.Message)
+                    UtilsLib.LogWarn("CAMDrawingLib: Horizontal dimension failed: " & ex.Message)
                 End Try
             End If
             
@@ -1953,10 +1927,10 @@ Public Module CAMDrawingLib
                     
                     If vDim IsNot Nothing Then
                         TagExtentDimension(vDim, view.Name, ATTR_DIM_TYPE_V)
-                        logs.Add("CAMDrawingLib: Created tagged vertical dimension for " & view.Name)
+                        UtilsLib.LogInfo("CAMDrawingLib: Created tagged vertical dimension for " & view.Name)
                     End If
                 Catch ex As Exception
-                    logs.Add("CAMDrawingLib: Vertical dimension failed: " & ex.Message)
+                    UtilsLib.LogWarn("CAMDrawingLib: Vertical dimension failed: " & ex.Message)
                 End Try
             End If
         End If
@@ -1967,15 +1941,14 @@ Public Module CAMDrawingLib
     ' and preserves user-added dimensions (they have no tag)
     Public Sub UpdateTaggedExtentDimensions(ByVal drawDoc As DrawingDocument, _
                                             ByVal sheet As Sheet, _
-                                            ByVal app As Inventor.Application, _
-                                            ByVal logs As List(Of String))
+                                            ByVal app As Inventor.Application)
         ' Find all objects with our attribute set
         Dim tagged As ObjectCollection = drawDoc.AttributeManager.FindObjects(ATTR_SET_NAME)
         
         ' Collect dimensions to recreate: List of (ViewName, DimType)
         Dim toRecreate As New List(Of Tuple(Of String, String))
         
-        logs.Add("CAMDrawingLib: Found " & tagged.Count & " tagged objects")
+        UtilsLib.LogInfo("CAMDrawingLib: Found " & tagged.Count & " tagged objects")
         
         For Each obj As Object In tagged
             If TypeOf obj Is GeneralDimension Then
@@ -1989,14 +1962,14 @@ Public Module CAMDrawingLib
                     
                     ' Delete the old dimension
                     gDim.Delete()
-                    logs.Add("CAMDrawingLib: Deleted tagged dimension: " & viewName & ":" & dimType)
+                    UtilsLib.LogInfo("CAMDrawingLib: Deleted tagged dimension: " & viewName & ":" & dimType)
                 Catch ex As Exception
-                    logs.Add("CAMDrawingLib: Error processing tagged dimension: " & ex.Message)
+                    UtilsLib.LogWarn("CAMDrawingLib: Error processing tagged dimension: " & ex.Message)
                 End Try
             End If
         Next
         
-        logs.Add("CAMDrawingLib: Recreating " & toRecreate.Count & " dimensions...")
+        UtilsLib.LogInfo("CAMDrawingLib: Recreating " & toRecreate.Count & " dimensions...")
         
         ' Recreate dimensions
         For Each entry As Tuple(Of String, String) In toRecreate
@@ -2005,13 +1978,13 @@ Public Module CAMDrawingLib
             Dim view As DrawingView = FindViewByName(sheet, viewName)
             
             If view IsNot Nothing Then
-                AddSingleExtentDimension(sheet, view, app, dimType, logs)
+                AddSingleExtentDimension(sheet, view, app, dimType)
             Else
-                logs.Add("CAMDrawingLib: View not found, skipping: " & viewName)
+                UtilsLib.LogWarn("CAMDrawingLib: View not found, skipping: " & viewName)
             End If
         Next
         
-        logs.Add("CAMDrawingLib: Tagged dimension update complete")
+        UtilsLib.LogInfo("CAMDrawingLib: Tagged dimension update complete")
     End Sub
 
     ' ============================================================================
@@ -2024,10 +1997,9 @@ Public Module CAMDrawingLib
     Public Sub ExportToDwgOrDxf(app As Inventor.Application, _
                                 drawDoc As DrawingDocument, _
                                 outputPath As String, _
-                                format As String, _
-                                logs As List(Of String))
+                                format As String)
         If drawDoc Is Nothing Then
-            logs.Add("CAMDrawingLib: No drawing to export")
+            UtilsLib.LogWarn("CAMDrawingLib: No drawing to export")
             Return
         End If
         
@@ -2041,7 +2013,7 @@ Public Module CAMDrawingLib
         ' Ensure output directory exists
         Dim outputDir As String = System.IO.Path.GetDirectoryName(outputPath)
         If Not System.IO.Directory.Exists(outputDir) Then
-            logs.Add("CAMDrawingLib: Output directory does not exist: " & outputDir)
+            UtilsLib.LogWarn("CAMDrawingLib: Output directory does not exist: " & outputDir)
             Return
         End If
         
@@ -2050,15 +2022,15 @@ Public Module CAMDrawingLib
             drawDoc.SaveAs(outputPath, True)
             If System.IO.File.Exists(outputPath) Then
                 Dim fileInfo As New System.IO.FileInfo(outputPath)
-                logs.Add("CAMDrawingLib: Exported " & If(isDxf, "DXF", "DWG") & " to " & outputPath & " (" & fileInfo.Length & " bytes)")
+                UtilsLib.LogInfo("CAMDrawingLib: Exported " & If(isDxf, "DXF", "DWG") & " to " & outputPath & " (" & fileInfo.Length & " bytes)")
                 Return
             Else
-                logs.Add("CAMDrawingLib: SaveAs completed but file not found")
+                UtilsLib.LogWarn("CAMDrawingLib: SaveAs completed but file not found")
             End If
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: SaveAs failed: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: SaveAs failed: " & ex.Message)
             If Not isDxf Then
-                logs.Add("CAMDrawingLib: Trying translator method for DWG...")
+                UtilsLib.LogInfo("CAMDrawingLib: Trying translator method for DWG...")
             End If
         End Try
         
@@ -2068,23 +2040,23 @@ Public Module CAMDrawingLib
             If String.IsNullOrEmpty(drawDoc.FullDocumentName) Then
                 ' Drawing not saved yet - trigger save (Vault dialog will appear)
                 Try
-                    logs.Add("CAMDrawingLib: Drawing not saved, triggering save...")
+                    UtilsLib.LogInfo("CAMDrawingLib: Drawing not saved, triggering save...")
                     drawDoc.Save()
                     
                     ' Check if save succeeded
                     If String.IsNullOrEmpty(drawDoc.FullDocumentName) Then
-                        logs.Add("CAMDrawingLib: Save was cancelled or failed")
+                        UtilsLib.LogWarn("CAMDrawingLib: Save was cancelled or failed")
                         Return
                     End If
-                    logs.Add("CAMDrawingLib: Drawing saved to: " & drawDoc.FullDocumentName)
+                    UtilsLib.LogInfo("CAMDrawingLib: Drawing saved to: " & drawDoc.FullDocumentName)
                 Catch ex As Exception
-                    logs.Add("CAMDrawingLib: Failed to save drawing: " & ex.Message)
+                    UtilsLib.LogWarn("CAMDrawingLib: Failed to save drawing: " & ex.Message)
                     Return
                 End Try
             End If
             
             ' Now export using translator (document is saved)
-            ExportWithTranslator(app, drawDoc, outputPath, False, logs)
+            ExportWithTranslator(app, drawDoc, outputPath, False)
         End If
     End Sub
     
@@ -2092,8 +2064,7 @@ Public Module CAMDrawingLib
     Private Sub ExportWithTranslator(app As Inventor.Application, _
                                      drawDoc As DrawingDocument, _
                                      outputPath As String, _
-                                     isDxf As Boolean, _
-                                     logs As List(Of String))
+                                     isDxf As Boolean)
         ' Enable silent operation to suppress export dialogs
         Dim previousSilentOperation As Boolean = app.SilentOperation
         app.SilentOperation = True
@@ -2103,7 +2074,7 @@ Public Module CAMDrawingLib
         Try
             dwgAddin = CType(app.ApplicationAddIns.ItemById(DWG_ADDIN_GUID), TranslatorAddIn)
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: DWG translator not found: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: DWG translator not found: " & ex.Message)
             app.SilentOperation = previousSilentOperation
             Return
         End Try
@@ -2120,10 +2091,10 @@ Public Module CAMDrawingLib
         Try
             hasOptions = dwgAddin.HasSaveCopyAsOptions(drawDoc, context, options)
             If hasOptions Then
-                logs.Add("CAMDrawingLib: Translator has options available")
+                UtilsLib.LogInfo("CAMDrawingLib: Translator has options available")
             End If
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: HasSaveCopyAsOptions failed: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: HasSaveCopyAsOptions failed: " & ex.Message)
         End Try
         
         ' Configure export options
@@ -2132,13 +2103,13 @@ Public Module CAMDrawingLib
                 ' Set DWG version to 2010 (AutoCAD 2010-2012 format)
                 ' Known values: 23=2000, 24=2004, 25=2007, 26=2010, 27=2013, 28=2018
                 options.Value("DwgVersion") = 26
-                logs.Add("CAMDrawingLib: Set DWG version to 2010")
+                UtilsLib.LogInfo("CAMDrawingLib: Set DWG version to 2010")
             Catch
                 Try
                     options.Add("DwgVersion", 26)
-                    logs.Add("CAMDrawingLib: Added DWG version = 2010")
+                    UtilsLib.LogInfo("CAMDrawingLib: Added DWG version = 2010")
                 Catch
-                    logs.Add("CAMDrawingLib: Could not set DWG version")
+                    UtilsLib.LogWarn("CAMDrawingLib: Could not set DWG version")
                 End Try
             End Try
             
@@ -2163,15 +2134,15 @@ Public Module CAMDrawingLib
             
             If System.IO.File.Exists(outputPath) Then
                 Dim fileInfo As New System.IO.FileInfo(outputPath)
-                logs.Add("CAMDrawingLib: Exported " & If(isDxf, "DXF", "DWG") & " to " & outputPath & " (" & fileInfo.Length & " bytes)")
+                UtilsLib.LogInfo("CAMDrawingLib: Exported " & If(isDxf, "DXF", "DWG") & " to " & outputPath & " (" & fileInfo.Length & " bytes)")
             Else
-                logs.Add("CAMDrawingLib: Export completed but file not found at " & outputPath)
+                UtilsLib.LogWarn("CAMDrawingLib: Export completed but file not found at " & outputPath)
             End If
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Export failed: " & ex.Message)
-            logs.Add("CAMDrawingLib: Debug - Output path: " & outputPath)
-            logs.Add("CAMDrawingLib: Debug - DrawDoc FullName: " & drawDoc.FullDocumentName)
-            logs.Add("CAMDrawingLib: Debug - HasOptions: " & hasOptions.ToString())
+            UtilsLib.LogWarn("CAMDrawingLib: Export failed: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Debug - Output path: " & outputPath)
+            UtilsLib.LogWarn("CAMDrawingLib: Debug - DrawDoc FullName: " & drawDoc.FullDocumentName)
+            UtilsLib.LogWarn("CAMDrawingLib: Debug - HasOptions: " & hasOptions.ToString())
         Finally
             ' Restore silent operation state
             app.SilentOperation = previousSilentOperation
@@ -2184,21 +2155,20 @@ Public Module CAMDrawingLib
                                  outputPath As String, _
                                  format As String, _
                                  iniFilePath As String, _
-                                 acaTemplatePath As String, _
-                                 logs As List(Of String))
+                                 acaTemplatePath As String)
         ' For now, just call the basic export
         ' Future: parse INI file and apply settings
         ' Future: use AutoCAD template (.dwt)
         
         If Not String.IsNullOrEmpty(iniFilePath) Then
-            logs.Add("CAMDrawingLib: INI file support not yet implemented: " & iniFilePath)
+            UtilsLib.LogWarn("CAMDrawingLib: INI file support not yet implemented: " & iniFilePath)
         End If
         
         If Not String.IsNullOrEmpty(acaTemplatePath) Then
-            logs.Add("CAMDrawingLib: AutoCAD template support not yet implemented: " & acaTemplatePath)
+            UtilsLib.LogWarn("CAMDrawingLib: AutoCAD template support not yet implemented: " & acaTemplatePath)
         End If
         
-        ExportToDwgOrDxf(app, drawDoc, outputPath, format, logs)
+        ExportToDwgOrDxf(app, drawDoc, outputPath, format)
     End Sub
 
     ' ============================================================================
@@ -2206,21 +2176,20 @@ Public Module CAMDrawingLib
     ' ============================================================================
     
     ' Get the referenced part document from a drawing
-    Public Function GetReferencedPartDocument(drawDoc As DrawingDocument, _
-                                              logs As List(Of String)) As PartDocument
+    Public Function GetReferencedPartDocument(drawDoc As DrawingDocument) As PartDocument
         If drawDoc.ReferencedDocuments.Count = 0 Then
-            logs.Add("CAMDrawingLib: Drawing has no referenced documents")
+            UtilsLib.LogWarn("CAMDrawingLib: Drawing has no referenced documents")
             Return Nothing
         End If
         
         For Each refDoc As Document In drawDoc.ReferencedDocuments
             If refDoc.DocumentType = DocumentTypeEnum.kPartDocumentObject Then
-                logs.Add("CAMDrawingLib: Found referenced part: " & refDoc.DisplayName)
+                UtilsLib.LogInfo("CAMDrawingLib: Found referenced part: " & refDoc.DisplayName)
                 Return CType(refDoc, PartDocument)
             End If
         Next
         
-        logs.Add("CAMDrawingLib: No part document found in references")
+        UtilsLib.LogWarn("CAMDrawingLib: No part document found in references")
         Return Nothing
     End Function
     
@@ -2314,8 +2283,7 @@ Public Module CAMDrawingLib
     
     ' Copy properties from part to drawing (Description, Project)
     Public Sub CopyPropertiesToDrawing(partDoc As PartDocument, _
-                                        drawDoc As DrawingDocument, _
-                                        logs As List(Of String))
+                                        drawDoc As DrawingDocument)
         Try
             Dim partProps As PropertySets = partDoc.PropertySets
             Dim drawProps As PropertySets = drawDoc.PropertySets
@@ -2328,10 +2296,10 @@ Public Module CAMDrawingLib
                 Dim description As String = CStr(partDesignProps.Item("Description").Value)
                 If Not String.IsNullOrEmpty(description) Then
                     drawDesignProps.Item("Description").Value = description
-                    logs.Add("CAMDrawingLib: Copied Description: " & description)
+                    UtilsLib.LogInfo("CAMDrawingLib: Copied Description: " & description)
                 End If
             Catch ex As Exception
-                logs.Add("CAMDrawingLib: Could not copy Description: " & ex.Message)
+                UtilsLib.LogWarn("CAMDrawingLib: Could not copy Description: " & ex.Message)
             End Try
             
             ' Copy Project from Design Tracking Properties
@@ -2342,26 +2310,25 @@ Public Module CAMDrawingLib
                 Dim project As String = CStr(partDesignProps.Item("Project").Value)
                 If Not String.IsNullOrEmpty(project) Then
                     drawDesignProps.Item("Project").Value = project
-                    logs.Add("CAMDrawingLib: Copied Project: " & project)
+                    UtilsLib.LogInfo("CAMDrawingLib: Copied Project: " & project)
                 End If
             Catch ex As Exception
-                logs.Add("CAMDrawingLib: Could not copy Project: " & ex.Message)
+                UtilsLib.LogWarn("CAMDrawingLib: Could not copy Project: " & ex.Message)
             End Try
             
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: CopyPropertiesToDrawing failed: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: CopyPropertiesToDrawing failed: " & ex.Message)
         End Try
     End Sub
     
     ' Set drawing association: store BB_SourcePartNumber, BB_DrawingType, and copy properties
     Public Sub SetDrawingAssociation(drawDoc As DrawingDocument, _
                                       partDoc As PartDocument, _
-                                      logs As List(Of String), _
                                       Optional drawingType As String = DRAWING_TYPE_1TO1)
         ' Get and store the part number
         Dim partNumber As String = GetPartNumber(partDoc)
         If String.IsNullOrEmpty(partNumber) Then
-            logs.Add("CAMDrawingLib: Warning - Part has no Part Number assigned")
+            UtilsLib.LogWarn("CAMDrawingLib: Warning - Part has no Part Number assigned")
         Else
             Try
                 Dim propSets As PropertySets = drawDoc.PropertySets
@@ -2374,23 +2341,22 @@ Public Module CAMDrawingLib
                     userProps.Add(partNumber, PROP_SOURCE_PART_NUMBER)
                 End Try
                 
-                logs.Add("CAMDrawingLib: Set " & PROP_SOURCE_PART_NUMBER & " = " & partNumber)
+                UtilsLib.LogInfo("CAMDrawingLib: Set " & PROP_SOURCE_PART_NUMBER & " = " & partNumber)
             Catch ex As Exception
-                logs.Add("CAMDrawingLib: Could not set " & PROP_SOURCE_PART_NUMBER & ": " & ex.Message)
+                UtilsLib.LogWarn("CAMDrawingLib: Could not set " & PROP_SOURCE_PART_NUMBER & ": " & ex.Message)
             End Try
         End If
         
         ' Set drawing type
-        SetDrawingType(drawDoc, drawingType, logs)
+        SetDrawingType(drawDoc, drawingType)
         
         ' Copy properties from part to drawing
-        CopyPropertiesToDrawing(partDoc, drawDoc, logs)
+        CopyPropertiesToDrawing(partDoc, drawDoc)
     End Sub
     
     ' Set the drawing type property
     Public Sub SetDrawingType(drawDoc As DrawingDocument, _
-                               drawingType As String, _
-                               logs As List(Of String))
+                               drawingType As String)
         Try
             Dim propSets As PropertySets = drawDoc.PropertySets
             Dim userProps As PropertySet = propSets.Item("Inventor User Defined Properties")
@@ -2401,9 +2367,9 @@ Public Module CAMDrawingLib
                 userProps.Add(drawingType, PROP_DRAWING_TYPE)
             End Try
             
-            logs.Add("CAMDrawingLib: Set " & PROP_DRAWING_TYPE & " = " & drawingType)
+            UtilsLib.LogInfo("CAMDrawingLib: Set " & PROP_DRAWING_TYPE & " = " & drawingType)
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Could not set " & PROP_DRAWING_TYPE & ": " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Could not set " & PROP_DRAWING_TYPE & ": " & ex.Message)
         End Try
     End Sub
     
@@ -2424,23 +2390,22 @@ Public Module CAMDrawingLib
     Public Function FindDrawingForPart(partNumber As String, _
                                         searchFolder As String, _
                                         app As Inventor.Application, _
-                                        logs As List(Of String), _
                                         Optional drawingType As String = "", _
                                         Optional recursive As Boolean = True) As String
         If String.IsNullOrEmpty(partNumber) Then
-            logs.Add("CAMDrawingLib: Cannot search - part number is empty")
+            UtilsLib.LogWarn("CAMDrawingLib: Cannot search - part number is empty")
             Return ""
         End If
         
         ' First check open documents (fast)
-        Dim openDoc As DrawingDocument = FindDrawingForPartInOpenDocs(partNumber, app, logs, drawingType)
+        Dim openDoc As DrawingDocument = FindDrawingForPartInOpenDocs(partNumber, app, drawingType)
         If openDoc IsNot Nothing Then
             Return openDoc.FullDocumentName
         End If
         
         ' Then search folder on disk
         If String.IsNullOrEmpty(searchFolder) OrElse Not System.IO.Directory.Exists(searchFolder) Then
-            logs.Add("CAMDrawingLib: Search folder does not exist: " & searchFolder)
+            UtilsLib.LogWarn("CAMDrawingLib: Search folder does not exist: " & searchFolder)
             Return ""
         End If
         
@@ -2448,7 +2413,7 @@ Public Module CAMDrawingLib
             System.IO.SearchOption.AllDirectories, _
             System.IO.SearchOption.TopDirectoryOnly)
         
-        logs.Add("CAMDrawingLib: Searching " & If(recursive, "recursively in ", "") & searchFolder & " for " & PROP_SOURCE_PART_NUMBER & " = " & partNumber)
+        UtilsLib.LogInfo("CAMDrawingLib: Searching " & If(recursive, "recursively in ", "") & searchFolder & " for " & PROP_SOURCE_PART_NUMBER & " = " & partNumber)
         
         Try
             Dim allIdwFiles() As String = System.IO.Directory.GetFiles(searchFolder, "*.idw", searchOption)
@@ -2462,7 +2427,7 @@ Public Module CAMDrawingLib
             Next
             Dim idwFiles() As String = idwList.ToArray()
             
-            logs.Add("CAMDrawingLib: Found " & idwFiles.Length & " .idw files (excluded OldVersions)")
+            UtilsLib.LogInfo("CAMDrawingLib: Found " & idwFiles.Length & " .idw files (excluded OldVersions)")
             
             For Each idwPath As String In idwFiles
                 Try
@@ -2481,7 +2446,7 @@ Public Module CAMDrawingLib
                         End If
                         
                         If typeMatches Then
-                            logs.Add("CAMDrawingLib: Found matching drawing: " & idwPath)
+                            UtilsLib.LogInfo("CAMDrawingLib: Found matching drawing: " & idwPath)
                             ' Leave drawing open (caller may need it)
                             Return idwPath
                         End If
@@ -2490,14 +2455,14 @@ Public Module CAMDrawingLib
                     ' Close if not a match
                     drawDoc.Close(True)
                 Catch ex As Exception
-                    logs.Add("CAMDrawingLib: Error checking " & System.IO.Path.GetFileName(idwPath) & ": " & ex.Message)
+                    UtilsLib.LogWarn("CAMDrawingLib: Error checking " & System.IO.Path.GetFileName(idwPath) & ": " & ex.Message)
                 End Try
             Next
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Error searching folder: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Error searching folder: " & ex.Message)
         End Try
         
-        logs.Add("CAMDrawingLib: No matching drawing found")
+        UtilsLib.LogWarn("CAMDrawingLib: No matching drawing found")
         Return ""
     End Function
     
@@ -2505,7 +2470,6 @@ Public Module CAMDrawingLib
     ' Optional drawingType parameter to filter by drawing type (e.g., "1:1")
     Public Function FindDrawingForPartInOpenDocs(partNumber As String, _
                                                   app As Inventor.Application, _
-                                                  logs As List(Of String), _
                                                   Optional drawingType As String = "") As DrawingDocument
         If String.IsNullOrEmpty(partNumber) Then
             Return Nothing
@@ -2529,7 +2493,7 @@ Public Module CAMDrawingLib
                             Continue For
                         End If
                     End If
-                    logs.Add("CAMDrawingLib: Found open drawing for part " & partNumber & ": " & drawDoc.DisplayName)
+                    UtilsLib.LogInfo("CAMDrawingLib: Found open drawing for part " & partNumber & ": " & drawDoc.DisplayName)
                     Return drawDoc
                 End If
             End If
@@ -2546,17 +2510,16 @@ Public Module CAMDrawingLib
     Public Sub AddExtentDimensionsToViews(sheet As Sheet, _
                                            views As List(Of DrawingView), _
                                            app As Inventor.Application, _
-                                           logs As List(Of String), _
                                            Optional offsetCm As Double = DEFAULT_DIMENSION_OFFSET)
         If views Is Nothing OrElse views.Count = 0 Then
-            logs.Add("CAMDrawingLib: No views to add dimensions to")
+            UtilsLib.LogWarn("CAMDrawingLib: No views to add dimensions to")
             Return
         End If
         
-        logs.Add("CAMDrawingLib: Adding dimensions to " & views.Count & " views...")
+        UtilsLib.LogInfo("CAMDrawingLib: Adding dimensions to " & views.Count & " views...")
         For Each view As DrawingView In views
-            logs.Add("CAMDrawingLib: Adding dimensions to view: " & view.Name)
-            AddExtentDimensions(sheet, view, app, logs, offsetCm)
+            UtilsLib.LogInfo("CAMDrawingLib: Adding dimensions to view: " & view.Name)
+            AddExtentDimensions(sheet, view, app, offsetCm)
         Next
     End Sub
     
@@ -2566,7 +2529,6 @@ Public Module CAMDrawingLib
                                             baseView As DrawingView, _
                                             partDoc As PartDocument, _
                                             app As Inventor.Application, _
-                                            logs As List(Of String), _
                                             Optional dimOffsetCm As Double = DEFAULT_DIMENSION_OFFSET, _
                                             Optional viewGapCm As Double = DEFAULT_VIEW_GAP) As List(Of DrawingView)
         Dim views As New List(Of DrawingView)
@@ -2574,7 +2536,7 @@ Public Module CAMDrawingLib
         
         ' Calculate spacing
         Dim dimSpace As Double = CalculateViewSpacing(partDoc, dimOffsetCm, viewGapCm)
-        logs.Add("CAMDrawingLib: View spacing: " & FormatNumber(dimSpace * 10, 1) & " mm")
+        UtilsLib.LogInfo("CAMDrawingLib: View spacing: " & FormatNumber(dimSpace * 10, 1) & " mm")
         
         ' Get base view dimensions
         Dim baseX As Double = baseView.Position.X
@@ -2582,12 +2544,12 @@ Public Module CAMDrawingLib
         Dim baseWidth As Double = baseView.Width
         Dim baseHeight As Double = baseView.Height
         
-        logs.Add("CAMDrawingLib: Base view: " & baseView.Name & " at (" & FormatNumber(baseX * 10, 1) & ", " & FormatNumber(baseY * 10, 1) & ")")
+        UtilsLib.LogInfo("CAMDrawingLib: Base view: " & baseView.Name & " at (" & FormatNumber(baseX * 10, 1) & ", " & FormatNumber(baseY * 10, 1) & ")")
         
         ' Check if this is a flat pattern view (sheet metal)
         If baseView.IsFlatPatternView Then
-            logs.Add("CAMDrawingLib: Base view is flat pattern - adding edge views only")
-            Return AddFlatPatternProjectedViews(sheet, baseView, partDoc, app, views, dimSpace, logs)
+            UtilsLib.LogInfo("CAMDrawingLib: Base view is flat pattern - adding edge views only")
+            Return AddFlatPatternProjectedViews(sheet, baseView, partDoc, app, views, dimSpace)
         End If
         
         ' Add Top view (above base)
@@ -2605,9 +2567,9 @@ Public Module CAMDrawingLib
             topView.Position = app.TransientGeometry.CreatePoint2d(baseX, actualTopY)
             
             views.Add(topView)
-            logs.Add("CAMDrawingLib: Top view created")
+            UtilsLib.LogInfo("CAMDrawingLib: Top view created")
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to create Top view: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to create Top view: " & ex.Message)
         End Try
         
         ' Add Bottom view (below base)
@@ -2625,9 +2587,9 @@ Public Module CAMDrawingLib
             bottomView.Position = app.TransientGeometry.CreatePoint2d(baseX, actualBottomY)
             
             views.Add(bottomView)
-            logs.Add("CAMDrawingLib: Bottom view created")
+            UtilsLib.LogInfo("CAMDrawingLib: Bottom view created")
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to create Bottom view: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to create Bottom view: " & ex.Message)
         End Try
         
         ' Add Left view (left of base)
@@ -2644,9 +2606,9 @@ Public Module CAMDrawingLib
             leftView.Position = app.TransientGeometry.CreatePoint2d(actualLeftX, baseY)
             
             views.Add(leftView)
-            logs.Add("CAMDrawingLib: Left view created")
+            UtilsLib.LogInfo("CAMDrawingLib: Left view created")
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to create Left view: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to create Left view: " & ex.Message)
         End Try
         
         ' Add Right view (right of base)
@@ -2663,9 +2625,9 @@ Public Module CAMDrawingLib
             rightView.Position = app.TransientGeometry.CreatePoint2d(actualRightX, baseY)
             
             views.Add(rightView)
-            logs.Add("CAMDrawingLib: Right view created")
+            UtilsLib.LogInfo("CAMDrawingLib: Right view created")
         Catch ex As Exception
-            logs.Add("CAMDrawingLib: Failed to create Right view: " & ex.Message)
+            UtilsLib.LogWarn("CAMDrawingLib: Failed to create Right view: " & ex.Message)
         End Try
         
         ' Add Back view (below Bottom view)
@@ -2685,13 +2647,13 @@ Public Module CAMDrawingLib
                 backView.Position = app.TransientGeometry.CreatePoint2d(baseX, actualBackY)
                 
                 views.Add(backView)
-                logs.Add("CAMDrawingLib: Back view created (projected from Bottom)")
+                UtilsLib.LogInfo("CAMDrawingLib: Back view created (projected from Bottom)")
             Catch ex As Exception
-                logs.Add("CAMDrawingLib: Failed to create Back view: " & ex.Message)
+                UtilsLib.LogWarn("CAMDrawingLib: Failed to create Back view: " & ex.Message)
             End Try
         End If
         
-        logs.Add("CAMDrawingLib: Total views: " & views.Count)
+        UtilsLib.LogInfo("CAMDrawingLib: Total views: " & views.Count)
         Return views
     End Function
 
@@ -2705,7 +2667,6 @@ Public Module CAMDrawingLib
     ' excludeTitleBlock: if true, don't include title block in content bounds calculation
     Public Sub FitSheetToContent(sheet As Sheet, _
                                   app As Inventor.Application, _
-                                  logs As List(Of String), _
                                   Optional paddingPercent As Double = DEFAULT_SHEET_PADDING, _
                                   Optional borderPaddingCm As Double = DEFAULT_BORDER_PADDING, _
                                   Optional excludeTitleBlock As Boolean = True)
@@ -2716,7 +2677,7 @@ Public Module CAMDrawingLib
         Next
         
         If views.Count = 0 Then
-            logs.Add("CAMDrawingLib: No views on sheet to fit")
+            UtilsLib.LogWarn("CAMDrawingLib: No views on sheet to fit")
             Return
         End If
         
@@ -2740,7 +2701,7 @@ Public Module CAMDrawingLib
         Dim contentWidth As Double = maxX - minX
         Dim contentHeight As Double = maxY - minY
         
-        logs.Add("CAMDrawingLib: Content bounds: " & FormatNumber(contentWidth * 10, 1) & " x " & _
+        UtilsLib.LogInfo("CAMDrawingLib: Content bounds: " & FormatNumber(contentWidth * 10, 1) & " x " & _
                  FormatNumber(contentHeight * 10, 1) & " mm")
         
         ' Calculate sheet size with padding
@@ -2755,11 +2716,11 @@ Public Module CAMDrawingLib
         Dim sheetWidthMm As Double = Math.Max(paddedWidth * 10, 100)
         Dim sheetHeightMm As Double = Math.Max(paddedHeight * 10, 80)
         
-        logs.Add("CAMDrawingLib: Target sheet size: " & FormatNumber(sheetWidthMm, 1) & " x " & _
+        UtilsLib.LogInfo("CAMDrawingLib: Target sheet size: " & FormatNumber(sheetWidthMm, 1) & " x " & _
                  FormatNumber(sheetHeightMm, 1) & " mm (padding: " & FormatNumber(paddingPercent * 100, 0) & "%)")
         
         ' Resize sheet FIRST (Inventor may swap Width/Height for portrait sheets)
-        ResizeSheet(sheet, sheetWidthMm, sheetHeightMm, logs)
+        ResizeSheet(sheet, sheetWidthMm, sheetHeightMm)
         
         ' Get ACTUAL sheet dimensions after resize (Inventor enforces Width >= Height)
         Dim actualWidthCm As Double = sheet.Width
@@ -2782,7 +2743,7 @@ Public Module CAMDrawingLib
             view.Position = newPos
         Next
         
-        logs.Add("CAMDrawingLib: Views moved (offset: " & FormatNumber(offsetX * 10, 1) & ", " & _
+        UtilsLib.LogInfo("CAMDrawingLib: Views moved (offset: " & FormatNumber(offsetX * 10, 1) & ", " & _
                  FormatNumber(offsetY * 10, 1) & " mm)")
     End Sub
     
