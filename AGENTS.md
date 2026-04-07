@@ -45,6 +45,7 @@ Tooted/
 | Extract project name from path | `UtilsLib.ExtractProjectName(filePath)` |
 | Get project folder path | `UtilsLib.GetProjectPath(filePath)` |
 | Create Vault folders recursively | `VaultNumberingLib.EnsureVaultFolderRecursive(conn, vaultPath)` |
+| Register auto-update handler | `DocumentUpdateLib.RegisterUpdateHandler(doc, iLogicAuto, uid, codeLines, triggers)` |
 
 ## API Documentation References
 
@@ -742,6 +743,75 @@ SetCustomProp(doc, "Name", "Value")
 - iLogic compiles each rule independently, so callers will fail with `Argument not specified` errors
 - Search for the function name across all `.vb` files to find callers
 - This causes: `Argument not specified for parameter 'paramName' of 'FunctionName'`
+
+### Document Update Pattern (DocumentUpdateLib)
+
+Use `DocumentUpdateLib` to register code that should run automatically when parameters change or other events occur. The library manages a local "Uuenda" rule with UID-guarded sections.
+
+**When to use:**
+- Your script sets up parameters that need recalculation when changed
+- You want code to run on parameter changes, save events, or document open
+- Multiple features need to share an auto-triggered update rule
+
+**UpdateTrigger Enum (callers never need PropIds):**
+
+| Enum Value | Event |
+|------------|-------|
+| `ModelParameterChange` | Any model parameter changes |
+| `UserParameterChange` | Any user parameter changes |
+| `BeforeSave` | Before document is saved |
+| `AfterSave` | After document is saved |
+| `DocumentOpen` | After document is opened |
+| `PartGeometryChange` | Part geometry changes (parts only) |
+| `MaterialChange` | Material changes (parts only) |
+| `iPropertyChange` | Any iProperty changes |
+
+**Usage Example:**
+
+```vb
+AddVbFile "Lib/DocumentUpdateLib.vb"
+AddVbFile "Lib/SupportPlacementLib.vb"
+
+Sub Main()
+    Dim doc As Document = ThisDoc.Document
+    Dim iLogicAuto As Object = iLogicVb.Automation
+    
+    ' Register update handler with triggers
+    Dim updateCode() As String = {
+        "SupportPlacementLib.UpdateAllSupportLengths(ThisApplication, ThisDoc.Document)"
+    }
+    Dim triggers() As DocumentUpdateLib.UpdateTrigger = {
+        DocumentUpdateLib.UpdateTrigger.ModelParameterChange,
+        DocumentUpdateLib.UpdateTrigger.UserParameterChange
+    }
+    DocumentUpdateLib.RegisterUpdateHandler(doc, iLogicAuto, "SupportLengths", updateCode, triggers)
+End Sub
+```
+
+**API Reference:**
+
+| Function | Description |
+|----------|-------------|
+| `RegisterUpdateHandler(doc, iLogicAuto, uid, codeLines(), triggers())` | Adds/updates a section in the Uuenda rule |
+| `RemoveUpdateHandler(doc, iLogicAuto, uid)` | Removes a section from the Uuenda rule |
+| `EnsureUpdateRule(doc, iLogicAuto)` | Creates the Uuenda rule if missing |
+| `AddTrigger(doc, trigger)` | Adds a trigger (skips if already exists) |
+
+**Section Marker Format:**
+
+The Uuenda rule uses UID-guarded sections that should not be manually edited:
+
+```vb
+Sub Main()
+    ' === BEGIN: SupportLengths ===
+    SupportPlacementLib.UpdateAllSupportLengths(ThisApplication, ThisDoc.Document)
+    ' === END: SupportLengths ===
+    
+    ' === BEGIN: BoundingBoxStock ===
+    BoundingBoxStockLib.RecalculateStock(ThisApplication, ThisDoc.Document)
+    ' === END: BoundingBoxStock ===
+End Sub
+```
 
 ## Vault Integration
 

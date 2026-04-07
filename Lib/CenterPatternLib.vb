@@ -114,14 +114,24 @@ Public Module CenterPatternLib
     
     ''' <summary>
     ''' Build the offset formula (distance from start plane to first instance).
+    ''' For symmetric mode without endpoints, calculates from center to maintain symmetry when span changes.
     ''' </summary>
-    Public Function BuildOffsetFormula(spacingParam As String, includeEnds As Boolean) As String
+    Public Function BuildOffsetFormula(spacingParam As String, includeEnds As Boolean, _
+                                        mode As String, spanParam As String, countParam As String) As String
         If includeEnds Then
             ' With ends: first instance at start plane (offset = 0)
             Return "0 mm"
         Else
-            ' Without ends: first instance offset by one spacing
-            Return spacingParam
+            If mode = "Symmetric" Then
+                ' Symmetric without ends: first instance relative to center
+                ' offset = span/2 - floor((count-1)/2) * spacing
+                ' Since count is always odd (2k+1), floor((count-1)/2) = k
+                ' This ensures when span changes, the pattern stays symmetric around span/2
+                Return spanParam & " / 2 - floor((" & countParam & " - 1) / 2) * " & spacingParam
+            Else
+                ' Uniform without ends: first instance offset by one spacing
+                Return spacingParam
+            End If
         End If
     End Function
 
@@ -589,6 +599,7 @@ Public Module CenterPatternLib
     ''' Parameters:
     '''   app - Inventor.Application
     '''   asmDoc - Assembly document
+    '''   iLogicAuto - iLogicVb.Automation object (for update handler registration)
     '''   seedOcc - The occurrence to pattern
     '''   startGeometry - Face/plane defining start boundary
     '''   endGeometry - Face/plane defining end boundary
@@ -602,6 +613,7 @@ Public Module CenterPatternLib
     ''' </summary>
     Public Function CreateCenterPattern(app As Inventor.Application, _
                                          asmDoc As AssemblyDocument, _
+                                         iLogicAuto As Object, _
                                          seedOcc As ComponentOccurrence, _
                                          startGeometry As Object, _
                                          endGeometry As Object, _
@@ -721,7 +733,7 @@ Public Module CenterPatternLib
         logs.Add("CenterPatternLib: " & spacingParamName & " = " & spacingFormula)
         
         ' Offset (formula)
-        Dim offsetFormula As String = BuildOffsetFormula(spacingParamName, includeEnds)
+        Dim offsetFormula As String = BuildOffsetFormula(spacingParamName, includeEnds, mode, spanParamName, countParamName)
         SetParameterFormula(asmDoc, offsetParamName, offsetFormula)
         logs.Add("CenterPatternLib: " & offsetParamName & " = " & offsetFormula)
         
@@ -739,6 +751,11 @@ Public Module CenterPatternLib
                      ", Offset=" & actualOffset.ToString("0.00") & "mm")
         Catch
         End Try
+        
+        ' Register update handler to automatically update span when geometry changes
+        If iLogicAuto IsNot Nothing Then
+            RegisterSpanUpdateHandler(asmDoc, iLogicAuto, baseName, startPlaneName, endPlaneName, axisName, spanParamName, logs)
+        End If
         
         ' 7. Create perpendicular constraints FIRST (to lock Y and Z before moving along axis)
         logs.Add("CenterPatternLib: Creating perpendicular constraints...")
@@ -793,7 +810,88 @@ Public Module CenterPatternLib
     End Function
 
     ' ============================================================================
-    ' SECTION 7: Configuration Storage (Attributes)
+    ' SECTION 7: Span Update Handler
+    ' ============================================================================
+    
+    ''' <summary>
+    ''' Registers an update handler with DocumentUpdateLib to automatically
+    ''' update the span parameter when geometry changes.
+    ''' </summary>
+    Public Sub RegisterSpanUpdateHandler(doc As Document, _
+                                          iLogicAuto As Object, _
+                                          baseName As String, _
+                                          startPlaneName As String, _
+                                          endPlaneName As String, _
+                                          axisName As String, _
+                                          spanParamName As String, _
+                                          Optional ByRef logs As System.Collections.Generic.List(Of String) = Nothing)
+        If doc Is Nothing OrElse iLogicAuto Is Nothing Then
+            If logs IsNot Nothing Then logs.Add("CenterPatternLib: Cannot register update handler - missing doc or iLogicAuto")
+            Exit Sub
+        End If
+        
+        ' Build the update code that will run when parameters change
+        ' Uses the work axis direction to measure the distance between planes
+        Dim updateCode() As String = { _
+            "' Update span for pattern: " & baseName, _
+            "Dim asmDoc As AssemblyDocument = CType(ThisDoc.Document, AssemblyDocument)", _
+            "Dim asmDef As AssemblyComponentDefinition = asmDoc.ComponentDefinition", _
+            "Dim startWP As WorkPlane = Nothing", _
+            "Dim endWP As WorkPlane = Nothing", _
+            "Dim dirAxis As WorkAxis = Nothing", _
+            "For Each wp As WorkPlane In asmDef.WorkPlanes", _
+            "    If wp.Name = """ & startPlaneName & """ Then startWP = wp", _
+            "    If wp.Name = """ & endPlaneName & """ Then endWP = wp", _
+            "Next", _
+            "For Each wa As WorkAxis In asmDef.WorkAxes", _
+            "    If wa.Name = """ & axisName & """ Then dirAxis = wa", _
+            "Next", _
+            "If startWP IsNot Nothing AndAlso endWP IsNot Nothing AndAlso dirAxis IsNot Nothing Then", _
+            "    Dim p1 As Plane = startWP.Plane", _
+            "    Dim p2 As Plane = endWP.Plane", _
+            "    Dim axisDir As UnitVector = dirAxis.Line.Direction", _
+            "    ' Measure distance along axis direction", _
+            "    Dim dx As Double = p2.RootPoint.X - p1.RootPoint.X", _
+            "    Dim dy As Double = p2.RootPoint.Y - p1.RootPoint.Y", _
+            "    Dim dz As Double = p2.RootPoint.Z - p1.RootPoint.Z", _
+            "    Dim dist As Double = Math.Abs(dx * axisDir.X + dy * axisDir.Y + dz * axisDir.Z) * 10", _
+            "    Dim params As Parameters = asmDoc.ComponentDefinition.Parameters", _
+            "    Try", _
+            "        Dim p As Parameter = params.Item(""" & spanParamName & """)", _
+            "        Dim currentVal As Double = p.Value * 10", _
+            "        If Math.Abs(currentVal - dist) > 0.01 Then", _
+            "            p.Expression = dist.ToString(System.Globalization.CultureInfo.InvariantCulture) & "" mm""", _
+            "        End If", _
+            "    Catch", _
+            "    End Try", _
+            "End If" _
+        }
+        
+        ' Triggers: model parameter change causes geometry to move, which should update span
+        Dim triggers() As DocumentUpdateLib.UpdateTrigger = { _
+            DocumentUpdateLib.UpdateTrigger.ModelParameterChange _
+        }
+        
+        Try
+            Dim success As Boolean = DocumentUpdateLib.RegisterUpdateHandler( _
+                doc, iLogicAuto, "CenterPattern_" & baseName, updateCode, triggers)
+            
+            If logs IsNot Nothing Then
+                If success Then
+                    logs.Add("CenterPatternLib: Registered span update handler for '" & baseName & "'")
+                Else
+                    logs.Add("CenterPatternLib: WARNING - Failed to register span update handler")
+                End If
+            End If
+        Catch ex As Exception
+            If logs IsNot Nothing Then
+                logs.Add("CenterPatternLib: ERROR registering update handler: " & ex.Message)
+            End If
+        End Try
+    End Sub
+
+    ' ============================================================================
+    ' SECTION 8: Configuration Storage (Attributes)
     ' ============================================================================
     
     ''' <summary>

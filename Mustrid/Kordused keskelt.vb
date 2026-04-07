@@ -26,11 +26,13 @@ AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/GeoLib.vb"
 AddVbFile "Lib/WorkFeatureLib.vb"
 AddVbFile "Lib/PatternLib.vb"
+AddVbFile "Lib/DocumentUpdateLib.vb"
 AddVbFile "Lib/CenterPatternLib.vb"
 
 Sub Main()
     Dim app As Inventor.Application = ThisApplication
     Dim doc As Document = app.ActiveDocument
+    Dim iLogicAuto As Object = iLogicVb.Automation
     
     ' Validate document
     If doc Is Nothing Then
@@ -48,14 +50,14 @@ Sub Main()
     Dim asmDoc As AssemblyDocument = CType(doc, AssemblyDocument)
     
     ' Run the main picker loop
-    RunPatternSetup(app, asmDoc)
+    RunPatternSetup(app, asmDoc, iLogicAuto)
 End Sub
 
 ' ============================================================================
 ' Main Setup Loop
 ' ============================================================================
 
-Sub RunPatternSetup(app As Inventor.Application, asmDoc As AssemblyDocument)
+Sub RunPatternSetup(app As Inventor.Application, asmDoc As AssemblyDocument, iLogicAuto As Object)
     ' State variables
     Dim seedOcc As ComponentOccurrence = Nothing
     Dim baseName As String = ""
@@ -88,7 +90,7 @@ Sub RunPatternSetup(app As Inventor.Application, asmDoc As AssemblyDocument)
             Case DialogResult.OK
                 ' Create the pattern
                 If ValidateInputs(seedOcc, startGeometry, endGeometry, maxSpacingInput) Then
-                    CreatePattern(app, asmDoc, seedOcc, baseName, _
+                    CreatePattern(app, asmDoc, iLogicAuto, seedOcc, baseName, _
                                   startGeometry, endGeometry, maxSpacingInput, mode, includeEnds)
                     Exit Do
                 End If
@@ -435,6 +437,7 @@ End Function
 
 Sub CreatePattern(app As Inventor.Application, _
                   asmDoc As AssemblyDocument, _
+                  iLogicAuto As Object, _
                   seedOcc As ComponentOccurrence, _
                   baseName As String, _
                   startGeometry As Object, _
@@ -463,7 +466,7 @@ Sub CreatePattern(app As Inventor.Application, _
     ' Create pattern using library
     Dim logs As New System.Collections.Generic.List(Of String)
     Dim success As Boolean = CenterPatternLib.CreateCenterPattern( _
-        app, asmDoc, seedOcc, _
+        app, asmDoc, iLogicAuto, seedOcc, _
         startGeometry, endGeometry, _
         maxSpacingMm, mode, includeEnds, baseName, logs)
     
