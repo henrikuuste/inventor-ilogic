@@ -340,6 +340,332 @@ Public Module MakeComponentsLib
         Return ""
     End Function
     
+    ' Search for a part file by matching Description iProperty with body name
+    ' Searches depth-first from startPath, going up to parent folders
+    ' Limits search to 2 levels from vaultRoot (e.g., C:\_SoftcomVault\Tooted\Project)
+    ' Returns the found path, or empty string if not found
+    Public Function FindPartByDescription(app As Inventor.Application, _
+                                          bodyName As String, _
+                                          startPath As String, _
+                                          vaultRoot As String) As String
+        If String.IsNullOrEmpty(bodyName) OrElse String.IsNullOrEmpty(startPath) Then
+            Return ""
+        End If
+        
+        Try
+            ' Calculate minimum search depth (2 levels from vault root)
+            Dim minDepth As Integer = 2
+            If Not String.IsNullOrEmpty(vaultRoot) Then
+                minDepth = GetPathDepth(vaultRoot) + 2
+            End If
+            
+            Dim currentPath As String = startPath
+            Dim searchedPaths As New System.Collections.Generic.HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+            
+            ' Search upward from startPath until we reach minimum depth
+            While Not String.IsNullOrEmpty(currentPath) AndAlso GetPathDepth(currentPath) >= minDepth
+                ' Search this folder and its children
+                Dim result As String = SearchFolderForDescription(app, bodyName, currentPath, searchedPaths)
+                If Not String.IsNullOrEmpty(result) Then
+                    Return result
+                End If
+                
+                ' Go up one level
+                Dim parentPath As String = System.IO.Path.GetDirectoryName(currentPath)
+                If String.IsNullOrEmpty(parentPath) OrElse parentPath = currentPath Then
+                    Exit While
+                End If
+                currentPath = parentPath
+            End While
+            
+        Catch ex As Exception
+            UtilsLib.LogWarn("MakeComponentsLib: Error searching by description: " & ex.Message)
+        End Try
+        
+        Return ""
+    End Function
+    
+    ' Get the depth of a path (number of directory levels)
+    Private Function GetPathDepth(path As String) As Integer
+        If String.IsNullOrEmpty(path) Then Return 0
+        Return path.Split(System.IO.Path.DirectorySeparatorChar).Length
+    End Function
+    
+    ' Search a folder and its subfolders for a part with matching Description
+    Private Function SearchFolderForDescription(app As Inventor.Application, _
+                                                bodyName As String, _
+                                                folderPath As String, _
+                                                searchedPaths As System.Collections.Generic.HashSet(Of String)) As String
+        ' Skip if already searched or doesn't exist
+        If searchedPaths.Contains(folderPath) Then Return ""
+        If Not System.IO.Directory.Exists(folderPath) Then Return ""
+        
+        searchedPaths.Add(folderPath)
+        
+        ' Skip OldVersions folders
+        If folderPath.IndexOf("\OldVersions", StringComparison.OrdinalIgnoreCase) >= 0 Then
+            Return ""
+        End If
+        
+        Try
+            ' Search .ipt files in current folder first
+            Dim iptFiles() As String = System.IO.Directory.GetFiles(folderPath, "*.ipt", System.IO.SearchOption.TopDirectoryOnly)
+            
+            For Each iptFile As String In iptFiles
+                ' Skip OldVersions
+                If iptFile.IndexOf("\OldVersions\", StringComparison.OrdinalIgnoreCase) >= 0 Then
+                    Continue For
+                End If
+                
+                ' Check if Description matches body name
+                Dim description As String = GetDescriptionFromFile(app, iptFile)
+                If Not String.IsNullOrEmpty(description) AndAlso _
+                   description.Equals(bodyName, StringComparison.OrdinalIgnoreCase) Then
+                    UtilsLib.LogInfo("MakeComponentsLib: Found match for '" & bodyName & "' at: " & iptFile)
+                    Return iptFile
+                End If
+            Next
+            
+            ' Search subfolders
+            Dim subDirs() As String = System.IO.Directory.GetDirectories(folderPath)
+            For Each subDir As String In subDirs
+                Dim result As String = SearchFolderForDescription(app, bodyName, subDir, searchedPaths)
+                If Not String.IsNullOrEmpty(result) Then
+                    Return result
+                End If
+            Next
+            
+        Catch ex As Exception
+            ' Ignore access errors for individual folders
+        End Try
+        
+        Return ""
+    End Function
+    
+    ' Get Description iProperty from a part file without fully opening it
+    Private Function GetDescriptionFromFile(app As Inventor.Application, filePath As String) As String
+        Try
+            ' Use PropertySets to read without full document open
+            Dim propSets As Object = app.DesignProjectManager.GetInventorProjectSettingsPropertySets(filePath)
+            If propSets IsNot Nothing Then
+                Try
+                    Dim designProps As PropertySet = CType(propSets, PropertySets).Item("Design Tracking Properties")
+                    Dim descValue As Object = designProps.Item("Description").Value
+                    If descValue IsNot Nothing Then
+                        Return CStr(descValue).Trim()
+                    End If
+                Catch
+                End Try
+            End If
+        Catch
+            ' Fall back to opening the document if property access fails
+            Try
+                Dim partDoc As PartDocument = CType(app.Documents.Open(filePath, False), PartDocument)
+                Try
+                    Dim designProps As PropertySet = partDoc.PropertySets.Item("Design Tracking Properties")
+                    Dim descValue As Object = designProps.Item("Description").Value
+                    If descValue IsNot Nothing Then
+                        Return CStr(descValue).Trim()
+                    End If
+                Finally
+                    partDoc.Close(True)
+                End Try
+            Catch
+            End Try
+        End Try
+        
+        Return ""
+    End Function
+    
+    ' Sheet metal GUID for checking part subtype
+    Private Const SHEET_METAL_GUID As String = "{9C464203-9BAE-11D3-8BAD-0060B0CE6BB4}"
+    
+    ' Read properties from a part document and populate BodyInfo
+    ' Reads material, sheet metal status, and axis info
+    ' Returns True if part was successfully read
+    Public Function ReadPropertiesFromPart(app As Inventor.Application, _
+                                           partPath As String, _
+                                           bi As BodyInfo) As Boolean
+        If String.IsNullOrEmpty(partPath) OrElse Not System.IO.File.Exists(partPath) Then
+            Return False
+        End If
+        
+        Dim partDoc As PartDocument = Nothing
+        Dim wasAlreadyOpen As Boolean = False
+        
+        Try
+            ' Check if document is already open
+            For Each doc As Document In app.Documents
+                If doc.FullDocumentName.Equals(partPath, StringComparison.OrdinalIgnoreCase) Then
+                    partDoc = CType(doc, PartDocument)
+                    wasAlreadyOpen = True
+                    Exit For
+                End If
+            Next
+            
+            ' Open document if not already open
+            If partDoc Is Nothing Then
+                partDoc = CType(app.Documents.Open(partPath, False), PartDocument)
+            End If
+            
+            ' Read material
+            Try
+                bi.MaterialName = partDoc.ComponentDefinition.Material.Name
+                UtilsLib.LogInfo("MakeComponentsLib: Read material: " & bi.MaterialName)
+            Catch
+                bi.MaterialName = ""
+            End Try
+            
+            ' Check if sheet metal
+            bi.ConvertToSheetMetal = (partDoc.SubType = SHEET_METAL_GUID)
+            If bi.ConvertToSheetMetal Then
+                UtilsLib.LogInfo("MakeComponentsLib: Part is sheet metal")
+            End If
+            
+            ' Read axis info from custom properties (BB_ThicknessAxis, BB_WidthAxis)
+            Try
+                Dim userProps As PropertySet = partDoc.PropertySets.Item("Inventor User Defined Properties")
+                
+                Dim thicknessAxis As String = GetCustomPropertyValueFromSet(userProps, "BB_ThicknessAxis", "")
+                Dim widthAxis As String = GetCustomPropertyValueFromSet(userProps, "BB_WidthAxis", "")
+                
+                If Not String.IsNullOrEmpty(thicknessAxis) Then
+                    bi.ThicknessVector = thicknessAxis
+                    UtilsLib.LogInfo("MakeComponentsLib: Read thickness axis: " & thicknessAxis)
+                End If
+                
+                If Not String.IsNullOrEmpty(widthAxis) Then
+                    bi.WidthVector = widthAxis
+                    UtilsLib.LogInfo("MakeComponentsLib: Read width axis: " & widthAxis)
+                End If
+                
+                ' Compute length vector if we have thickness and width
+                If Not String.IsNullOrEmpty(thicknessAxis) AndAlso Not String.IsNullOrEmpty(widthAxis) Then
+                    ComputeLengthVector(bi)
+                End If
+                
+                ' Read dimension values from properties if available
+                Dim thicknessStr As String = GetCustomPropertyValueFromSet(userProps, "Thickness", "")
+                Dim widthStr As String = GetCustomPropertyValueFromSet(userProps, "Width", "")
+                Dim lengthStr As String = GetCustomPropertyValueFromSet(userProps, "Length", "")
+                
+                If Not String.IsNullOrEmpty(thicknessStr) Then
+                    Dim thicknessVal As Double = 0
+                    If Double.TryParse(thicknessStr.Replace(" mm", "").Replace(",", "."), _
+                                       System.Globalization.NumberStyles.Any, _
+                                       System.Globalization.CultureInfo.InvariantCulture, thicknessVal) Then
+                        bi.ThicknessValue = thicknessVal / 10 ' Convert mm to cm
+                    End If
+                End If
+                
+                If Not String.IsNullOrEmpty(widthStr) Then
+                    Dim widthVal As Double = 0
+                    If Double.TryParse(widthStr.Replace(" mm", "").Replace(",", "."), _
+                                       System.Globalization.NumberStyles.Any, _
+                                       System.Globalization.CultureInfo.InvariantCulture, widthVal) Then
+                        bi.WidthValue = widthVal / 10 ' Convert mm to cm
+                    End If
+                End If
+                
+                If Not String.IsNullOrEmpty(lengthStr) Then
+                    Dim lengthVal As Double = 0
+                    If Double.TryParse(lengthStr.Replace(" mm", "").Replace(",", "."), _
+                                       System.Globalization.NumberStyles.Any, _
+                                       System.Globalization.CultureInfo.InvariantCulture, lengthVal) Then
+                        bi.LengthValue = lengthVal / 10 ' Convert mm to cm
+                    End If
+                End If
+                
+            Catch ex As Exception
+                UtilsLib.LogWarn("MakeComponentsLib: Could not read axis properties: " & ex.Message)
+            End Try
+            
+            Return True
+            
+        Catch ex As Exception
+            UtilsLib.LogWarn("MakeComponentsLib: Error reading part properties: " & ex.Message)
+            Return False
+        Finally
+            ' Close document if we opened it
+            If partDoc IsNot Nothing AndAlso Not wasAlreadyOpen Then
+                Try
+                    partDoc.Close(True)
+                Catch
+                End Try
+            End If
+        End Try
+    End Function
+    
+    ' Helper to get custom property value from a PropertySet
+    Private Function GetCustomPropertyValueFromSet(userProps As PropertySet, propName As String, defaultValue As String) As String
+        Try
+            Return CStr(userProps.Item(propName).Value)
+        Catch
+            Return defaultValue
+        End Try
+    End Function
+    
+    ' Compute length vector from thickness and width vectors
+    Private Sub ComputeLengthVector(bi As BodyInfo)
+        Try
+            ' Parse thickness vector
+            Dim tx As Double = 0, ty As Double = 0, tz As Double = 0
+            If Not ParseVectorString(bi.ThicknessVector, tx, ty, tz) Then Exit Sub
+            
+            ' Parse width vector
+            Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
+            If Not ParseVectorString(bi.WidthVector, wx, wy, wz) Then Exit Sub
+            
+            ' Length = cross product of thickness and width
+            Dim lx As Double = ty * wz - tz * wy
+            Dim ly As Double = tz * wx - tx * wz
+            Dim lz As Double = tx * wy - ty * wx
+            
+            ' Normalize
+            Dim len As Double = Math.Sqrt(lx * lx + ly * ly + lz * lz)
+            If len > 0.0001 Then
+                lx /= len : ly /= len : lz /= len
+                bi.LengthVector = VectorToString(lx, ly, lz)
+            End If
+        Catch
+        End Try
+    End Sub
+    
+    ' Parse vector string (handles both "X", "Y", "Z" and "V:x,y,z" formats)
+    Private Function ParseVectorString(vectorStr As String, ByRef x As Double, ByRef y As Double, ByRef z As Double) As Boolean
+        If String.IsNullOrEmpty(vectorStr) Then Return False
+        
+        ' Handle simple axis names
+        Select Case vectorStr.ToUpper()
+            Case "X"
+                x = 1 : y = 0 : z = 0
+                Return True
+            Case "Y"
+                x = 0 : y = 1 : z = 0
+                Return True
+            Case "Z"
+                x = 0 : y = 0 : z = 1
+                Return True
+        End Select
+        
+        ' Handle vector format "V:x,y,z"
+        If vectorStr.StartsWith("V:", StringComparison.OrdinalIgnoreCase) Then
+            Dim parts() As String = vectorStr.Substring(2).Split(","c)
+            If parts.Length = 3 Then
+                If Double.TryParse(parts(0), System.Globalization.NumberStyles.Any, _
+                                   System.Globalization.CultureInfo.InvariantCulture, x) AndAlso _
+                   Double.TryParse(parts(1), System.Globalization.NumberStyles.Any, _
+                                   System.Globalization.CultureInfo.InvariantCulture, y) AndAlso _
+                   Double.TryParse(parts(2), System.Globalization.NumberStyles.Any, _
+                                   System.Globalization.CultureInfo.InvariantCulture, z) Then
+                    Return True
+                End If
+            End If
+        End If
+        
+        Return False
+    End Function
+    
     Private Sub ClearBodyProperties(userProps As PropertySet)
         Dim toRemove As New System.Collections.Generic.List(Of String)
         

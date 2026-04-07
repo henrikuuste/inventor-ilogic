@@ -195,7 +195,7 @@ Sub Main()
     
     Do
         dialogResult = ShowMainDialog(app, masterDoc, bodies, materials, vaultConnected, templates, masterPath, _
-                                      selectedTemplate, selectedSubfolder, _
+                                      workspaceRoot, selectedTemplate, selectedSubfolder, _
                                       projectName, assemblyAction, assemblyPath, pickBodyIndex)
         
         If dialogResult = DialogResult.Retry AndAlso pickBodyIndex >= 0 AndAlso pickBodyIndex < bodies.Count Then
@@ -234,8 +234,33 @@ Sub Main()
         If bi.Selected Then selectedBodies.Add(bi)
     Next
     
+    ' Count linked bodies (existing parts that user linked to bodies)
+    Dim linkedCount As Integer = 0
+    For Each bi As MakeComponentsLib.BodyInfo In bodies
+        If bi.PartExists Then linkedCount += 1
+    Next
+    
     If selectedBodies.Count = 0 Then
-        UtilsLib.LogWarn("Loo komponendid: No bodies selected")
+        ' No bodies selected for creation, but may have linked files - save and exit
+        If linkedCount > 0 Then
+            ' Save body links to master document
+            MakeComponentsLib.SaveBodyDataToMaster(masterDoc, bodies)
+            MakeComponentsLib.SaveGeneralSettings(masterDoc, New MakeComponentsLib.GeneralSettings() With {
+                .ProjectName = projectName,
+                .Template = selectedTemplate,
+                .Subfolder = selectedSubfolder,
+                .AssemblyAction = assemblyAction,
+                .AssemblyPath = assemblyPath
+            })
+            Try
+                masterDoc.Save()
+                UtilsLib.LogInfo("Loo komponendid: Saved " & linkedCount & " body link(s) to master")
+            Catch ex As Exception
+                UtilsLib.LogWarn("Loo komponendid: Could not save master: " & ex.Message)
+            End Try
+        Else
+            UtilsLib.LogWarn("Loo komponendid: No bodies selected")
+        End If
         Exit Sub
     End If
     
@@ -539,6 +564,7 @@ Function ShowMainDialog(app As Inventor.Application, _
                         vaultConnected As Boolean, _
                         templates As List(Of String), _
                         masterPath As String, _
+                        workspaceRoot As String, _
                         ByRef selectedTemplate As String, _
                         ByRef selectedSubfolder As String, _
                         ByRef projectName As String, _
@@ -767,9 +793,16 @@ Function ShowMainDialog(app As Inventor.Application, _
     Dim colStatus As New DataGridViewTextBoxColumn()
     colStatus.Name = "colStatus"
     colStatus.HeaderText = "Olek"
-    colStatus.Width = 120
+    colStatus.Width = 100
     colStatus.ReadOnly = True
     dgv.Columns.Add(colStatus)
+    
+    ' Column: Link file button (for linking/unlinking existing parts)
+    Dim colLink As New DataGridViewButtonColumn()
+    colLink.Name = "colLink"
+    colLink.HeaderText = ""
+    colLink.Width = 90
+    dgv.Columns.Add(colLink)
     
     ' Column: Thickness (read-only)
     Dim colT As New DataGridViewTextBoxColumn()
@@ -830,12 +863,14 @@ Function ShowMainDialog(app As Inventor.Application, _
         dgv.Rows(rowIndex).Cells("colSelected").Value = bi.Selected
         dgv.Rows(rowIndex).Cells("colName").Value = bi.Name
         
-        ' Show status - new or existing part
+        ' Show status and link button - new or existing part
         If bi.PartExists Then
             Dim partName As String = System.IO.Path.GetFileName(bi.CreatedPartPath)
             dgv.Rows(rowIndex).Cells("colStatus").Value = "* " & partName
+            dgv.Rows(rowIndex).Cells("colLink").Value = "Eemalda seos"
         Else
             dgv.Rows(rowIndex).Cells("colStatus").Value = "(uus)"
+            dgv.Rows(rowIndex).Cells("colLink").Value = "Seo fail..."
         End If
         
         dgv.Rows(rowIndex).Cells("colT").Value = FormatNumber(bi.ThicknessValue * 10, 2)
@@ -848,15 +883,72 @@ Function ShowMainDialog(app As Inventor.Application, _
     ' Store pick index in form Tag (can't use ByRef in lambda)
     frm.Tag = -1
     
-    ' Handle button click for face picking
+    ' Handle button clicks for face picking and file linking
     AddHandler dgv.CellContentClick, Sub(s, e)
-        If e.ColumnIndex = dgv.Columns("colPick").Index AndAlso e.RowIndex >= 0 Then
+        If e.RowIndex < 0 Then Exit Sub
+        
+        Dim idx As Integer = CInt(dgv.Rows(e.RowIndex).Tag)
+        
+        ' Handle "Vali pind" (pick face) button
+        If e.ColumnIndex = dgv.Columns("colPick").Index Then
             ' Save current state before closing
             SyncGridToBodyInfo(dgv, bodies)
             ' Store index in form.Tag instead of ByRef parameter
-            frm.Tag = CInt(dgv.Rows(e.RowIndex).Tag)
+            frm.Tag = idx
             frm.DialogResult = DialogResult.Retry
             frm.Close()
+        End If
+        
+        ' Handle "Seo fail..." / "Eemalda seos" (link/unlink) button
+        If e.ColumnIndex = dgv.Columns("colLink").Index Then
+            Dim bi As MakeComponentsLib.BodyInfo = bodies(idx)
+            
+            If bi.PartExists Then
+                ' Unlink: Clear the association
+                bi.CreatedPartPath = ""
+                bi.PartExists = False
+                bi.Selected = True  ' Now available for creation
+                dgv.Rows(e.RowIndex).Cells("colStatus").Value = "(uus)"
+                dgv.Rows(e.RowIndex).Cells("colLink").Value = "Seo fail..."
+                dgv.Rows(e.RowIndex).Cells("colSelected").Value = True
+            Else
+                ' Link: Try automatic search first to pre-fill file dialog
+                Dim autoFoundPath As String = MakeComponentsLib.FindPartByDescription( _
+                    app, bi.Name, masterPath, workspaceRoot)
+                
+                Dim ofd As New OpenFileDialog()
+                ofd.Filter = "Inventor Part|*.ipt"
+                ofd.Title = "Vali olemasolev detail"
+                
+                If Not String.IsNullOrEmpty(autoFoundPath) Then
+                    ' Found a match - open dialog at that location with file pre-selected
+                    ofd.InitialDirectory = System.IO.Path.GetDirectoryName(autoFoundPath)
+                    ofd.FileName = System.IO.Path.GetFileName(autoFoundPath)
+                Else
+                    ' No match found - open at master document location
+                    ofd.InitialDirectory = masterPath
+                End If
+                
+                If ofd.ShowDialog() = DialogResult.OK Then
+                    ' Read properties from the selected file
+                    MakeComponentsLib.ReadPropertiesFromPart(app, ofd.FileName, bi)
+                    
+                    bi.CreatedPartPath = ofd.FileName
+                    bi.PartExists = True
+                    bi.Selected = False  ' Don't recreate linked parts
+                    
+                    ' Update grid cells with imported properties
+                    Dim partName As String = System.IO.Path.GetFileName(ofd.FileName)
+                    dgv.Rows(e.RowIndex).Cells("colStatus").Value = "* " & partName
+                    dgv.Rows(e.RowIndex).Cells("colLink").Value = "Eemalda seos"
+                    dgv.Rows(e.RowIndex).Cells("colSelected").Value = False
+                    dgv.Rows(e.RowIndex).Cells("colSM").Value = bi.ConvertToSheetMetal
+                    dgv.Rows(e.RowIndex).Cells("colMat").Value = If(String.IsNullOrEmpty(bi.MaterialName), "", bi.MaterialName)
+                    dgv.Rows(e.RowIndex).Cells("colT").Value = FormatNumber(bi.ThicknessValue * 10, 2)
+                    dgv.Rows(e.RowIndex).Cells("colW").Value = FormatNumber(bi.WidthValue * 10, 2)
+                    dgv.Rows(e.RowIndex).Cells("colL").Value = FormatNumber(bi.LengthValue * 10, 2)
+                End If
+            End If
         End If
     End Sub
     
