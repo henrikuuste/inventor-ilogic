@@ -42,6 +42,15 @@ Sub Main()
         ShowResult(info.ToString())
         Exit Sub
     End Try
+    
+    If rules Is Nothing Then
+        info.AppendLine("No rules found in this document (Rules returned Nothing).")
+        info.AppendLine()
+        info.AppendLine("=== Test Complete ===")
+        ShowResult(info.ToString())
+        Exit Sub
+    End If
+    
     info.AppendLine()
     
     ' Analyze each rule
