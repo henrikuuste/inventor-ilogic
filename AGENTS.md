@@ -144,6 +144,8 @@ Dim customView As DrawingView = sheet.DrawingViews.AddBaseView( _
 | API optional parameters | Guessing parameter position | Use `NameValueMap` + `AdditionalOptions :=` |
 | Drawing view spacing | Model dimensions (`RangeBox`) | Actual view bounds (`view.Width`, `view.Height`) |
 | Extent dimension offset | 15mm offset (too close to model) | Use `CAMDrawingLib.DIMENSION_OFFSET` (25mm) |
+| Parameter formulas | `max(a, b)` with comma | `max(a; b)` with semicolon |
+| Parameter names | `00011_Name` (starts with digit) | `M_00011_Name` (prefix with letter) |
 
 ### Windows Forms Checklist
 
@@ -517,6 +519,40 @@ Some Inventor API members that work in standalone applications do not work in iL
 | `DerivedPartUniformScaleDef.Sketches2D` | `Public member not found` | Use `Sketches` instead (wrap in Try/Catch) |
 | Save after `smCompDef.Unfold()` | `E_FAIL` error during SaveAs | Call `smCompDef.FlatPattern.ExitEdit()` before save |
 
+### Parameter Formula Syntax
+
+When creating or updating Inventor parameters with formulas via the API, note the following:
+
+**Semicolon as argument separator**: Inventor uses semicolon `;` instead of comma `,` as the function argument separator in parameter formulas. This is locale-independent and applies when setting `Parameter.Expression` or using `UserParameters.AddByExpression`.
+
+```vb
+' BAD - comma separator causes E_INVALIDARG error
+param.Expression = "max(1, ceil(span / spacing) - 1)"
+
+' GOOD - semicolon separator works
+param.Expression = "max(1; ceil(span / spacing) - 1)"
+```
+
+**Common formula patterns:**
+
+| Formula | Syntax |
+|---------|--------|
+| Maximum of two values | `max(a; b)` |
+| Minimum of two values | `min(a; b)` |
+| Ceiling (round up) | `ceil(value)` |
+| Floor (round down) | `floor(value)` |
+| Round | `round(value)` or `round(value; decimals)` |
+
+**Example - Creating a parametric count:**
+
+```vb
+' Count formula with minimum of 1
+Dim countFormula As String = "max(1; ceil(" & spanParam & " / " & maxSpacingParam & ") - 1)"
+userParams.AddByExpression("MyCount", countFormula, UnitsTypeEnum.kUnitlessUnits)
+```
+
+**Parameter names must start with a letter**: Parameter names cannot begin with a digit. If using numeric identifiers, prefix with a letter (e.g., `M_00011_Ulatus` instead of `00011_Ulatus`).
+
 **Material enumeration example:**
 
 ```vb
@@ -796,4 +832,6 @@ ctrlDef.Execute()  ' Shows checkout dialog
 | Sheet resize fails | Move views within new bounds FIRST, then resize sheet |
 | Component patterns to browser folder | `BrowserFolder.Add()` fails with E_FAIL for all pattern types (Mirror, Rectangular, Circular). Patterns must be moved manually. |
 | Mirror Component Pattern suppression | Mirror Component Patterns (Inventor 2026 associative) cannot be suppressed via API. `NativeObject` throws E_NOTIMPL, and suppressing individual occurrences breaks/flips the pattern. User must manually configure model states for Mirror patterns. |
+| Parameter formula `max(a, b)` fails | Use semicolon: `max(a; b)` - Inventor uses `;` as argument separator |
+| Parameter name starts with digit | Prefix with letter: `M_00011_Name` instead of `00011_Name` |
 
