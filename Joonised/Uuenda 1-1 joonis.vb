@@ -26,6 +26,7 @@ AddReference "Connectivity.InventorAddin.EdmAddin"
 ' Libraries (UtilsLib before VaultNumberingLib for Vault logging)
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/VaultNumberingLib.vb"
+AddVbFile "Lib/FileSearchLib.vb"
 AddVbFile "Lib/CAMDrawingLib.vb"
 
 Imports System.Collections.Generic
@@ -68,21 +69,22 @@ Sub Main()
             
             UtilsLib.LogInfo("Uuenda 1:1 joonis: Part: " & partDoc.DisplayName & " (" & partNumber & ")")
             
-            ' Get workspace root for disk search
-            Dim searchRoot As String = System.IO.Path.GetDirectoryName(partDoc.FullDocumentName)
+            ' Get workspace root for disk search (depth-first search boundary)
+            Dim partFolder As String = System.IO.Path.GetDirectoryName(partDoc.FullDocumentName)
+            Dim vaultRoot As String = partFolder
             Dim vaultConn As Object = VaultNumberingLib.GetVaultConnection()
             If vaultConn IsNot Nothing Then
-                Dim workspaceRoot As String = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, searchRoot)
+                Dim workspaceRoot As String = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, partFolder)
                 If Not String.IsNullOrEmpty(workspaceRoot) Then
-                    searchRoot = workspaceRoot
+                    vaultRoot = workspaceRoot
                 End If
             End If
             
-            UtilsLib.LogInfo("Uuenda 1:1 joonis: Searching for drawing in: " & searchRoot)
+            UtilsLib.LogInfo("Uuenda 1:1 joonis: Searching for drawing - start: " & partFolder & ", limit: " & vaultRoot)
             
-            ' Search in open documents AND on disk for 1:1 drawing
+            ' Search in open documents AND on disk for 1:1 drawing (depth-first from part folder)
             Dim drawingPath As String = CAMDrawingLib.FindDrawingForPart( _
-                partNumber, searchRoot, app, CAMDrawingLib.DRAWING_TYPE_1TO1, True)
+                partNumber, vaultRoot, app, CAMDrawingLib.DRAWING_TYPE_1TO1, True, partFolder)
             If Not String.IsNullOrEmpty(drawingPath) Then
                 ' Found - check if already open
                 drawDoc = CAMDrawingLib.FindDrawingForPartInOpenDocs(partNumber, app, CAMDrawingLib.DRAWING_TYPE_1TO1)
@@ -121,17 +123,18 @@ Sub Main()
             Dim partsWithDrawingPaths As New List(Of Tuple(Of PartDocument, String)) ' Parts with drawings on disk (not open)
             Dim partPaths As New HashSet(Of String)
             
-            ' Get workspace root for disk search
-            Dim searchRoot As String = System.IO.Path.GetDirectoryName(asmDoc.FullDocumentName)
+            ' Get workspace root for disk search (depth-first search boundary)
+            Dim asmFolder As String = System.IO.Path.GetDirectoryName(asmDoc.FullDocumentName)
+            Dim vaultRoot As String = asmFolder
             Dim vaultConn As Object = VaultNumberingLib.GetVaultConnection()
             If vaultConn IsNot Nothing Then
-                Dim workspaceRoot As String = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, searchRoot)
+                Dim workspaceRoot As String = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, asmFolder)
                 If Not String.IsNullOrEmpty(workspaceRoot) Then
-                    searchRoot = workspaceRoot
+                    vaultRoot = workspaceRoot
                 End If
             End If
             
-            UtilsLib.LogInfo("Uuenda 1:1 joonis: Searching for drawings in: " & searchRoot)
+            UtilsLib.LogInfo("Uuenda 1:1 joonis: Searching for drawings - limit: " & vaultRoot)
             
             ' Find all unique parts and their drawings
             For Each occ As ComponentOccurrence In asmDoc.ComponentDefinition.Occurrences
@@ -150,9 +153,10 @@ Sub Main()
                                 If dd IsNot Nothing Then
                                     partsWithDrawings.Add(New Tuple(Of PartDocument, DrawingDocument)(pd, dd))
                                 Else
-                                    ' Search on disk
+                                    ' Search on disk (depth-first from part's folder)
+                                    Dim partFolder As String = System.IO.Path.GetDirectoryName(pd.FullDocumentName)
                                     Dim drawingPath As String = CAMDrawingLib.FindDrawingForPart( _
-                                        pn, searchRoot, app, CAMDrawingLib.DRAWING_TYPE_1TO1, True)
+                                        pn, vaultRoot, app, CAMDrawingLib.DRAWING_TYPE_1TO1, True, partFolder)
                                     If Not String.IsNullOrEmpty(drawingPath) Then
                                         partsWithDrawingPaths.Add(New Tuple(Of PartDocument, String)(pd, drawingPath))
                                     End If

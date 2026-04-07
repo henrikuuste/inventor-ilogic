@@ -420,5 +420,102 @@ Public Module VaultNumberingLib
             Return False
         End If
     End Function
+    
+    ' Ensure a Vault folder exists, creating all parent folders as needed (recursive)
+    ' Unlike EnsureVaultFolder which only creates the last segment, this function
+    ' creates the entire folder hierarchy from root to leaf.
+    ' Example: EnsureVaultFolderRecursive(conn, "$/Tooted/Lume/Alusmoodulid/Iste")
+    '   Creates: $/Tooted (if needed), then $/Tooted/Lume, then $/Tooted/Lume/Alusmoodulid, etc.
+    ' Parameters:
+    '   conn - Vault connection object (from GetVaultConnection)
+    '   vaultPath - Full Vault path starting with $/ (e.g., "$/Tooted/Lume/Subfolder")
+    ' Returns: The folder object, or Nothing if creation failed
+    Public Function EnsureVaultFolderRecursive(conn As Object, vaultPath As String) As Object
+        If conn Is Nothing Then
+            UtilsLib.LogWarn("VaultNumberingLib: No Vault connection for EnsureVaultFolderRecursive")
+            Return Nothing
+        End If
+        
+        If String.IsNullOrEmpty(vaultPath) OrElse Not vaultPath.StartsWith("$") Then
+            UtilsLib.LogWarn("VaultNumberingLib: Invalid vault path for recursive creation: " & vaultPath)
+            Return Nothing
+        End If
+        
+        ' First check if folder already exists (fast path)
+        Dim existingFolder As Object = GetVaultFolder(conn, vaultPath)
+        If existingFolder IsNot Nothing Then
+            Return existingFolder
+        End If
+        
+        ' Split path into segments: "$/Tooted/Lume/Sub" -> ["$", "Tooted", "Lume", "Sub"]
+        Dim segments() As String = vaultPath.Split("/"c)
+        If segments.Length < 2 Then
+            UtilsLib.LogWarn("VaultNumberingLib: Path too short for recursive creation: " & vaultPath)
+            Return Nothing
+        End If
+        
+        ' Build path incrementally and create each level
+        Dim currentPath As String = segments(0) ' Start with "$"
+        Dim lastFolder As Object = Nothing
+        
+        For i As Integer = 1 To segments.Length - 1
+            currentPath = currentPath & "/" & segments(i)
+            
+            ' Try to get existing folder first
+            Dim folder As Object = GetVaultFolder(conn, currentPath)
+            If folder Is Nothing Then
+                ' Need to create this level
+                folder = EnsureVaultFolder(conn, currentPath)
+                If folder Is Nothing Then
+                    UtilsLib.LogWarn("VaultNumberingLib: Failed to create folder level: " & currentPath)
+                    Return Nothing
+                End If
+            End If
+            
+            lastFolder = folder
+        Next
+        
+        Return lastFolder
+    End Function
+    
+    ' Ensure a folder exists in both local file system and Vault, creating parent folders as needed
+    ' Combines Directory.CreateDirectory (which handles nested paths) with recursive Vault creation
+    ' Parameters:
+    '   localPath - Full local path to create
+    '   conn - Vault connection object (from GetVaultConnection)
+    '   workspaceRoot - Local workspace root path (maps to $/ in Vault)
+    ' Returns: True if folder is ready (both local and Vault)
+    Public Function EnsureLocalAndVaultFolderRecursive(localPath As String, _
+                                                       conn As Object, _
+                                                       workspaceRoot As String) As Boolean
+        Dim success As Boolean = True
+        
+        ' Create local folder (CreateDirectory handles nested paths automatically)
+        Try
+            If Not System.IO.Directory.Exists(localPath) Then
+                System.IO.Directory.CreateDirectory(localPath)
+                UtilsLib.LogInfo("VaultNumberingLib: Created local folder: " & localPath)
+            End If
+        Catch ex As Exception
+            UtilsLib.LogWarn("VaultNumberingLib: Failed to create local folder: " & ex.Message)
+            Return False
+        End Try
+        
+        ' Create Vault folder recursively if connected
+        If conn IsNot Nothing AndAlso Not String.IsNullOrEmpty(workspaceRoot) Then
+            Dim vaultPath As String = ConvertLocalPathToVaultPath(localPath, workspaceRoot)
+            If Not String.IsNullOrEmpty(vaultPath) Then
+                Dim vaultFolder As Object = EnsureVaultFolderRecursive(conn, vaultPath)
+                If vaultFolder Is Nothing Then
+                    UtilsLib.LogWarn("VaultNumberingLib: Could not ensure Vault folder (recursive): " & vaultPath)
+                    success = False
+                End If
+            Else
+                UtilsLib.LogWarn("VaultNumberingLib: Could not convert path to Vault format: " & localPath)
+            End If
+        End If
+        
+        Return success
+    End Function
 
 End Module

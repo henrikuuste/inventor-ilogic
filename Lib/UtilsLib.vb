@@ -68,6 +68,52 @@ Public Module UtilsLib
     End Sub
 
     ' ============================================================================
+    ' SECTION 0.5: Path Detection
+    ' ============================================================================
+    
+    ''' <summary>
+    ''' Extract project name from a file path containing /Tooted/[ProjectName]/...
+    ''' Example: "C:\_SoftcomVault\Tooted\Lume\Eskiis\file.ipt" -> "Lume"
+    ''' Returns empty string if path doesn't contain Tooted folder.
+    ''' </summary>
+    Public Function ExtractProjectName(filePath As String) As String
+        If String.IsNullOrEmpty(filePath) Then Return ""
+        
+        Try
+            Dim parts() As String = filePath.Split(System.IO.Path.DirectorySeparatorChar)
+            For i As Integer = 0 To parts.Length - 2
+                If parts(i).Equals("Tooted", StringComparison.OrdinalIgnoreCase) Then
+                    Return parts(i + 1)
+                End If
+            Next
+        Catch
+        End Try
+        Return ""
+    End Function
+    
+    ''' <summary>
+    ''' Get the project folder path (up to and including project name).
+    ''' Example: "C:\_SoftcomVault\Tooted\Lume\Eskiis\file.ipt" -> "C:\_SoftcomVault\Tooted\Lume"
+    ''' Returns empty string if path doesn't contain Tooted folder.
+    ''' </summary>
+    Public Function GetProjectPath(filePath As String) As String
+        If String.IsNullOrEmpty(filePath) Then Return ""
+        
+        Try
+            Dim parts() As String = filePath.Split(System.IO.Path.DirectorySeparatorChar)
+            For i As Integer = 0 To parts.Length - 2
+                If parts(i).Equals("Tooted", StringComparison.OrdinalIgnoreCase) Then
+                    ' Rebuild path up to and including the project name
+                    Dim projectPath As String = String.Join(System.IO.Path.DirectorySeparatorChar, parts, 0, i + 2)
+                    Return projectPath
+                End If
+            Next
+        Catch
+        End Try
+        Return ""
+    End Function
+
+    ' ============================================================================
     ' SECTION 1: Geometry Extraction
     ' ============================================================================
 

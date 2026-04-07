@@ -13,6 +13,7 @@
 ' ============================================================================
 
 AddVbFile "Lib/UtilsLib.vb"
+AddVbFile "Lib/FileSearchLib.vb"
 AddVbFile "Lib/CAMDrawingLib.vb"
 
 Imports Inventor

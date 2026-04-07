@@ -27,6 +27,7 @@ AddReference "Connectivity.InventorAddin.EdmAddin"
 ' Libraries (UtilsLib before VaultNumberingLib for Vault logging)
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/VaultNumberingLib.vb"
+AddVbFile "Lib/FileSearchLib.vb"
 AddVbFile "Lib/CAMDrawingLib.vb"
 
 Imports System.Collections.Generic
@@ -149,15 +150,18 @@ Sub Main()
         existingDrawingPaths.Add("")
     Next
     
-    ' Search root for existing drawings - use workspace root if available, otherwise doc folder
-    Dim searchRoot As String = If(Not String.IsNullOrEmpty(workspaceRoot), workspaceRoot, outputFolder)
-    UtilsLib.LogInfo("Loo 1:1 joonised: Drawing search root: " & searchRoot)
+    ' Search for existing drawings using depth-first search
+    ' vaultRoot = workspace root (search boundary), startPath = document folder (starting point)
+    Dim vaultRoot As String = If(Not String.IsNullOrEmpty(workspaceRoot), workspaceRoot, outputFolder)
+    UtilsLib.LogInfo("Loo 1:1 joonised: Drawing search - start: " & outputFolder & ", limit: " & vaultRoot)
     
     ' Check for existing 1:1 drawings (in open documents and on disk)
     For i As Integer = 0 To partDocs.Count - 1
         If Not String.IsNullOrEmpty(partNumbers(i)) Then
+            ' Get part's folder as start path for depth-first search
+            Dim partFolder As String = System.IO.Path.GetDirectoryName(partDocs(i).FullDocumentName)
             Dim foundPath As String = CAMDrawingLib.FindDrawingForPart( _
-                partNumbers(i), searchRoot, app, CAMDrawingLib.DRAWING_TYPE_1TO1, True)
+                partNumbers(i), vaultRoot, app, CAMDrawingLib.DRAWING_TYPE_1TO1, True, partFolder)
             
             If Not String.IsNullOrEmpty(foundPath) Then
                 hasDrawings(i) = True

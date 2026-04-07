@@ -8,9 +8,12 @@
 ' - Assign materials to parts
 ' - Place components in assembly
 '
-' Dependencies: UtilsLib (UtilsLib.LogInfo / UtilsLib.LogWarn).
-' Host rule must call UtilsLib.SetLogger(Logger) and include UtilsLib before this file:
+' Dependencies: 
+'   UtilsLib (UtilsLib.LogInfo / UtilsLib.LogWarn)
+'   FileSearchLib (depth-first file search)
+' Host rule must call UtilsLib.SetLogger(Logger) and include libraries before this file:
 '   AddVbFile "Lib/UtilsLib.vb"
+'   AddVbFile "Lib/FileSearchLib.vb"
 '   AddVbFile "Lib/MakeComponentsLib.vb"
 ' ============================================================================
 
@@ -232,10 +235,12 @@ Public Module MakeComponentsLib
     End Function
     
     ' Match current bodies with stored data (by name first, then by signature)
-    ' searchRoot: folder to search for relocated files if stored path not found
+    ' startPath: folder to start depth-first search for relocated files
+    ' vaultRoot: search boundary (vault workspace root)
     Public Sub ApplyStoredDataToBodies(bodies As System.Collections.Generic.List(Of BodyInfo), _
                                        storedData As System.Collections.Generic.List(Of StoredBodyData), _
-                                       searchRoot As String)
+                                       startPath As String, _
+                                       vaultRoot As String)
         Dim matchedIndices As New System.Collections.Generic.HashSet(Of Integer)
         
         ' First pass: match by name
@@ -245,7 +250,7 @@ Public Module MakeComponentsLib
                 
                 Dim sd As StoredBodyData = storedData(j)
                 If bi.Name.Equals(sd.Name, StringComparison.OrdinalIgnoreCase) Then
-                    ApplyStoredData(bi, sd, searchRoot)
+                    ApplyStoredData(bi, sd, startPath, vaultRoot)
                     matchedIndices.Add(j)
                     Exit For
                 End If
@@ -263,7 +268,7 @@ Public Module MakeComponentsLib
                 If Not String.IsNullOrEmpty(bi.Signature) AndAlso _
                    bi.Signature.Equals(sd.Signature, StringComparison.OrdinalIgnoreCase) Then
                     UtilsLib.LogInfo("MakeComponentsLib: Matched '" & bi.Name & "' to stored '" & sd.Name & "' by signature")
-                    ApplyStoredData(bi, sd, searchRoot)
+                    ApplyStoredData(bi, sd, startPath, vaultRoot)
                     matchedIndices.Add(j)
                     Exit For
                 End If
@@ -272,7 +277,7 @@ Public Module MakeComponentsLib
     End Sub
     
     Private Sub ApplyStoredData(bi As BodyInfo, sd As StoredBodyData, _
-                                searchRoot As String)
+                                startPath As String, vaultRoot As String)
         ' Apply stored axis settings if available
         If Not String.IsNullOrEmpty(sd.ThicknessVector) Then
             bi.ThicknessVector = sd.ThicknessVector
@@ -288,10 +293,10 @@ Public Module MakeComponentsLib
         If Not String.IsNullOrEmpty(sd.CreatedPartPath) Then
             bi.PartExists = System.IO.File.Exists(sd.CreatedPartPath)
             
-            ' Fallback: search by file name if path not found
-            If Not bi.PartExists AndAlso Not String.IsNullOrEmpty(searchRoot) Then
+            ' Fallback: search by file name using depth-first search if path not found
+            If Not bi.PartExists AndAlso Not String.IsNullOrEmpty(startPath) Then
                 Dim fileName As String = System.IO.Path.GetFileName(sd.CreatedPartPath)
-                Dim foundPath As String = FindPartByFileName(fileName, searchRoot)
+                Dim foundPath As String = FindPartByFileName(fileName, startPath, vaultRoot)
                 If Not String.IsNullOrEmpty(foundPath) Then
                     bi.CreatedPartPath = foundPath
                     bi.PartExists = True
@@ -308,30 +313,22 @@ Public Module MakeComponentsLib
         End If
     End Sub
     
-    ' Search for a part file by name in the project workspace
+    ' Search for a part file by name using depth-first folder traversal
+    ' startPath: folder to start search from
+    ' vaultRoot: search boundary (stops at vaultRoot + 2 levels)
     ' Returns the found path, or empty string if not found
     Public Function FindPartByFileName(fileName As String, _
-                                       searchRoot As String) As String
-        If String.IsNullOrEmpty(fileName) OrElse String.IsNullOrEmpty(searchRoot) Then
+                                       startPath As String, _
+                                       vaultRoot As String) As String
+        If String.IsNullOrEmpty(fileName) OrElse String.IsNullOrEmpty(startPath) Then
             Return ""
         End If
         
         Try
-            If Not System.IO.Directory.Exists(searchRoot) Then Return ""
-            
-            Dim allFiles() As String = System.IO.Directory.GetFiles(searchRoot, fileName, System.IO.SearchOption.AllDirectories)
-            
-            ' Filter out OldVersions backup folders (created by Vault)
-            Dim files As New List(Of String)
-            For Each f As String In allFiles
-                If f.IndexOf("\OldVersions\", StringComparison.OrdinalIgnoreCase) < 0 Then
-                    files.Add(f)
-                End If
-            Next
-            
-            If files.Count > 0 Then
-                UtilsLib.LogInfo("MakeComponentsLib: Found '" & fileName & "' at new location: " & files(0))
-                Return files(0)
+            Dim foundPath As String = FileSearchLib.FindFileByName(fileName, startPath, vaultRoot)
+            If Not String.IsNullOrEmpty(foundPath) Then
+                UtilsLib.LogInfo("MakeComponentsLib: Found '" & fileName & "' at: " & foundPath)
+                Return foundPath
             End If
         Catch ex As Exception
             UtilsLib.LogWarn("MakeComponentsLib: Error searching for '" & fileName & "': " & ex.Message)
@@ -339,6 +336,32 @@ Public Module MakeComponentsLib
         
         Return ""
     End Function
+    
+    ' Helper class for checking part files by Description during depth-first search
+    ' Used with FileSearchLib.SearchFilesWithChecker via late binding
+    Private Class PartDescriptionChecker
+        Private m_App As Inventor.Application
+        Private m_BodyName As String
+        
+        Public Sub New(app As Inventor.Application, bodyName As String)
+            m_App = app
+            m_BodyName = bodyName
+        End Sub
+        
+        Public Function CheckFile(filePath As String) As Boolean
+            Try
+                ' Check if Description matches body name
+                Dim description As String = GetDescriptionFromFile(m_App, filePath)
+                If Not String.IsNullOrEmpty(description) AndAlso _
+                   description.Equals(m_BodyName, StringComparison.OrdinalIgnoreCase) Then
+                    UtilsLib.LogInfo("MakeComponentsLib: Found match for '" & m_BodyName & "' at: " & filePath)
+                    Return True
+                End If
+            Catch
+            End Try
+            Return False
+        End Function
+    End Class
     
     ' Search for a part file by matching Description iProperty with body name
     ' Searches depth-first from startPath, going up to parent folders
@@ -353,90 +376,11 @@ Public Module MakeComponentsLib
         End If
         
         Try
-            ' Calculate minimum search depth (2 levels from vault root)
-            Dim minDepth As Integer = 2
-            If Not String.IsNullOrEmpty(vaultRoot) Then
-                minDepth = GetPathDepth(vaultRoot) + 2
-            End If
-            
-            Dim currentPath As String = startPath
-            Dim searchedPaths As New System.Collections.Generic.HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
-            
-            ' Search upward from startPath until we reach minimum depth
-            While Not String.IsNullOrEmpty(currentPath) AndAlso GetPathDepth(currentPath) >= minDepth
-                ' Search this folder and its children
-                Dim result As String = SearchFolderForDescription(app, bodyName, currentPath, searchedPaths)
-                If Not String.IsNullOrEmpty(result) Then
-                    Return result
-                End If
-                
-                ' Go up one level
-                Dim parentPath As String = System.IO.Path.GetDirectoryName(currentPath)
-                If String.IsNullOrEmpty(parentPath) OrElse parentPath = currentPath Then
-                    Exit While
-                End If
-                currentPath = parentPath
-            End While
-            
+            ' Create file checker and search using depth-first traversal
+            Dim checker As New PartDescriptionChecker(app, bodyName)
+            Return FileSearchLib.SearchFilesWithChecker(startPath, vaultRoot, "*.ipt", checker)
         Catch ex As Exception
             UtilsLib.LogWarn("MakeComponentsLib: Error searching by description: " & ex.Message)
-        End Try
-        
-        Return ""
-    End Function
-    
-    ' Get the depth of a path (number of directory levels)
-    Private Function GetPathDepth(path As String) As Integer
-        If String.IsNullOrEmpty(path) Then Return 0
-        Return path.Split(System.IO.Path.DirectorySeparatorChar).Length
-    End Function
-    
-    ' Search a folder and its subfolders for a part with matching Description
-    Private Function SearchFolderForDescription(app As Inventor.Application, _
-                                                bodyName As String, _
-                                                folderPath As String, _
-                                                searchedPaths As System.Collections.Generic.HashSet(Of String)) As String
-        ' Skip if already searched or doesn't exist
-        If searchedPaths.Contains(folderPath) Then Return ""
-        If Not System.IO.Directory.Exists(folderPath) Then Return ""
-        
-        searchedPaths.Add(folderPath)
-        
-        ' Skip OldVersions folders
-        If folderPath.IndexOf("\OldVersions", StringComparison.OrdinalIgnoreCase) >= 0 Then
-            Return ""
-        End If
-        
-        Try
-            ' Search .ipt files in current folder first
-            Dim iptFiles() As String = System.IO.Directory.GetFiles(folderPath, "*.ipt", System.IO.SearchOption.TopDirectoryOnly)
-            
-            For Each iptFile As String In iptFiles
-                ' Skip OldVersions
-                If iptFile.IndexOf("\OldVersions\", StringComparison.OrdinalIgnoreCase) >= 0 Then
-                    Continue For
-                End If
-                
-                ' Check if Description matches body name
-                Dim description As String = GetDescriptionFromFile(app, iptFile)
-                If Not String.IsNullOrEmpty(description) AndAlso _
-                   description.Equals(bodyName, StringComparison.OrdinalIgnoreCase) Then
-                    UtilsLib.LogInfo("MakeComponentsLib: Found match for '" & bodyName & "' at: " & iptFile)
-                    Return iptFile
-                End If
-            Next
-            
-            ' Search subfolders
-            Dim subDirs() As String = System.IO.Directory.GetDirectories(folderPath)
-            For Each subDir As String In subDirs
-                Dim result As String = SearchFolderForDescription(app, bodyName, subDir, searchedPaths)
-                If Not String.IsNullOrEmpty(result) Then
-                    Return result
-                End If
-            Next
-            
-        Catch ex As Exception
-            ' Ignore access errors for individual folders
         End Try
         
         Return ""
@@ -460,6 +404,15 @@ Public Module MakeComponentsLib
         Catch
             ' Fall back to opening the document if property access fails
             Try
+                ' Check if document is already open (don't close it if so)
+                Dim wasAlreadyOpen As Boolean = False
+                For Each doc As Document In app.Documents
+                    If doc.FullDocumentName.Equals(filePath, StringComparison.OrdinalIgnoreCase) Then
+                        wasAlreadyOpen = True
+                        Exit For
+                    End If
+                Next
+                
                 Dim partDoc As PartDocument = CType(app.Documents.Open(filePath, False), PartDocument)
                 Try
                     Dim designProps As PropertySet = partDoc.PropertySets.Item("Design Tracking Properties")
@@ -468,7 +421,10 @@ Public Module MakeComponentsLib
                         Return CStr(descValue).Trim()
                     End If
                 Finally
-                    partDoc.Close(True)
+                    ' Only close if we opened it
+                    If Not wasAlreadyOpen Then
+                        partDoc.Close(True)
+                    End If
                 End Try
             Catch
             End Try
@@ -1244,17 +1200,9 @@ Public Module MakeComponentsLib
     ' ============================================================================
     
     ' Extract project name from path */Tooted/[ProjectName]/...
+    ' Delegates to UtilsLib.ExtractProjectName for shared implementation
     Public Function ExtractProjectName(filePath As String) As String
-        Try
-            Dim parts() As String = filePath.Split(System.IO.Path.DirectorySeparatorChar)
-            For i As Integer = 0 To parts.Length - 2
-                If parts(i).Equals("Tooted", StringComparison.OrdinalIgnoreCase) Then
-                    Return parts(i + 1)
-                End If
-            Next
-        Catch
-        End Try
-        Return ""
+        Return UtilsLib.ExtractProjectName(filePath)
     End Function
     
     ' Create subfolder if it doesn't exist (local file system only)

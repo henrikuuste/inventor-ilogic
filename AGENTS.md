@@ -2,6 +2,50 @@
 
 This document captures constraints and best practices for writing Autodesk Inventor iLogic rules and VB scripts.
 
+## Project Structure and Conventions
+
+### Product Family Projects
+
+We work with product family projects organized in Vault. Each project represents a product line (e.g., "Lume" furniture series).
+
+- **Project location**: `<VaultRoot>/Tooted/<ProjectName>` (e.g., `C:\_SoftcomVault\Tooted\Lume`)
+- **Project property**: The `Project` iProperty identifies which project a file belongs to (e.g., "Lume")
+- **Scope**: When searching for linked files, limit searches to the project scope using `UtilsLib.GetProjectPath()`
+
+### Standard Folder Structure
+
+```
+Tooted/
+  <ProjectName>/
+    Algmaterjal/           - Source data (STEP files, design drawings, specifications)
+    Alusmoodulid/          - Parametric base modules (design masters)
+      <ModuleName>/        - Assemblies
+        Eskiis/            - Sketches, skeleton parts and concepts
+        Karkass/           - Frame/structure components and subassemblies
+          Detailid/        - Individual parts
+          Joonised/        - Drawings
+        Poroloon/          - Foam/upholstery components and subassemblies
+          Detailid/        - Individual parts
+          Joonised/        - Drawings
+    Moodulid/              - Released module versions (production-ready)
+```
+
+### File Naming and Properties
+
+- **Auto-numbering**: All parts and assemblies are automatically numbered by Vault on save
+- **File name**: Uses the Vault-generated number (e.g., `000123.ipt`)
+- **Part Number property**: Same as the Vault number/file name
+- **Description property**: Human-readable name of the part/assembly (e.g., "Iste karkass")
+- **Project property**: Always set when creating new files to maintain project scope
+
+### Key Utility Functions
+
+| Task | Function |
+|------|----------|
+| Extract project name from path | `UtilsLib.ExtractProjectName(filePath)` |
+| Get project folder path | `UtilsLib.GetProjectPath(filePath)` |
+| Create Vault folders recursively | `VaultNumberingLib.EnsureVaultFolderRecursive(conn, vaultPath)` |
+
 ## API Documentation References
 
 When writing Inventor API code, **always search the official documentation first**:

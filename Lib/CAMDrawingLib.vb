@@ -10,11 +10,13 @@
 '
 ' Dependencies:
 '   UtilsLib (logging). AddVbFile "Lib/UtilsLib.vb" BEFORE this file.
+'   FileSearchLib (depth-first search). AddVbFile "Lib/FileSearchLib.vb" BEFORE this file.
 '   In Sub Main: UtilsLib.SetLogger(Logger)
 '
 ' Usage:
 '   In calling script:
 '     AddVbFile "Lib/UtilsLib.vb"
+'     AddVbFile "Lib/FileSearchLib.vb"
 '     AddVbFile "Lib/CAMDrawingLib.vb"
 ' ============================================================================
 
@@ -2384,14 +2386,88 @@ Public Module CAMDrawingLib
         End Try
     End Function
     
+    ' Helper class for checking drawing files during depth-first search
+    ' Used with FileSearchLib.SearchFilesWithChecker via late binding
+    Private Class DrawingFileChecker
+        Private m_App As Inventor.Application
+        Private m_PartNumber As String
+        Private m_DrawingType As String
+        Private m_FoundPath As String
+        
+        Public Sub New(app As Inventor.Application, partNumber As String, drawingType As String)
+            m_App = app
+            m_PartNumber = partNumber
+            m_DrawingType = drawingType
+            m_FoundPath = ""
+        End Sub
+        
+        Public ReadOnly Property FoundPath As String
+            Get
+                Return m_FoundPath
+            End Get
+        End Property
+        
+        Public Function CheckFile(filePath As String) As Boolean
+            Try
+                ' Check if document is already open (don't close it if so)
+                Dim wasAlreadyOpen As Boolean = False
+                For Each doc As Document In m_App.Documents
+                    If doc.FullDocumentName.Equals(filePath, StringComparison.OrdinalIgnoreCase) Then
+                        wasAlreadyOpen = True
+                        Exit For
+                    End If
+                Next
+                
+                ' Open drawing silently to check properties
+                Dim drawDoc As DrawingDocument = CType(m_App.Documents.Open(filePath, False), DrawingDocument)
+                
+                Dim storedPartNumber As String = GetPartNumberFromDrawing(drawDoc)
+                Dim storedType As String = GetDrawingType(drawDoc)
+                
+                ' Check part number match
+                If storedPartNumber = m_PartNumber Then
+                    ' Check drawing type match (if specified)
+                    Dim typeMatches As Boolean = True
+                    If Not String.IsNullOrEmpty(m_DrawingType) Then
+                        typeMatches = (storedType = m_DrawingType)
+                    End If
+                    
+                    If typeMatches Then
+                        UtilsLib.LogInfo("CAMDrawingLib: Found matching drawing: " & filePath)
+                        m_FoundPath = filePath
+                        ' Leave drawing open (caller may need it)
+                        Return True
+                    End If
+                End If
+                
+                ' Close only if we opened it (not if it was already open)
+                If Not wasAlreadyOpen Then
+                    drawDoc.Close(True)
+                End If
+            Catch ex As Exception
+                UtilsLib.LogWarn("CAMDrawingLib: Error checking " & System.IO.Path.GetFileName(filePath) & ": " & ex.Message)
+            End Try
+            
+            Return False
+        End Function
+    End Class
+    
     ' Find a drawing for a part by searching for BB_SourcePartNumber and BB_DrawingType match
-    ' First checks open documents (fast), then searches folder on disk (recursive)
+    ' First checks open documents (fast), then searches folder on disk using depth-first search
+    ' Parameters:
+    '   partNumber - the part number to search for (BB_SourcePartNumber)
+    '   searchFolder - the vault root or search boundary (stops searching above this)
+    '   app - Inventor application instance
+    '   drawingType - optional drawing type filter (e.g., "1:1")
+    '   recursive - ignored (kept for backward compatibility, always uses depth-first)
+    '   startPath - optional starting folder (defaults to searchFolder if not provided)
     ' Returns the full path to the drawing file, or empty string if not found
     Public Function FindDrawingForPart(partNumber As String, _
                                         searchFolder As String, _
                                         app As Inventor.Application, _
                                         Optional drawingType As String = "", _
-                                        Optional recursive As Boolean = True) As String
+                                        Optional recursive As Boolean = True, _
+                                        Optional startPath As String = "") As String
         If String.IsNullOrEmpty(partNumber) Then
             UtilsLib.LogWarn("CAMDrawingLib: Cannot search - part number is empty")
             Return ""
@@ -2403,61 +2479,30 @@ Public Module CAMDrawingLib
             Return openDoc.FullDocumentName
         End If
         
-        ' Then search folder on disk
+        ' Then search folder on disk using depth-first search
         If String.IsNullOrEmpty(searchFolder) OrElse Not System.IO.Directory.Exists(searchFolder) Then
             UtilsLib.LogWarn("CAMDrawingLib: Search folder does not exist: " & searchFolder)
             Return ""
         End If
         
-        Dim searchOption As System.IO.SearchOption = If(recursive, _
-            System.IO.SearchOption.AllDirectories, _
-            System.IO.SearchOption.TopDirectoryOnly)
+        ' Determine start path: use provided startPath, or default to searchFolder
+        Dim actualStartPath As String = If(Not String.IsNullOrEmpty(startPath), startPath, searchFolder)
+        If Not System.IO.Directory.Exists(actualStartPath) Then
+            actualStartPath = searchFolder
+        End If
         
-        UtilsLib.LogInfo("CAMDrawingLib: Searching " & If(recursive, "recursively in ", "") & searchFolder & " for " & PROP_SOURCE_PART_NUMBER & " = " & partNumber)
+        UtilsLib.LogInfo("CAMDrawingLib: Searching depth-first from " & actualStartPath & _
+                        " (limit: " & searchFolder & ") for " & PROP_SOURCE_PART_NUMBER & " = " & partNumber)
         
         Try
-            Dim allIdwFiles() As String = System.IO.Directory.GetFiles(searchFolder, "*.idw", searchOption)
+            ' Create file checker and search using depth-first traversal
+            Dim checker As New DrawingFileChecker(app, partNumber, drawingType)
+            Dim foundPath As String = FileSearchLib.SearchFilesWithChecker( _
+                actualStartPath, searchFolder, "*.idw", checker)
             
-            ' Filter out OldVersions backup folders (created by Vault)
-            Dim idwList As New List(Of String)
-            For Each f As String In allIdwFiles
-                If f.IndexOf("\OldVersions\", StringComparison.OrdinalIgnoreCase) < 0 Then
-                    idwList.Add(f)
-                End If
-            Next
-            Dim idwFiles() As String = idwList.ToArray()
-            
-            UtilsLib.LogInfo("CAMDrawingLib: Found " & idwFiles.Length & " .idw files (excluded OldVersions)")
-            
-            For Each idwPath As String In idwFiles
-                Try
-                    ' Open drawing silently to check properties
-                    Dim drawDoc As DrawingDocument = CType(app.Documents.Open(idwPath, False), DrawingDocument)
-                    
-                    Dim storedPartNumber As String = GetPartNumberFromDrawing(drawDoc)
-                    Dim storedType As String = GetDrawingType(drawDoc)
-                    
-                    ' Check part number match
-                    If storedPartNumber = partNumber Then
-                        ' Check drawing type match (if specified)
-                        Dim typeMatches As Boolean = True
-                        If Not String.IsNullOrEmpty(drawingType) Then
-                            typeMatches = (storedType = drawingType)
-                        End If
-                        
-                        If typeMatches Then
-                            UtilsLib.LogInfo("CAMDrawingLib: Found matching drawing: " & idwPath)
-                            ' Leave drawing open (caller may need it)
-                            Return idwPath
-                        End If
-                    End If
-                    
-                    ' Close if not a match
-                    drawDoc.Close(True)
-                Catch ex As Exception
-                    UtilsLib.LogWarn("CAMDrawingLib: Error checking " & System.IO.Path.GetFileName(idwPath) & ": " & ex.Message)
-                End Try
-            Next
+            If Not String.IsNullOrEmpty(foundPath) Then
+                Return foundPath
+            End If
         Catch ex As Exception
             UtilsLib.LogWarn("CAMDrawingLib: Error searching folder: " & ex.Message)
         End Try

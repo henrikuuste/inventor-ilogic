@@ -23,6 +23,7 @@ AddReference "Connectivity.InventorAddin.EdmAddin"
 ' Libraries come after references (UtilsLib before VaultNumberingLib for Vault logging)
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/VaultNumberingLib.vb"
+AddVbFile "Lib/FileSearchLib.vb"
 AddVbFile "Lib/MakeComponentsLib.vb"
 AddVbFile "Lib/SheetMetalLib.vb"
 AddVbFile "Lib/BoundingBoxStockLib.vb"
@@ -125,13 +126,12 @@ Sub Main()
         MakeComponentsLib.LoadBodyDataFromMaster(masterDoc)
     
     ' Apply stored settings to bodies (matches by name, then by geometry signature)
-    ' Use workspace root for file search if available, otherwise master folder
-    Dim searchRoot As String = If(Not String.IsNullOrEmpty(workspaceRoot), _
-                                  workspaceRoot, _
-                                  System.IO.Path.GetDirectoryName(masterDoc.FullDocumentName))
+    ' Use depth-first search: start from master folder, limit to workspace root
+    Dim masterFolder As String = System.IO.Path.GetDirectoryName(masterDoc.FullDocumentName)
+    Dim vaultRoot As String = If(Not String.IsNullOrEmpty(workspaceRoot), workspaceRoot, masterFolder)
     
     If storedData.Count > 0 Then
-        MakeComponentsLib.ApplyStoredDataToBodies(bodies, storedData, searchRoot)
+        MakeComponentsLib.ApplyStoredDataToBodies(bodies, storedData, masterFolder, vaultRoot)
     End If
     
     ' Load general settings (template, subfolder, project, assembly)
