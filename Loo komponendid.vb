@@ -130,13 +130,23 @@ Sub Main()
     Dim masterFolder As String = System.IO.Path.GetDirectoryName(masterDoc.FullDocumentName)
     Dim vaultRoot As String = If(Not String.IsNullOrEmpty(workspaceRoot), workspaceRoot, masterFolder)
     
+    ' Get project root for relative path resolution (e.g., "C:\_SoftcomVault\Tooted\Lume")
+    Dim projectRoot As String = UtilsLib.GetProjectPath(masterDoc.FullDocumentName)
+    If String.IsNullOrEmpty(projectRoot) Then
+        UtilsLib.LogWarn("Loo komponendid: Could not detect project root, using master folder")
+        projectRoot = masterFolder
+    Else
+        UtilsLib.LogInfo("Loo komponendid: Project root: " & projectRoot)
+    End If
+    
     If storedData.Count > 0 Then
-        MakeComponentsLib.ApplyStoredDataToBodies(bodies, storedData, masterFolder, vaultRoot)
+        MakeComponentsLib.ApplyStoredDataToBodies(bodies, storedData, masterFolder, vaultRoot, projectRoot)
     End If
     
     ' Load general settings (template, subfolder, project, assembly)
+    ' Paths are stored relative to project root and converted to absolute on load
     Dim generalSettings As MakeComponentsLib.GeneralSettings = _
-        MakeComponentsLib.LoadGeneralSettings(masterDoc)
+        MakeComponentsLib.LoadGeneralSettings(masterDoc, projectRoot)
     
     ' Get available materials from document's Materials collection
     Dim materials As List(Of String) = MakeComponentsLib.GetAvailableMaterials(masterDoc)
@@ -164,18 +174,14 @@ Sub Main()
     Dim selectedTemplate As String = If(Not String.IsNullOrEmpty(generalSettings.Template), _
                                         generalSettings.Template, "Part.ipt")
     
-    ' Handle subfolder - support both old format (relative name) and new format (full path)
-    Dim storedSubfolder As String = generalSettings.Subfolder
+    ' Handle subfolder - LoadGeneralSettings already converts relative paths to absolute
     Dim selectedSubfolder As String
-    If String.IsNullOrEmpty(storedSubfolder) Then
-        ' Default to Detailid subfolder under master path
-        selectedSubfolder = System.IO.Path.Combine(masterPath, "Detailid")
-    ElseIf storedSubfolder.Contains("\") OrElse storedSubfolder.Contains(":") Then
-        ' Full path stored (new format)
-        selectedSubfolder = storedSubfolder
+    If String.IsNullOrEmpty(generalSettings.Subfolder) Then
+        ' Default to Detailid subfolder under project root
+        selectedSubfolder = System.IO.Path.Combine(projectRoot, "Detailid")
     Else
-        ' Relative name stored (old format) - convert to full path
-        selectedSubfolder = System.IO.Path.Combine(masterPath, storedSubfolder)
+        ' Use the loaded subfolder (already converted to absolute path)
+        selectedSubfolder = generalSettings.Subfolder
     End If
     
     Dim projectName As String = If(Not String.IsNullOrEmpty(generalSettings.ProjectName), _
@@ -243,15 +249,15 @@ Sub Main()
     If selectedBodies.Count = 0 Then
         ' No bodies selected for creation, but may have linked files - save and exit
         If linkedCount > 0 Then
-            ' Save body links to master document
-            MakeComponentsLib.SaveBodyDataToMaster(masterDoc, bodies)
+            ' Save body links to master document (paths stored relative to project root)
+            MakeComponentsLib.SaveBodyDataToMaster(masterDoc, bodies, projectRoot)
             MakeComponentsLib.SaveGeneralSettings(masterDoc, New MakeComponentsLib.GeneralSettings() With {
                 .ProjectName = projectName,
                 .Template = selectedTemplate,
                 .Subfolder = selectedSubfolder,
                 .AssemblyAction = assemblyAction,
                 .AssemblyPath = assemblyPath
-            })
+            }, projectRoot)
             Try
                 masterDoc.Save()
                 UtilsLib.LogInfo("Loo komponendid: Saved " & linkedCount & " body link(s) to master")
@@ -411,7 +417,8 @@ Sub Main()
     
     ' Save body data to master document (settings and part references)
     ' Save ALL bodies, not just selected ones, to preserve unprocessed body data
-    MakeComponentsLib.SaveBodyDataToMaster(masterDoc, bodies)
+    ' Paths are stored relative to project root for portability
+    MakeComponentsLib.SaveBodyDataToMaster(masterDoc, bodies, projectRoot)
     
     ' Save master document to persist the stored body data
     If bodies.Count > 0 Then
@@ -469,7 +476,7 @@ Sub Main()
     settingsToSave.AssemblyAction = assemblyAction
     settingsToSave.AssemblyPath = If(Not String.IsNullOrEmpty(actualAssemblyPath), actualAssemblyPath, assemblyPath)
     
-    MakeComponentsLib.SaveGeneralSettings(masterDoc, settingsToSave)
+    MakeComponentsLib.SaveGeneralSettings(masterDoc, settingsToSave, projectRoot)
     
     ' Save master document again to persist general settings
     Try

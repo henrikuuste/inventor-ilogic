@@ -112,16 +112,23 @@ Public Module MakeComponentsLib
     End Class
     
     ' Save general settings to master document
+    ' Paths (Subfolder, AssemblyPath) are stored relative to projectRoot for portability
     Public Sub SaveGeneralSettings(masterDoc As PartDocument, _
-                                   settings As GeneralSettings)
+                                   settings As GeneralSettings, _
+                                   projectRoot As String)
         Try
             Dim userProps As PropertySet = masterDoc.PropertySets.Item("Inventor User Defined Properties")
             
             SetOrAddProperty(userProps, GENERAL_PREFIX & "Project", settings.ProjectName)
             SetOrAddProperty(userProps, GENERAL_PREFIX & "Template", settings.Template)
-            SetOrAddProperty(userProps, GENERAL_PREFIX & "Subfolder", settings.Subfolder)
+            
+            ' Convert paths to relative for storage
+            Dim relativeSubfolder As String = ToRelativeProjectPath(settings.Subfolder, projectRoot)
+            Dim relativeAsmPath As String = ToRelativeProjectPath(settings.AssemblyPath, projectRoot)
+            
+            SetOrAddProperty(userProps, GENERAL_PREFIX & "Subfolder", relativeSubfolder)
             SetOrAddProperty(userProps, GENERAL_PREFIX & "AsmAction", settings.AssemblyAction)
-            SetOrAddProperty(userProps, GENERAL_PREFIX & "AsmPath", settings.AssemblyPath)
+            SetOrAddProperty(userProps, GENERAL_PREFIX & "AsmPath", relativeAsmPath)
             
             UtilsLib.LogInfo("MakeComponentsLib: Saved general settings")
         Catch ex As Exception
@@ -130,7 +137,9 @@ Public Module MakeComponentsLib
     End Sub
     
     ' Load general settings from master document
-    Public Function LoadGeneralSettings(masterDoc As PartDocument) As GeneralSettings
+    ' Paths (Subfolder, AssemblyPath) are converted from relative to absolute using projectRoot
+    ' Supports both new relative paths and legacy absolute paths
+    Public Function LoadGeneralSettings(masterDoc As PartDocument, projectRoot As String) As GeneralSettings
         Dim settings As New GeneralSettings()
         
         Try
@@ -138,9 +147,14 @@ Public Module MakeComponentsLib
             
             settings.ProjectName = GetPropertyValue(userProps, GENERAL_PREFIX & "Project", "")
             settings.Template = GetPropertyValue(userProps, GENERAL_PREFIX & "Template", "Part.ipt")
-            settings.Subfolder = GetPropertyValue(userProps, GENERAL_PREFIX & "Subfolder", "Detailid")
             settings.AssemblyAction = GetPropertyValue(userProps, GENERAL_PREFIX & "AsmAction", "NONE")
-            settings.AssemblyPath = GetPropertyValue(userProps, GENERAL_PREFIX & "AsmPath", "")
+            
+            ' Load and convert paths from relative to absolute (handles legacy absolute paths too)
+            Dim storedSubfolder As String = GetPropertyValue(userProps, GENERAL_PREFIX & "Subfolder", "Detailid")
+            Dim storedAsmPath As String = GetPropertyValue(userProps, GENERAL_PREFIX & "AsmPath", "")
+            
+            settings.Subfolder = ToAbsoluteProjectPath(storedSubfolder, projectRoot)
+            settings.AssemblyPath = ToAbsoluteProjectPath(storedAsmPath, projectRoot)
             
             ' Check if stored assembly still exists
             If Not String.IsNullOrEmpty(settings.AssemblyPath) Then
@@ -165,8 +179,10 @@ Public Module MakeComponentsLib
     End Function
     
     ' Save body data to master document properties
+    ' Paths are stored relative to projectRoot for portability across workstations
     Public Sub SaveBodyDataToMaster(masterDoc As PartDocument, _
-                                    bodies As System.Collections.Generic.List(Of BodyInfo))
+                                    bodies As System.Collections.Generic.List(Of BodyInfo), _
+                                    projectRoot As String)
         Try
             Dim userProps As PropertySet = masterDoc.PropertySets.Item("Inventor User Defined Properties")
             
@@ -188,7 +204,10 @@ Public Module MakeComponentsLib
                 SetOrAddProperty(userProps, prefix & "LAxis", bi.LengthVector)
                 SetOrAddProperty(userProps, prefix & "SM", If(bi.ConvertToSheetMetal, "1", "0"))
                 SetOrAddProperty(userProps, prefix & "Mat", bi.MaterialName)
-                SetOrAddProperty(userProps, prefix & "Part", bi.CreatedPartPath)
+                
+                ' Convert absolute path to relative for storage
+                Dim relativePath As String = ToRelativeProjectPath(bi.CreatedPartPath, projectRoot)
+                SetOrAddProperty(userProps, prefix & "Part", relativePath)
             Next
             
             UtilsLib.LogInfo("MakeComponentsLib: Saved data for " & bodies.Count & " bodies to master")
@@ -237,10 +256,12 @@ Public Module MakeComponentsLib
     ' Match current bodies with stored data (by name first, then by signature)
     ' startPath: folder to start depth-first search for relocated files
     ' vaultRoot: search boundary (vault workspace root)
+    ' projectRoot: project root path for resolving relative paths (e.g., "C:\_SoftcomVault\Tooted\Lume")
     Public Sub ApplyStoredDataToBodies(bodies As System.Collections.Generic.List(Of BodyInfo), _
                                        storedData As System.Collections.Generic.List(Of StoredBodyData), _
                                        startPath As String, _
-                                       vaultRoot As String)
+                                       vaultRoot As String, _
+                                       projectRoot As String)
         Dim matchedIndices As New System.Collections.Generic.HashSet(Of Integer)
         
         ' First pass: match by name
@@ -250,7 +271,7 @@ Public Module MakeComponentsLib
                 
                 Dim sd As StoredBodyData = storedData(j)
                 If bi.Name.Equals(sd.Name, StringComparison.OrdinalIgnoreCase) Then
-                    ApplyStoredData(bi, sd, startPath, vaultRoot)
+                    ApplyStoredData(bi, sd, startPath, vaultRoot, projectRoot)
                     matchedIndices.Add(j)
                     Exit For
                 End If
@@ -268,7 +289,7 @@ Public Module MakeComponentsLib
                 If Not String.IsNullOrEmpty(bi.Signature) AndAlso _
                    bi.Signature.Equals(sd.Signature, StringComparison.OrdinalIgnoreCase) Then
                     UtilsLib.LogInfo("MakeComponentsLib: Matched '" & bi.Name & "' to stored '" & sd.Name & "' by signature")
-                    ApplyStoredData(bi, sd, startPath, vaultRoot)
+                    ApplyStoredData(bi, sd, startPath, vaultRoot, projectRoot)
                     matchedIndices.Add(j)
                     Exit For
                 End If
@@ -277,7 +298,8 @@ Public Module MakeComponentsLib
     End Sub
     
     Private Sub ApplyStoredData(bi As BodyInfo, sd As StoredBodyData, _
-                                startPath As String, vaultRoot As String)
+                                startPath As String, vaultRoot As String, _
+                                projectRoot As String)
         ' Apply stored axis settings if available
         If Not String.IsNullOrEmpty(sd.ThicknessVector) Then
             bi.ThicknessVector = sd.ThicknessVector
@@ -287,15 +309,19 @@ Public Module MakeComponentsLib
         
         bi.ConvertToSheetMetal = sd.ConvertToSheetMetal
         bi.MaterialName = sd.MaterialName
-        bi.CreatedPartPath = sd.CreatedPartPath
+        
+        ' Convert stored path (relative or legacy absolute) to absolute path
+        ' ToAbsoluteProjectPath handles both cases: returns legacy paths unchanged, converts relative paths
+        Dim absolutePath As String = ToAbsoluteProjectPath(sd.CreatedPartPath, projectRoot)
+        bi.CreatedPartPath = absolutePath
         
         ' Check if part exists on disk
-        If Not String.IsNullOrEmpty(sd.CreatedPartPath) Then
-            bi.PartExists = System.IO.File.Exists(sd.CreatedPartPath)
+        If Not String.IsNullOrEmpty(absolutePath) Then
+            bi.PartExists = System.IO.File.Exists(absolutePath)
             
             ' Fallback: search by file name using depth-first search if path not found
             If Not bi.PartExists AndAlso Not String.IsNullOrEmpty(startPath) Then
-                Dim fileName As String = System.IO.Path.GetFileName(sd.CreatedPartPath)
+                Dim fileName As String = System.IO.Path.GetFileName(absolutePath)
                 Dim foundPath As String = FindPartByFileName(fileName, startPath, vaultRoot)
                 If Not String.IsNullOrEmpty(foundPath) Then
                     bi.CreatedPartPath = foundPath
@@ -1264,6 +1290,79 @@ Public Module MakeComponentsLib
                                         vaultConn As Object, _
                                         workspaceRoot As String) As Boolean
         Return VaultNumberingLib.EnsureFolderInVault(localPath, vaultConn, workspaceRoot)
+    End Function
+    
+    ' ============================================================================
+    ' Relative Path Utilities
+    ' ============================================================================
+    
+    ' Check if a path is relative (doesn't start with drive letter or UNC path)
+    ' Used to detect legacy absolute paths vs new relative paths
+    Private Function IsRelativePath(path As String) As Boolean
+        If String.IsNullOrEmpty(path) Then Return True
+        
+        ' Check for drive letter (e.g., "C:\")
+        If path.Length >= 2 AndAlso path(1) = ":"c Then
+            Return False
+        End If
+        
+        ' Check for UNC path (e.g., "\\server\share")
+        If path.StartsWith("\\") Then
+            Return False
+        End If
+        
+        Return True
+    End Function
+    
+    ' Convert absolute path to relative project path
+    ' Example: "C:\_SoftcomVault\Tooted\Lume\Detailid\000123.ipt" -> "Detailid\000123.ipt"
+    ' If path is not under projectRoot or projectRoot is empty, returns original path
+    Public Function ToRelativeProjectPath(absolutePath As String, projectRoot As String) As String
+        If String.IsNullOrEmpty(absolutePath) Then Return ""
+        If String.IsNullOrEmpty(projectRoot) Then Return absolutePath
+        
+        ' Normalize paths for comparison (ensure consistent directory separators)
+        Dim normalizedPath As String = absolutePath.Replace("/", "\")
+        Dim normalizedRoot As String = projectRoot.Replace("/", "\")
+        
+        ' Ensure project root ends with separator for proper prefix matching
+        If Not normalizedRoot.EndsWith("\") Then
+            normalizedRoot = normalizedRoot & "\"
+        End If
+        
+        ' Check if path is under project root (case-insensitive)
+        If normalizedPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase) Then
+            ' Extract relative portion
+            Dim relativePath As String = normalizedPath.Substring(normalizedRoot.Length)
+            UtilsLib.LogInfo("MakeComponentsLib: Converted to relative path: " & relativePath)
+            Return relativePath
+        End If
+        
+        ' Path is not under project root - return original
+        UtilsLib.LogWarn("MakeComponentsLib: Path not under project root, keeping absolute: " & absolutePath)
+        Return absolutePath
+    End Function
+    
+    ' Convert relative project path to absolute
+    ' Example: "Detailid\000123.ipt" + "C:\_SoftcomVault\Tooted\Lume" -> "C:\_SoftcomVault\Tooted\Lume\Detailid\000123.ipt"
+    ' If path is already absolute (legacy), returns it unchanged
+    Public Function ToAbsoluteProjectPath(relativePath As String, projectRoot As String) As String
+        If String.IsNullOrEmpty(relativePath) Then Return ""
+        
+        ' If path is already absolute (legacy support), return as-is
+        If Not IsRelativePath(relativePath) Then
+            Return relativePath
+        End If
+        
+        ' If no project root provided, can't convert - return relative path as-is
+        If String.IsNullOrEmpty(projectRoot) Then
+            UtilsLib.LogWarn("MakeComponentsLib: No project root, cannot resolve relative path: " & relativePath)
+            Return relativePath
+        End If
+        
+        ' Combine project root with relative path
+        Dim absolutePath As String = System.IO.Path.Combine(projectRoot, relativePath)
+        Return absolutePath
     End Function
     
     ' ============================================================================
