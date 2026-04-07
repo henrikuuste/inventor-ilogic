@@ -146,6 +146,7 @@ Dim customView As DrawingView = sheet.DrawingViews.AddBaseView( _
 | Extent dimension offset | 15mm offset (too close to model) | Use `CAMDrawingLib.DIMENSION_OFFSET` (25mm) |
 | Parameter formulas | `max(a, b)` with comma | `max(a; b)` with semicolon |
 | Parameter names | `00011_Name` (starts with digit) | `M_00011_Name` (prefix with letter) |
+| CommandManager.Pick prompt | `"Select a face"` (no cancel hint) | `"Vali pind - ESC tühistamiseks"` (with ESC hint) |
 
 ### Windows Forms Checklist
 
@@ -633,14 +634,18 @@ End If
 
 ### Using CommandManager.Pick
 
+- **Always include ESC cancel instruction in prompts** - Users must be able to cancel out of pick operations by pressing ESC. Include `" - ESC tühistamiseks"` (or equivalent) at the end of every pick prompt so users know they can exit if there's nothing valid to select.
+- **Handle cancelled picks gracefully** - When the user presses ESC, `CommandManager.Pick` throws an exception. Always wrap in Try/Catch and treat the exception as a cancellation (return Nothing, empty string, or exit gracefully).
+
 ```vb
 Dim selFilter As SelectionFilterEnum = SelectionFilterEnum.kAssemblyOccurrenceFilter
 Dim selectedObj As Object = Nothing
 
 Try
-    selectedObj = app.CommandManager.Pick(selFilter, "Select a component:")
+    selectedObj = app.CommandManager.Pick(selFilter, "Vali komponent - ESC tühistamiseks")
 Catch
-    ' User cancelled
+    ' User cancelled with ESC - handle gracefully
+    Return Nothing  ' or Exit Sub, etc.
 End Try
 
 If TypeOf selectedObj Is ComponentOccurrence Then
@@ -834,4 +839,5 @@ ctrlDef.Execute()  ' Shows checkout dialog
 | Mirror Component Pattern suppression | Mirror Component Patterns (Inventor 2026 associative) cannot be suppressed via API. `NativeObject` throws E_NOTIMPL, and suppressing individual occurrences breaks/flips the pattern. User must manually configure model states for Mirror patterns. |
 | Parameter formula `max(a, b)` fails | Use semicolon: `max(a; b)` - Inventor uses `;` as argument separator |
 | Parameter name starts with digit | Prefix with letter: `M_00011_Name` instead of `00011_Name` |
+| CommandManager.Pick with no cancel hint | Always include `" - ESC tühistamiseks"` in prompt; wrap in Try/Catch |
 
