@@ -265,16 +265,34 @@ Public Module CenterPatternLib
                                            occ As ComponentOccurrence, _
                                            startPlane As WorkPlane, _
                                            axisDirection As UnitVector, _
-                                           spanCm As Double) As Double
+                                           spanCm As Double, _
+                                           Optional ByRef logs As System.Collections.Generic.List(Of String) = Nothing) As Double
         If occ Is Nothing OrElse startPlane Is Nothing OrElse axisDirection Is Nothing Then
             Return 0
         End If
         
-        ' Get start plane position along axis
+        ' Get start plane geometry
         Dim startPlaneGeom As Plane = GeoLib.GetPlaneGeometry(startPlane)
         If startPlaneGeom Is Nothing Then Return 0
         
         Dim startPt As Point = startPlaneGeom.RootPoint
+        Dim startNormal As UnitVector = startPlaneGeom.Normal
+        
+        If logs IsNot Nothing Then
+            logs.Add("CenterPatternLib: === OFFSET CALCULATION ===")
+            logs.Add("CenterPatternLib: Start plane root = (" & _
+                     (startPt.X * 10).ToString("0.00") & ", " & _
+                     (startPt.Y * 10).ToString("0.00") & ", " & _
+                     (startPt.Z * 10).ToString("0.00") & ") mm")
+            logs.Add("CenterPatternLib: Start plane normal = (" & _
+                     startNormal.X.ToString("0.000") & ", " & _
+                     startNormal.Y.ToString("0.000") & ", " & _
+                     startNormal.Z.ToString("0.000") & ")")
+            logs.Add("CenterPatternLib: Axis direction = (" & _
+                     axisDirection.X.ToString("0.000") & ", " & _
+                     axisDirection.Y.ToString("0.000") & ", " & _
+                     axisDirection.Z.ToString("0.000") & ")")
+        End If
         
         ' Find the principal plane of the occurrence (perpendicular to axis)
         Dim principalPlaneProxy As Object = GeoLib.FindPrincipalPlane(occ, axisDirection)
@@ -284,6 +302,18 @@ Public Module CenterPatternLib
         If principalGeom Is Nothing Then Return 0
         
         Dim partPlanePt As Point = principalGeom.RootPoint
+        Dim principalNormal As UnitVector = principalGeom.Normal
+        
+        If logs IsNot Nothing Then
+            logs.Add("CenterPatternLib: Principal plane root = (" & _
+                     (partPlanePt.X * 10).ToString("0.00") & ", " & _
+                     (partPlanePt.Y * 10).ToString("0.00") & ", " & _
+                     (partPlanePt.Z * 10).ToString("0.00") & ") mm")
+            logs.Add("CenterPatternLib: Principal plane normal = (" & _
+                     principalNormal.X.ToString("0.000") & ", " & _
+                     principalNormal.Y.ToString("0.000") & ", " & _
+                     principalNormal.Z.ToString("0.000") & ")")
+        End If
         
         ' Calculate distance from start plane to part plane along axis
         Dim toPartX As Double = partPlanePt.X - startPt.X
@@ -294,11 +324,34 @@ Public Module CenterPatternLib
                                        toPartY * axisDirection.Y + _
                                        toPartZ * axisDirection.Z
         
+        ' Dot products for understanding directions
+        Dim startNormalDotAxis As Double = startNormal.X * axisDirection.X + _
+                                            startNormal.Y * axisDirection.Y + _
+                                            startNormal.Z * axisDirection.Z
+        Dim principalNormalDotAxis As Double = principalNormal.X * axisDirection.X + _
+                                                principalNormal.Y * axisDirection.Y + _
+                                                principalNormal.Z * axisDirection.Z
+        
+        If logs IsNot Nothing Then
+            logs.Add("CenterPatternLib: Distance from start to principal (along axis) = " & _
+                     (distFromStart * 10).ToString("0.00") & " mm")
+            logs.Add("CenterPatternLib: Start normal · axis = " & startNormalDotAxis.ToString("0.000"))
+            logs.Add("CenterPatternLib: Principal normal · axis = " & principalNormalDotAxis.ToString("0.000"))
+            logs.Add("CenterPatternLib: Span/2 = " & (spanCm * 10 / 2).ToString("0.00") & " mm")
+        End If
+        
         ' Center offset = actual distance - half span
         ' If part is at center (spanCm/2 from start), centerOffset = 0
         ' If part is closer to start, centerOffset < 0
         ' If part is closer to end, centerOffset > 0
-        Return distFromStart - (spanCm / 2)
+        Dim centerOffset As Double = distFromStart - (spanCm / 2)
+        
+        If logs IsNot Nothing Then
+            logs.Add("CenterPatternLib: Center offset = " & (centerOffset * 10).ToString("0.00") & " mm")
+            logs.Add("CenterPatternLib: === END OFFSET CALCULATION ===")
+        End If
+        
+        Return centerOffset
     End Function
 
     ' ============================================================================
@@ -444,11 +497,9 @@ Public Module CenterPatternLib
     ''' Create a constraint between the seed's principal plane and the start work plane,
     ''' with a parametric offset expression.
     ''' 
-    ''' Chooses Flush or Mate based on normal alignment:
-    ''' - If principal plane normal points SAME direction as axis → use Mate
-    ''' - If principal plane normal points OPPOSITE to axis → use Flush
-    ''' 
-    ''' This ensures the offset moves the seed in the correct direction (toward end plane).
+    ''' The constraint type and offset sign are determined by analyzing the geometry:
+    ''' - We need the offset to move the seed FROM its current position TO the first instance position
+    ''' - The constraint offset direction depends on normal directions
     ''' 
     ''' Total offset = Nihe (first instance offset from start) + KeskNihe (center offset)
     ''' </summary>
@@ -485,34 +536,87 @@ Public Module CenterPatternLib
             Return Nothing
         End If
         
-        ' Get principal plane normal to determine constraint type
+        ' Get geometries of both planes
         Dim principalGeom As Plane = GeoLib.GetPlaneGeometry(principalPlaneProxy)
-        If principalGeom Is Nothing Then
-            If logs IsNot Nothing Then logs.Add("CenterPatternLib: ERROR - Could not get principal plane geometry")
+        Dim startPlaneGeom As Plane = GeoLib.GetPlaneGeometry(startPlane)
+        
+        If principalGeom Is Nothing OrElse startPlaneGeom Is Nothing Then
+            If logs IsNot Nothing Then logs.Add("CenterPatternLib: ERROR - Could not get plane geometries")
             Return Nothing
         End If
         
         Dim principalNormal As UnitVector = principalGeom.Normal
+        Dim startNormal As UnitVector = startPlaneGeom.Normal
+        Dim principalRoot As Point = principalGeom.RootPoint
+        Dim startRoot As Point = startPlaneGeom.RootPoint
         
-        ' Check if principal plane normal points same direction as axis
-        ' Dot product > 0 means same direction, < 0 means opposite
-        Dim dotProduct As Double = principalNormal.X * axisDirection.X + _
-                                    principalNormal.Y * axisDirection.Y + _
-                                    principalNormal.Z * axisDirection.Z
-        
-        ' When principal normal is OPPOSITE to axis direction (dot < 0):
-        '   Mate constraint with positive offset pushes seed toward end (correct)
-        ' When principal normal is SAME as axis direction (dot > 0):
-        '   Flush constraint with positive offset pushes seed toward end (correct)
-        Dim useMate As Boolean = (dotProduct < 0)
+        ' Calculate dot products
+        Dim principalDotAxis As Double = principalNormal.X * axisDirection.X + _
+                                          principalNormal.Y * axisDirection.Y + _
+                                          principalNormal.Z * axisDirection.Z
+        Dim startDotAxis As Double = startNormal.X * axisDirection.X + _
+                                      startNormal.Y * axisDirection.Y + _
+                                      startNormal.Z * axisDirection.Z
+        Dim normalsDotProduct As Double = principalNormal.X * startNormal.X + _
+                                           principalNormal.Y * startNormal.Y + _
+                                           principalNormal.Z * startNormal.Z
         
         If logs IsNot Nothing Then
+            logs.Add("CenterPatternLib: === CONSTRAINT CREATION ===")
+            logs.Add("CenterPatternLib: Start plane root = (" & _
+                     (startRoot.X * 10).ToString("0.00") & ", " & _
+                     (startRoot.Y * 10).ToString("0.00") & ", " & _
+                     (startRoot.Z * 10).ToString("0.00") & ") mm")
+            logs.Add("CenterPatternLib: Start plane normal = (" & _
+                     startNormal.X.ToString("0.000") & ", " & _
+                     startNormal.Y.ToString("0.000") & ", " & _
+                     startNormal.Z.ToString("0.000") & ")")
+            logs.Add("CenterPatternLib: Principal plane root = (" & _
+                     (principalRoot.X * 10).ToString("0.00") & ", " & _
+                     (principalRoot.Y * 10).ToString("0.00") & ", " & _
+                     (principalRoot.Z * 10).ToString("0.00") & ") mm")
             logs.Add("CenterPatternLib: Principal plane normal = (" & _
                      principalNormal.X.ToString("0.000") & ", " & _
                      principalNormal.Y.ToString("0.000") & ", " & _
                      principalNormal.Z.ToString("0.000") & ")")
-            logs.Add("CenterPatternLib: Dot product with axis = " & dotProduct.ToString("0.000"))
-            logs.Add("CenterPatternLib: Using " & If(useMate, "Mate", "Flush") & " constraint")
+            logs.Add("CenterPatternLib: Axis direction = (" & _
+                     axisDirection.X.ToString("0.000") & ", " & _
+                     axisDirection.Y.ToString("0.000") & ", " & _
+                     axisDirection.Z.ToString("0.000") & ")")
+            logs.Add("CenterPatternLib: Principal·Axis = " & principalDotAxis.ToString("0.000"))
+            logs.Add("CenterPatternLib: Start·Axis = " & startDotAxis.ToString("0.000"))
+            logs.Add("CenterPatternLib: Principal·Start (normals) = " & normalsDotProduct.ToString("0.000"))
+        End If
+        
+        ' Determine constraint type based on whether normals face same or opposite directions
+        ' Normals dot > 0: same direction → Flush
+        ' Normals dot < 0: opposite directions → Mate
+        Dim useMate As Boolean = (normalsDotProduct < 0)
+        
+        ' Determine if we need to negate the offset
+        ' Our offset formula measures distance along AXIS direction (positive = toward end)
+        ' 
+        ' For BOTH Flush and Mate constraints (from testing):
+        '   - Positive offset moves seed OPPOSITE to principal plane's normal direction
+        '   - If principal normal = +axis: positive offset moves seed OPPOSITE to axis (toward start) → NEGATE
+        '   - If principal normal = -axis: positive offset moves seed SAME as axis (toward end) → DON'T NEGATE
+        '   
+        ' Therefore: negate when principal normal aligns with axis (principalDotAxis > 0)
+        Dim needNegateOffset As Boolean = (principalDotAxis > 0)
+        
+        If logs IsNot Nothing Then
+            logs.Add("CenterPatternLib: Using " & If(useMate, "MATE", "FLUSH") & " constraint")
+            logs.Add("CenterPatternLib: Need to negate offset: " & needNegateOffset.ToString())
+            logs.Add("CenterPatternLib: Offset expression: " & offsetExpression)
+        End If
+        
+        ' Build final offset expression
+        Dim finalOffsetExpr As String = offsetExpression
+        If needNegateOffset Then
+            finalOffsetExpr = "-(" & offsetExpression & ")"
+            If logs IsNot Nothing Then
+                logs.Add("CenterPatternLib: Final offset expression: " & finalOffsetExpr)
+            End If
         End If
         
         ' Create the appropriate constraint type
@@ -524,11 +628,13 @@ Public Module CenterPatternLib
                 constraint.Name = constraintName
                 
                 Try
-                    constraint.Offset.Expression = offsetExpression
+                    constraint.Offset.Expression = finalOffsetExpr
+                    If logs IsNot Nothing Then logs.Add("CenterPatternLib: Mate constraint created with offset: " & finalOffsetExpr)
                 Catch ex As Exception
                     If logs IsNot Nothing Then logs.Add("CenterPatternLib: WARNING - Could not set offset expression: " & ex.Message)
                 End Try
                 
+                If logs IsNot Nothing Then logs.Add("CenterPatternLib: === END CONSTRAINT CREATION ===")
                 Return constraint
             Catch ex As Exception
                 If logs IsNot Nothing Then logs.Add("CenterPatternLib: Mate constraint failed: " & ex.Message)
@@ -541,11 +647,13 @@ Public Module CenterPatternLib
                 constraint.Name = constraintName
                 
                 Try
-                    constraint.Offset.Expression = offsetExpression
+                    constraint.Offset.Expression = finalOffsetExpr
+                    If logs IsNot Nothing Then logs.Add("CenterPatternLib: Flush constraint created with offset: " & finalOffsetExpr)
                 Catch ex As Exception
                     If logs IsNot Nothing Then logs.Add("CenterPatternLib: WARNING - Could not set offset expression: " & ex.Message)
                 End Try
                 
+                If logs IsNot Nothing Then logs.Add("CenterPatternLib: === END CONSTRAINT CREATION ===")
                 Return constraint
             Catch ex As Exception
                 If logs IsNot Nothing Then logs.Add("CenterPatternLib: Flush constraint failed: " & ex.Message)
@@ -561,9 +669,10 @@ Public Module CenterPatternLib
                     principalPlaneProxy, startPlane, 0)
                 constraint.Name = constraintName
                 Try
-                    constraint.Offset.Expression = offsetExpression
+                    constraint.Offset.Expression = finalOffsetExpr
                 Catch
                 End Try
+                If logs IsNot Nothing Then logs.Add("CenterPatternLib: === END CONSTRAINT CREATION ===")
                 Return constraint
             Catch
             End Try
@@ -573,15 +682,17 @@ Public Module CenterPatternLib
                     principalPlaneProxy, startPlane, 0)
                 constraint.Name = constraintName
                 Try
-                    constraint.Offset.Expression = offsetExpression
+                    constraint.Offset.Expression = finalOffsetExpr
                 Catch
                 End Try
+                If logs IsNot Nothing Then logs.Add("CenterPatternLib: === END CONSTRAINT CREATION ===")
                 Return constraint
             Catch
             End Try
         End If
         
         If logs IsNot Nothing Then logs.Add("CenterPatternLib: ERROR - Both constraint types failed")
+        If logs IsNot Nothing Then logs.Add("CenterPatternLib: === END CONSTRAINT CREATION ===")
         Return Nothing
     End Function
 
@@ -697,9 +808,9 @@ Public Module CenterPatternLib
         
         ' 4. Calculate center offset (before copying seed)
         logs.Add("CenterPatternLib: Calculating center offset...")
-        Dim centerOffsetCm As Double = CalculateCenterOffset(app, seedOcc, startPlane, axisDirection, spanCm)
+        Dim centerOffsetCm As Double = CalculateCenterOffset(app, seedOcc, startPlane, axisDirection, spanCm, logs)
         Dim centerOffsetMm As Double = centerOffsetCm * 10
-        logs.Add("CenterPatternLib: Center offset = " & centerOffsetMm.ToString("0.00") & " mm")
+        logs.Add("CenterPatternLib: Center offset result = " & centerOffsetMm.ToString("0.00") & " mm")
         
         ' 5. Copy seed and suppress original
         logs.Add("CenterPatternLib: Copying seed occurrence...")
@@ -777,28 +888,24 @@ Public Module CenterPatternLib
             logs.Add("CenterPatternLib: Seed constraint created")
         End If
         
-        ' 9. Create rectangular pattern if count > 1
+        ' 9. Create rectangular pattern (always create even if count=1, so it updates when count changes)
         Dim totalCount As Double = GetParameterValue(asmDoc, countParamName)
         logs.Add("CenterPatternLib: Total count = " & CInt(totalCount).ToString())
         
-        If totalCount > 1 Then
-            logs.Add("CenterPatternLib: Creating pattern...")
-            
-            Dim pattern As RectangularOccurrencePattern = PatternLib.CreateRectangularPatternFromOccurrence( _
-                app, asmDoc, patternSeed, dirAxis, countParamName, spacingParamName, patternName)
-            
-            If pattern Is Nothing Then
-                logs.Add("CenterPatternLib: WARNING - Pattern creation failed")
-            Else
-                logs.Add("CenterPatternLib: Pattern created successfully")
-                
-                ' Log final positions
-                Dim patternOccs As System.Collections.Generic.List(Of ComponentOccurrence) = _
-                    PatternLib.GetPatternOccurrences(pattern)
-                logs.Add("CenterPatternLib: Pattern has " & patternOccs.Count.ToString() & " element(s)")
-            End If
+        logs.Add("CenterPatternLib: Creating pattern...")
+        
+        Dim pattern As RectangularOccurrencePattern = PatternLib.CreateRectangularPatternFromOccurrence( _
+            app, asmDoc, patternSeed, dirAxis, countParamName, spacingParamName, patternName)
+        
+        If pattern Is Nothing Then
+            logs.Add("CenterPatternLib: WARNING - Pattern creation failed")
         Else
-            logs.Add("CenterPatternLib: Count = 1, no pattern needed (just the seed)")
+            logs.Add("CenterPatternLib: Pattern created successfully")
+            
+            ' Log final positions
+            Dim patternOccs As System.Collections.Generic.List(Of ComponentOccurrence) = _
+                PatternLib.GetPatternOccurrences(pattern)
+            logs.Add("CenterPatternLib: Pattern has " & patternOccs.Count.ToString() & " element(s)")
         End If
         
         ' 10. Store configuration for re-runs
