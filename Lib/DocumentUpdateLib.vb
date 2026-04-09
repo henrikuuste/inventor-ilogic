@@ -507,6 +507,13 @@ Public Module DocumentUpdateLib
         ' Start Sub Main
         result.AppendLine("Sub Main()")
         
+        ' Add initial update to ensure formula-based parameters are current before handlers run
+        If sections IsNot Nothing AndAlso sections.Count > 0 Then
+            result.AppendLine("    ' Update document first to recalculate formula dependencies")
+            result.AppendLine("    ThisDoc.Document.Update()")
+            result.AppendLine()
+        End If
+        
         ' Add sections
         If sections IsNot Nothing AndAlso sections.Count > 0 Then
             Dim isFirst As Boolean = True

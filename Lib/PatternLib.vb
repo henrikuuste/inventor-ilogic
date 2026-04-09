@@ -277,5 +277,81 @@ Public Module PatternLib
             Return Nothing
         End Try
     End Function
+    
+    ''' <summary>
+    ''' Copy an occurrence and hide the original (set as Reference in BOM).
+    ''' The original is NOT suppressed, so it can still be moved/used for constraints.
+    ''' The copy is placed at the same position as the original.
+    ''' Returns the new copy which will be used as the pattern seed.
+    ''' </summary>
+    Public Function CopyAndHideSeed(app As Inventor.Application, _
+                                     asmDoc As AssemblyDocument, _
+                                     seedOcc As ComponentOccurrence, _
+                                     copyBaseName As String) As ComponentOccurrence
+        If seedOcc Is Nothing Then Return Nothing
+        
+        Dim asmDef As AssemblyComponentDefinition = asmDoc.ComponentDefinition
+        
+        ' Get the document being referenced
+        Dim partDoc As Document = seedOcc.Definition.Document
+        
+        ' Place a new instance at the SAME position as the original
+        Dim matrix As Matrix = seedOcc.Transformation
+        
+        Try
+            Dim newOcc As ComponentOccurrence = asmDef.Occurrences.Add(partDoc.FullDocumentName, matrix)
+            
+            ' Unground so it can be constrained later
+            If newOcc.Grounded Then
+                newOcc.Grounded = False
+            End If
+            
+            ' Rename the new occurrence
+            Try
+                newOcc.Name = copyBaseName & ":1"
+            Catch
+            End Try
+            
+            ' Don't suppress - instead set as Reference (excludes from BOM) and hide
+            Try
+                seedOcc.BOMStructure = BOMStructureEnum.kReferenceBOMStructure
+            Catch
+            End Try
+            
+            Try
+                seedOcc.Visible = False
+            Catch
+            End Try
+            
+            Return newOcc
+        Catch
+            Return Nothing
+        End Try
+    End Function
+    
+    ''' <summary>
+    ''' Restore a hidden seed occurrence to normal state.
+    ''' Sets BOM structure back to Default and makes visible.
+    ''' </summary>
+    Public Sub RestoreHiddenSeed(seedOcc As ComponentOccurrence)
+        If seedOcc Is Nothing Then Exit Sub
+        
+        Try
+            seedOcc.BOMStructure = BOMStructureEnum.kDefaultBOMStructure
+        Catch
+        End Try
+        
+        Try
+            seedOcc.Visible = True
+        Catch
+        End Try
+        
+        Try
+            If seedOcc.Suppressed Then
+                seedOcc.Unsuppress()
+            End If
+        Catch
+        End Try
+    End Sub
 
 End Module
