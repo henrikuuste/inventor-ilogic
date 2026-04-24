@@ -59,14 +59,8 @@ Sub Main()
     ' ========================================================================
     Dim stateDefs As New Dictionary(Of String, List(Of String))
     
-    ' Kõik - all parts visible/unsuppressed
-    stateDefs.Add("Kõik", Nothing)
-    
-    ' Karkass papiga - frame with cardboard (wood + metal + cardboard)
-    stateDefs.Add("Karkass papiga", New List(Of String)({"Puit", "Metall", "Papp"}))
-    
-    ' Karkass papita - frame without cardboard (wood + metal only)
-    stateDefs.Add("Karkass papita", New List(Of String)({"Puit", "Metall"}))
+    stateDefs.Add("Karkass", New List(Of String)({"Puit", "Metall", "Papp"}))
+    stateDefs.Add("Poroloon", New List(Of String)({"Poroloon"}))
     
     ' ========================================================================
     ' EXECUTION
