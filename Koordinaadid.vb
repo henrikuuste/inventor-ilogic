@@ -415,8 +415,10 @@ Sub RunUcsDialog(app As Inventor.Application, asmDoc As AssemblyDocument, _
     frm.CancelButton = btnCancel
     frm.Controls.Add(btnCancel)
     
-    ' OK button click - set confirmed BEFORE form closes
+    ' Button click handlers
     AddHandler btnOK.Click, AddressOf OnOkClicked
+    AddHandler btnCancel.Click, AddressOf OnCancelClicked
+    btnCancel.Tag = frm
     
     ' --- Event handlers for live preview ---
     AddHandler cboPosX.SelectedIndexChanged, AddressOf OnSelectionChanged
@@ -476,6 +478,12 @@ Sub OnOkClicked(sender As Object, e As EventArgs)
     
     ' Close the form
     frm.DialogResult = DialogResult.OK
+    frm.Close()
+End Sub
+
+Sub OnCancelClicked(sender As Object, e As EventArgs)
+    Dim btn As System.Windows.Forms.Button = CType(sender, System.Windows.Forms.Button)
+    Dim frm As System.Windows.Forms.Form = CType(btn.Tag, System.Windows.Forms.Form)
     frm.Close()
 End Sub
 
