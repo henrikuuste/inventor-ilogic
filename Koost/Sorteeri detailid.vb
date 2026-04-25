@@ -54,8 +54,8 @@ Sub Main()
     folderPatterns.Add("Metall", New List(Of String)({".*alumiinium.*", ".*teras.*"}))
     
     ' ========================================================================
-    ' CONFIGURATION: Model state / design view definitions
-    ' Nothing = all folders enabled, otherwise list of included folder names
+    ' CONFIGURATION: Model state definitions (suppression for BOM)
+    ' Nothing = all folders unsuppressed, otherwise list of included folder names
     ' ========================================================================
     Dim stateDefs As New Dictionary(Of String, List(Of String))
     
@@ -63,9 +63,17 @@ Sub Main()
     stateDefs.Add("Poroloon", New List(Of String)({"Poroloon"}))
     
     ' ========================================================================
+    ' CONFIGURATION: Design view definitions (visibility)
+    ' Nothing = all folders visible, otherwise list of VISIBLE folder names
+    ' ========================================================================
+    Dim viewDefs As New Dictionary(Of String, List(Of String))
+    
+    viewDefs.Add("Papita", New List(Of String)({"Puit", "Metall", "Poroloon"}))  ' Papp hidden
+    
+    ' ========================================================================
     ' EXECUTION
     ' ========================================================================
-    SortingLib.Run(asmDoc, folderPatterns, stateDefs)
+    SortingLib.Run(asmDoc, folderPatterns, stateDefs, viewDefs)
     
     ' Summary
     UtilsLib.LogInfo("Sorteeri detailid: Completed")
