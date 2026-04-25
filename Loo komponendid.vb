@@ -889,7 +889,7 @@ Function ShowMainDialog(app As Inventor.Application, _
         dgv.Rows(rowIndex).Cells("colW").Value = FormatNumber(bi.WidthValue * 10, 2)
         dgv.Rows(rowIndex).Cells("colL").Value = FormatNumber(bi.LengthValue * 10, 2)
         dgv.Rows(rowIndex).Cells("colSM").Value = bi.ConvertToSheetMetal
-        dgv.Rows(rowIndex).Cells("colMat").Value = If(String.IsNullOrEmpty(bi.MaterialName), "", bi.MaterialName)
+        dgv.Rows(rowIndex).Cells("colMat").Value = GetValidatedMaterial(bi.MaterialName, materials)
     Next
     
     ' Store pick index in form Tag (can't use ByRef in lambda)
@@ -955,7 +955,7 @@ Function ShowMainDialog(app As Inventor.Application, _
                     dgv.Rows(e.RowIndex).Cells("colLink").Value = "Eemalda seos"
                     dgv.Rows(e.RowIndex).Cells("colSelected").Value = False
                     dgv.Rows(e.RowIndex).Cells("colSM").Value = bi.ConvertToSheetMetal
-                    dgv.Rows(e.RowIndex).Cells("colMat").Value = If(String.IsNullOrEmpty(bi.MaterialName), "", bi.MaterialName)
+                    dgv.Rows(e.RowIndex).Cells("colMat").Value = GetValidatedMaterial(bi.MaterialName, materials)
                     dgv.Rows(e.RowIndex).Cells("colT").Value = FormatNumber(bi.ThicknessValue * 10, 2)
                     dgv.Rows(e.RowIndex).Cells("colW").Value = FormatNumber(bi.WidthValue * 10, 2)
                     dgv.Rows(e.RowIndex).Cells("colL").Value = FormatNumber(bi.LengthValue * 10, 2)
@@ -1085,6 +1085,13 @@ Sub SyncGridToBodyInfo(dgv As DataGridView, bodies As List(Of MakeComponentsLib.
         End If
     Next
 End Sub
+
+' Get validated material value for ComboBox (returns empty if not in items)
+Function GetValidatedMaterial(materialName As String, materials As List(Of String)) As String
+    If String.IsNullOrEmpty(materialName) Then Return ""
+    If materials.Contains(materialName) Then Return materialName
+    Return ""
+End Function
 
 ' Sanitize a string for use as a filename
 Function SanitizeFileName(name As String) As String
