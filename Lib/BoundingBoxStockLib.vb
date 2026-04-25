@@ -915,7 +915,15 @@ Public Module BoundingBoxStockLib
         Next
     End Sub
 
+    ''' <summary>
+    ''' DEPRECATED: Use DimensionUpdateLib.RegisterDimensionHandler() instead.
+    ''' This function creates a standalone "Uuenda mõõdud" rule with external library dependencies.
+    ''' The new DimensionUpdateLib generates self-contained code that works on any computer.
+    ''' </summary>
+    <Obsolete("Use DimensionUpdateLib.RegisterDimensionHandler() instead")>
     Public Sub CreateOrUpdateRule(ByVal partDoc As PartDocument, ByVal thicknessAxis As String, ByVal widthAxis As String, ByVal lengthAxis As String, ByVal iLogicAuto As Object)
+        UtilsLib.LogWarn("BoundingBoxStockLib.CreateOrUpdateRule is deprecated. Use DimensionUpdateLib.RegisterDimensionHandler() instead.")
+        
         ' Only store thickness and width - length is determined by the other two
         SetCustomProperty(partDoc, "BB_ThicknessAxis", thicknessAxis)
         SetCustomProperty(partDoc, "BB_WidthAxis", widthAxis)
@@ -968,6 +976,12 @@ Public Module BoundingBoxStockLib
         End Try
     End Function
 
+    ''' <summary>
+    ''' DEPRECATED: Use DimensionUpdateLib.BuildDimensionUpdateCode() instead.
+    ''' This function generates rule text with external library dependencies.
+    ''' The new DimensionUpdateLib generates self-contained code that works on any computer.
+    ''' </summary>
+    <Obsolete("Use DimensionUpdateLib instead - generates self-contained code")>
     Public Function BuildRuleText() As String
         Dim sb As New System.Text.StringBuilder()
         

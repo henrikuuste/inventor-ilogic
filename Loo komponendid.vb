@@ -22,6 +22,8 @@ AddReference "Connectivity.InventorAddin.EdmAddin"
 
 ' Libraries come after references (UtilsLib before VaultNumberingLib for Vault logging)
 AddVbFile "Lib/UtilsLib.vb"
+AddVbFile "Lib/DocumentUpdateLib.vb"
+AddVbFile "Lib/DimensionUpdateLib.vb"
 AddVbFile "Lib/CustomPropertiesLib.vb"
 AddVbFile "Lib/VaultNumberingLib.vb"
 AddVbFile "Lib/FileSearchLib.vb"
@@ -375,20 +377,22 @@ Sub Main()
             MakeComponentsLib.AssignMaterial(newPart, bi.MaterialName)
         End If
         
-        ' Convert to sheet metal or set dimensions and create local rule
+        ' Convert to sheet metal or set dimensions and register update handler
         If bi.ConvertToSheetMetal Then
             If SheetMetalLib.ConvertToSheetMetal(newPart, bi.ThicknessVector, bi.ThicknessValue) Then
                 UtilsLib.LogInfo("Loo komponendid: Converted '" & bi.Name & "' to sheet metal")
+                ' Register dimension handler for sheet metal (empty axes = use flat pattern formulas)
+                DimensionUpdateLib.RegisterDimensionHandler(newPart, iLogicVb.Automation, "", "", "")
             Else
-                ' Sheet metal conversion failed - set dimension properties and create update rule
+                ' Sheet metal conversion failed - set dimension properties and register update handler
                 MakeComponentsLib.SetDimensionProperties(newPart, bi.ThicknessValue, bi.WidthValue, bi.LengthValue)
-                BoundingBoxStockLib.CreateOrUpdateRule(newPart, bi.ThicknessVector, bi.WidthVector, bi.LengthVector, iLogicVb.Automation)
-                UtilsLib.LogInfo("Loo komponendid: Created 'Uuenda mõõdud' rule for '" & bi.Name & "'")
+                DimensionUpdateLib.RegisterDimensionHandler(newPart, iLogicVb.Automation, bi.ThicknessVector, bi.WidthVector, bi.LengthVector)
+                UtilsLib.LogInfo("Loo komponendid: Registered dimension handler for '" & bi.Name & "'")
             End If
         Else
             MakeComponentsLib.SetDimensionProperties(newPart, bi.ThicknessValue, bi.WidthValue, bi.LengthValue)
-            BoundingBoxStockLib.CreateOrUpdateRule(newPart, bi.ThicknessVector, bi.WidthVector, bi.LengthVector, iLogicVb.Automation)
-            UtilsLib.LogInfo("Loo komponendid: Created 'Uuenda mõõdud' rule for '" & bi.Name & "'")
+            DimensionUpdateLib.RegisterDimensionHandler(newPart, iLogicVb.Automation, bi.ThicknessVector, bi.WidthVector, bi.LengthVector)
+            UtilsLib.LogInfo("Loo komponendid: Registered dimension handler for '" & bi.Name & "'")
         End If
         
         ' Save part (always SaveAs - either new file or recreated file)

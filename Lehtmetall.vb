@@ -4,6 +4,8 @@
 ' with sheet metal expressions, and creates flat pattern.
 
 AddVbFile "Lib/UtilsLib.vb"
+AddVbFile "Lib/DocumentUpdateLib.vb"
+AddVbFile "Lib/DimensionUpdateLib.vb"
 AddVbFile "Lib/CustomPropertiesLib.vb"
 
 Sub Main()
@@ -89,6 +91,11 @@ Sub Main()
     ' Set Width and Length custom properties as numeric values
     SetSheetMetalProperties(partDoc)
     UtilsLib.LogInfo("Lehtmetall: Set Width and Length properties")
+    
+    ' Register dimension update handler (self-contained, works on any computer)
+    DocumentUpdateLib.SetLogger(Logger)
+    DimensionUpdateLib.RegisterDimensionHandler(partDoc, iLogicVb.Automation, "", "", "")
+    UtilsLib.LogInfo("Lehtmetall: Registered dimension update handler")
     
     ' Create flat pattern using the already selected A-side face
     CreateFlatPattern(smCompDef, aSideFace)
@@ -255,6 +262,10 @@ Sub ValidateAndRepairExistingSheetMetal(app As Inventor.Application, partDoc As 
         fixes += 1
         UtilsLib.LogInfo("Lehtmetall: Repaired dimension custom properties.")
     End If
+    
+    ' Ensure dimension update handler is registered (self-contained, works on any computer)
+    DocumentUpdateLib.SetLogger(Logger)
+    DimensionUpdateLib.RegisterDimensionHandler(partDoc, iLogicVb.Automation, "", "", "")
 
     If Not smCompDef.HasFlatPattern Then
         If aSideFace Is Nothing Then

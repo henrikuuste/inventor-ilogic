@@ -4,18 +4,24 @@
 ' Töötab nii detaili kui koostu dokumentidega:
 ' - Detailis: töötleb aktiivset detaili
 ' - Koostus: töötleb valitud detailid
+' - Töötab nii tavaliste kui lehtmetalli detailidega
 '
 ' Shows all parts in a single DataGridView dialog where user can:
 ' - See T/W/L measurements for each part
-' - Change thickness axis (X/Y/Z/Custom)
+' - Change thickness axis (X/Y/Z/Custom) - for normal parts
 ' - Flip width/length
 ' - Pick a face for custom axis orientation
 '
-' Loob igasse detaili lokaalse reegli "Uuenda mõõdud", mis uuendab
-' iProperties väärtusi (Paksus, Laius, Pikkus) gabariitmõõtude alusel.
+' Sheet metal parts use flat pattern for dimensions (no axis selection).
+' Normal parts use bounding box with configurable axis orientation.
+'
+' Registers "Uuenda" rule handler that auto-updates dimension properties
+' (Thickness, Width, Length) on geometry/parameter changes.
 ' ============================================================================
 
 AddVbFile "Lib/UtilsLib.vb"
+AddVbFile "Lib/DocumentUpdateLib.vb"
+AddVbFile "Lib/DimensionUpdateLib.vb"
 AddVbFile "Lib/BoundingBoxStockLib.vb"
 
 Imports System.Collections.Generic
@@ -44,14 +50,8 @@ Sub Main()
     Dim selectedFlags As New List(Of Boolean)
 
     If doc.DocumentType = DocumentTypeEnum.kPartDocumentObject Then
-        ' Single part document
+        ' Single part document (works with both normal and sheet metal parts)
         Dim partDoc As PartDocument = CType(doc, PartDocument)
-        
-        If IsSheetMetalPart(partDoc) Then
-            MessageBox.Show("See reegel ei tööta lehtmetalli detailidega.", "Mõõdud")
-            Exit Sub
-        End If
-        
         CollectPartData(partDoc, partDocs, partNames, thicknessAxes, widthAxes, lengthAxes, customAxisDescs, selectedFlags)
         Logger.Info("Mõõdud: Processing single part - " & partDoc.DisplayName)
         
@@ -80,10 +80,7 @@ Sub Main()
                             processedDefs.Add(occ.Definition)
                             Try
                                 Dim partDoc As PartDocument = CType(occ.Definition.Document, PartDocument)
-                                ' Skip sheet metal parts
-                                If Not IsSheetMetalPart(partDoc) Then
-                                    CollectPartData(partDoc, partDocs, partNames, thicknessAxes, widthAxes, lengthAxes, customAxisDescs, selectedFlags)
-                                End If
+                                CollectPartData(partDoc, partDocs, partNames, thicknessAxes, widthAxes, lengthAxes, customAxisDescs, selectedFlags)
                             Catch
                             End Try
                         End If
@@ -94,8 +91,7 @@ Sub Main()
         End If
 
         If partDocs.Count = 0 Then
-            MessageBox.Show("Koostus ei leitud sobivaid detaile." & vbCrLf & _
-                            "(Lehtmetalli detailid on välja jäetud.)", "Mõõdud")
+            MessageBox.Show("Koostus ei leitud sobivaid detaile.", "Mõõdud")
             Exit Sub
         End If
     Else
@@ -112,6 +108,12 @@ Sub Main()
                                     customAxisDescs, selectedFlags, pickRowIndex)
 
         If dlgResult = DialogResult.Retry AndAlso pickRowIndex >= 0 AndAlso pickRowIndex < partDocs.Count Then
+            ' Skip face pick for sheet metal parts
+            If customAxisDescs(pickRowIndex) = "Lehtmetall" Then
+                pickRowIndex = -1
+                Continue Do
+            End If
+            
             ' User clicked "Vali pind" - do face pick
             Dim partDoc As PartDocument = partDocs(pickRowIndex)
             Logger.Info("Mõõdud: Picking face for '" & partNames(pickRowIndex) & "'")
@@ -163,10 +165,12 @@ Sub Main()
 
     ' Apply rules to selected parts
     Dim processedCount As Integer = 0
+    DocumentUpdateLib.SetLogger(Logger)
+    DimensionUpdateLib.SetLogger(Logger)
     For i As Integer = 0 To partDocs.Count - 1
         If selectedFlags(i) Then
             Dim partDoc As PartDocument = partDocs(i)
-            BoundingBoxStockLib.CreateOrUpdateRule(partDoc, thicknessAxes(i), widthAxes(i), lengthAxes(i), iLogicVb.Automation)
+            DimensionUpdateLib.RegisterDimensionHandler(partDoc, iLogicVb.Automation, thicknessAxes(i), widthAxes(i), lengthAxes(i))
             processedCount += 1
             Logger.Info("Mõõdud: Updated '" & partNames(i) & "' - T:" & thicknessAxes(i) & " W:" & widthAxes(i) & " L:" & lengthAxes(i))
         End If
@@ -196,6 +200,17 @@ Sub CollectPartData(ByVal partDoc As PartDocument, _
     If desc <> "" Then displayName &= " - " & desc
     partNames.Add(displayName)
     
+    ' Check if sheet metal - uses flat pattern for dimensions (no axis selection needed)
+    If IsSheetMetalPart(partDoc) Then
+        thicknessAxes.Add("")
+        widthAxes.Add("")
+        lengthAxes.Add("")
+        customAxisDescs.Add("Lehtmetall")
+        selectedFlags.Add(True)
+        Exit Sub
+    End If
+    
+    ' Normal part: axis configuration
     ' Try to read existing axis configuration from iProperties
     Dim thicknessAxis As String = BoundingBoxStockLib.GetCustomPropertyValue(partDoc, "BB_ThicknessAxis", "")
     Dim widthAxis As String = BoundingBoxStockLib.GetCustomPropertyValue(partDoc, "BB_WidthAxis", "")
@@ -286,14 +301,11 @@ Sub CollectAllPartsFromAssembly(ByVal occurrences As ComponentOccurrences, _
     For Each occ As ComponentOccurrence In occurrences
         Try
             If occ.DefinitionDocumentType = DocumentTypeEnum.kPartDocumentObject Then
-                ' Part occurrence - collect if not already processed
+                ' Part occurrence - collect if not already processed (both normal and sheet metal)
                 If Not processedDefs.Contains(occ.Definition) Then
                     processedDefs.Add(occ.Definition)
                     Dim partDoc As PartDocument = CType(occ.Definition.Document, PartDocument)
-                    ' Skip sheet metal parts
-                    If Not IsSheetMetalPart(partDoc) Then
-                        CollectPartData(partDoc, partDocs, partNames, thicknessAxes, widthAxes, lengthAxes, customAxisDescs, selectedFlags)
-                    End If
+                    CollectPartData(partDoc, partDocs, partNames, thicknessAxes, widthAxes, lengthAxes, customAxisDescs, selectedFlags)
                 End If
             ElseIf occ.DefinitionDocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
                 ' Sub-assembly - recurse into it
@@ -444,6 +456,7 @@ Function ShowBatchDialog(ByVal app As Inventor.Application, _
     colAxis.Items.Add("Y")
     colAxis.Items.Add("Z")
     colAxis.Items.Add("Kohandatud")
+    colAxis.Items.Add("Lehtmetall")
     dgv.Columns.Add(colAxis)
     
     ' Column: Flip button
@@ -476,7 +489,11 @@ Function ShowBatchDialog(ByVal app As Inventor.Application, _
         UpdateRowDisplayValues(dgv.Rows(rowIndex), partDocs(i), thicknessAxes(i), widthAxes(i), lengthAxes(i))
         
         ' Set axis combo value
-        If BoundingBoxStockLib.IsVectorFormat(thicknessAxes(i)) Then
+        If customAxisDescs(i) = "Lehtmetall" Then
+            dgv.Rows(rowIndex).Cells("colAxis").Value = "Lehtmetall"
+            ' Make axis cell read-only for sheet metal
+            dgv.Rows(rowIndex).Cells("colAxis").ReadOnly = True
+        ElseIf BoundingBoxStockLib.IsVectorFormat(thicknessAxes(i)) Then
             dgv.Rows(rowIndex).Cells("colAxis").Value = "Kohandatud"
         Else
             dgv.Rows(rowIndex).Cells("colAxis").Value = thicknessAxes(i)
@@ -491,6 +508,9 @@ Function ShowBatchDialog(ByVal app As Inventor.Application, _
         If e.RowIndex < 0 Then Exit Sub
         
         Dim idx As Integer = CInt(dgv.Rows(e.RowIndex).Tag)
+        
+        ' Skip actions for sheet metal parts
+        If customAxisDescs(idx) = "Lehtmetall" Then Exit Sub
         
         If e.ColumnIndex = dgv.Columns("colFlip").Index Then
             ' Flip width/length
@@ -516,6 +536,10 @@ Function ShowBatchDialog(ByVal app As Inventor.Application, _
         If e.ColumnIndex <> dgv.Columns("colAxis").Index Then Exit Sub
         
         Dim idx As Integer = CInt(dgv.Rows(e.RowIndex).Tag)
+        
+        ' Skip changes for sheet metal parts
+        If customAxisDescs(idx) = "Lehtmetall" Then Exit Sub
+        
         Dim newAxisValue As Object = dgv.Rows(e.RowIndex).Cells("colAxis").Value
         If newAxisValue Is Nothing Then Exit Sub
         
@@ -632,13 +656,33 @@ End Function
 Sub UpdateRowDisplayValues(ByVal row As DataGridViewRow, ByVal partDoc As PartDocument, _
                            ByVal thicknessAxis As String, ByVal widthAxis As String, ByVal lengthAxis As String)
     
-    Dim uom As UnitsOfMeasure = partDoc.UnitsOfMeasure
-    
     Dim thicknessValue As Double = 0
     Dim widthValue As Double = 0
     Dim lengthValue As Double = 0
     
-    If BoundingBoxStockLib.IsVectorFormat(thicknessAxis) Then
+    ' Check if sheet metal (empty axes = sheet metal)
+    If String.IsNullOrEmpty(thicknessAxis) AndAlso IsSheetMetalPart(partDoc) Then
+        ' Sheet metal: get dimensions from flat pattern
+        Try
+            Dim smCompDef As SheetMetalComponentDefinition = CType(partDoc.ComponentDefinition, SheetMetalComponentDefinition)
+            thicknessValue = smCompDef.Thickness.Value
+            
+            If smCompDef.HasFlatPattern Then
+                Dim fpBox As Box = smCompDef.FlatPattern.RangeBox
+                Dim fpX As Double = Math.Abs(fpBox.MaxPoint.X - fpBox.MinPoint.X)
+                Dim fpY As Double = Math.Abs(fpBox.MaxPoint.Y - fpBox.MinPoint.Y)
+                ' Width is smaller, Length is larger
+                If fpX <= fpY Then
+                    widthValue = fpX
+                    lengthValue = fpY
+                Else
+                    widthValue = fpY
+                    lengthValue = fpX
+                End If
+            End If
+        Catch
+        End Try
+    ElseIf BoundingBoxStockLib.IsVectorFormat(thicknessAxis) Then
         BoundingBoxStockLib.GetOrientedSizes(partDoc, thicknessAxis, widthAxis, lengthAxis, thicknessValue, widthValue, lengthValue)
     Else
         Dim xSize As Double = 0, ySize As Double = 0, zSize As Double = 0
