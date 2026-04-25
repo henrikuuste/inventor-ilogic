@@ -34,7 +34,7 @@ Sub Main()
         BOMExportLib.ExportWithDialog(asmDoc, False)
     Catch ex As System.Exception
         Logger.Error("Ekspordi BOM: " & ex.ToString())
-        System.Windows.Forms.MessageBox.Show("Viga BOM-i eksportimisel. Vaata iLogic logi.", "Ekspordi BOM")
+        System.Windows.Forms.MessageBox.Show("Viga BOM-i eksportimisel:" & vbCrLf & ex.Message, "Ekspordi BOM")
     End Try
 End Sub
 

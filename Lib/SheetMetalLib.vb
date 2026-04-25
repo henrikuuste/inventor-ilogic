@@ -170,6 +170,7 @@ Public Module SheetMetalLib
         Dim aSideFace As Face = FindFaceByNormal(partDoc, thicknessVector)
         If aSideFace IsNot Nothing Then
             CreateFlatPattern(smCompDef, aSideFace)
+            SetWidthLengthProperties(partDoc)
         Else
             UtilsLib.LogWarn("SheetMetalLib: Could not create flat pattern - A-side face not found")
         End If
@@ -201,11 +202,7 @@ Public Module SheetMetalLib
     
     Public Sub ExportThicknessAsProperty(smCompDef As SheetMetalComponentDefinition)
         Try
-            Dim thicknessParam As Parameter = smCompDef.Thickness
-            thicknessParam.ExposedAsProperty = True
-            thicknessParam.CustomPropertyFormat.PropertyType = CustomPropertyTypeEnum.kTextPropertyType
-            thicknessParam.CustomPropertyFormat.ShowUnitsString = True
-            thicknessParam.CustomPropertyFormat.Units = "mm"
+            CustomPropertiesLib.EnsureSheetMetalThicknessExport(smCompDef)
             UtilsLib.LogInfo("SheetMetalLib: Exported Thickness as iProperty")
         Catch ex As Exception
             UtilsLib.LogWarn("SheetMetalLib: Could not export Thickness: " & ex.Message)
@@ -214,9 +211,7 @@ Public Module SheetMetalLib
     
     Public Sub SetWidthLengthProperties(partDoc As PartDocument)
         Try
-            Dim propSet As PropertySet = partDoc.PropertySets.Item("Inventor User Defined Properties")
-            SetOrAddProperty(propSet, "Width", "=<Sheet Metal Width>")
-            SetOrAddProperty(propSet, "Length", "=<Sheet Metal Length>")
+            CustomPropertiesLib.ValidateAndFixDimensionProperties(partDoc)
             UtilsLib.LogInfo("SheetMetalLib: Set Width/Length properties")
         Catch ex As Exception
             UtilsLib.LogWarn("SheetMetalLib: Could not set Width/Length: " & ex.Message)

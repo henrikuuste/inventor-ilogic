@@ -85,10 +85,11 @@ Common standard examples:
 ### Associated 1:1 drawing placeholders (`Drawing.*`)
 
 These use the same association logic as the 1:1 drawing workflow (`BB_SourcePartNumber` + `BB_DrawingType = 1:1`).
-If no drawing is associated, values resolve to empty.
+If no drawing is associated, metadata values resolve to empty and `Drawing.Exists` resolves to `False`.
 
 | Placeholder | Meaning |
 |-------------|---------|
+| `{{Drawing.Exists}}` | `True` if associated 1:1 drawing found, otherwise `False` |
 | `{{Drawing.FileName}}` | Associated drawing file name |
 | `{{Drawing.Name}}` | Alias of `Drawing.FileName` |
 | `{{Drawing.Path}}` | Full path to associated drawing |
@@ -116,6 +117,33 @@ If a field is not available in your current environment/workflow, it resolves to
 - Header dates/authors: `{{File.ModifiedDate}}`, `{{Summary.Author}}`, `{{Summary.Last Saved By}}`
 - Table columns: `{{BOM.Item}}`, `{{Part Number}}`, `{{Description}}`, `{{BOM.Qty}}`
 - With custom/physical: `{{Custom.Thickness}}`, `{{Phys.Mass}}`
+- Drawing-aware table columns: `{{Drawing.Exists}}`, `{{Drawing.FileName}}`
+
+## Template selection UX
+
+When running **Ekspordi BOM**:
+
+1. Exporter first looks for templates in `VaultRoot\\Templates` (local workspace root + `Templates`).
+2. If `.xlsx` files are found there, a list is shown first.
+3. User can choose one from list or click **Sirvi...** (Browse) to pick any file.
+4. If nothing is found in the preferred folder, exporter opens file browser directly.
+5. In the template selection window, there is a **Detailne logi** checkbox (off by default).
+
+### Default template preselection
+
+Based on active model state (case-insensitive):
+
+- contains `karkass` or `puit` -> preselect first template containing `puiduspets`
+- contains `poroloon` -> preselect first template containing `poroloon`
+
+If no match is found, first template in the list is selected by default.
+
+## Output file defaults
+
+- Output save dialog opens in the source assembly folder.
+- Default file name is:
+  - `<sourceAssemblyBaseName>_<templateBaseName>.xlsx`
+  - Example: `000146_puiduspets.xlsx`
 
 ## Example (conceptual)
 

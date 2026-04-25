@@ -1074,18 +1074,13 @@ Public Module MakeComponentsLib
                                       width As Double, _
                                       length As Double)
         Try
-            Dim userProps As PropertySet = partDoc.PropertySets.Item("Inventor User Defined Properties")
-            
-            Dim uom As UnitsOfMeasure = partDoc.UnitsOfMeasure
-            Dim thicknessMm As String = uom.GetStringFromValue(thickness, "mm")
-            Dim widthMm As String = uom.GetStringFromValue(width, "mm")
-            Dim lengthMm As String = uom.GetStringFromValue(length, "mm")
-            
-            SetOrAddCustomProperty(userProps, "Thickness", thicknessMm)
-            SetOrAddCustomProperty(userProps, "Width", widthMm)
-            SetOrAddCustomProperty(userProps, "Length", lengthMm)
-            
-            UtilsLib.LogInfo("MakeComponentsLib: Set dimensions - T:" & thicknessMm & " W:" & widthMm & " L:" & lengthMm)
+            CustomPropertiesLib.ValidateAndFixDimensionProperties(partDoc, thickness, width, length)
+
+            Dim thicknessText As String = CustomPropertiesLib.FormatDimensionText(thickness)
+            Dim widthText As String = CustomPropertiesLib.FormatDimensionText(width)
+            Dim lengthText As String = CustomPropertiesLib.FormatDimensionText(length)
+            UtilsLib.LogInfo("MakeComponentsLib: Set dimensions (0-dec, no unit) - T:" & _
+                             thicknessText & " W:" & widthText & " L:" & lengthText)
         Catch ex As Exception
             UtilsLib.LogWarn("MakeComponentsLib: Failed to set dimensions: " & ex.Message)
         End Try
@@ -1095,17 +1090,6 @@ Public Module MakeComponentsLib
         Try
             propSet.Item(propName).Value = value
         Catch
-        End Try
-    End Sub
-    
-    Private Sub SetOrAddCustomProperty(propSet As PropertySet, propName As String, value As String)
-        Try
-            propSet.Item(propName).Value = value
-        Catch
-            Try
-                propSet.Add(value, propName)
-            Catch
-            End Try
         End Try
     End Sub
     

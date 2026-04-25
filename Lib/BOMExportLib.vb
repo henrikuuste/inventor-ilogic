@@ -45,32 +45,256 @@ Public Module BOMExportLib
     Private Const kDrawAssocType As String = "BB_DrawingType"
     Private Const kDrawAssocType1to1 As String = "1:1"
     Private m_DrawingCache As New Dictionary(Of String, BOMDrawingInfo)(StringComparer.OrdinalIgnoreCase)
-    Public Const VERBOSE_LOGGING As Boolean = True
+    Public Const DEFAULT_VERBOSE_LOGGING As Boolean = False
+    Private m_VerboseLogging As Boolean = DEFAULT_VERBOSE_LOGGING
 
 #Region "Public API"
 
     Public Sub ExportWithDialog(asmDoc As AssemblyDocument, Optional usePartsOnlyBomView As Boolean = False)
-        Dim ofd As New System.Windows.Forms.OpenFileDialog()
-        ofd.Title = "Vali Excel mall"
-        ofd.Filter = "Excel|*.xlsx;*.xls;*.xlsm|Kõik failid|*.*"
-        ofd.InitialDirectory = System.IO.Path.GetDirectoryName(asmDoc.FullFileName)
-        If ofd.ShowDialog() <> System.Windows.Forms.DialogResult.OK Then Return
+        m_VerboseLogging = DEFAULT_VERBOSE_LOGGING
+        Dim verboseFlag As Boolean = DEFAULT_VERBOSE_LOGGING
+        Dim sourceFolder As String = System.IO.Path.GetDirectoryName(asmDoc.FullFileName)
+        Dim templatesFolder As String = GetPreferredTemplatesFolder(asmDoc, sourceFolder)
+        VLog("BOMExport: Preferred templates folder: " & templatesFolder, Nothing, Nothing)
+
+        Dim templates As List(Of String) = GetTemplateCandidates(templatesFolder)
+        VLog("BOMExport: Found " & templates.Count & " template candidate(s) in preferred folder", Nothing, Nothing)
+
+        Dim templatePath As String = ""
+        If templates.Count > 0 Then
+            templatePath = SelectTemplateFromListOrBrowse(asmDoc, templates, templatesFolder, verboseFlag)
+        Else
+            templatePath = BrowseTemplateFile(templatesFolder, sourceFolder)
+        End If
+        If String.IsNullOrEmpty(templatePath) Then Return
+
+        m_VerboseLogging = verboseFlag
+        VLog("BOMExport: Detailne logi = " & m_VerboseLogging.ToString(), Nothing, Nothing)
+
+        Dim templateBase As String = System.IO.Path.GetFileNameWithoutExtension(templatePath)
+        Dim sourceBase As String = System.IO.Path.GetFileNameWithoutExtension(asmDoc.DisplayName)
+        Dim defaultOutputFile As String = sourceBase & "_" & templateBase & ".xlsx"
+        VLog("BOMExport: Default output name: " & defaultOutputFile, Nothing, Nothing)
 
         Dim sfd As New System.Windows.Forms.SaveFileDialog()
         sfd.Title = "Salvesta tekitatud BOM"
         sfd.Filter = "Excel|*.xlsx;*.xls;*.xlsm"
-        sfd.InitialDirectory = ofd.InitialDirectory
-        sfd.FileName = System.IO.Path.GetFileNameWithoutExtension(asmDoc.DisplayName) & "_BOM.xlsx"
+        sfd.InitialDirectory = sourceFolder
+        sfd.FileName = defaultOutputFile
         If sfd.ShowDialog() <> System.Windows.Forms.DialogResult.OK Then Return
 
-        InternalExport(asmDoc, ofd.FileName, sfd.FileName, usePartsOnlyBomView, Nothing, Nothing, Nothing)
+        InternalExport(asmDoc, templatePath, sfd.FileName, usePartsOnlyBomView, Nothing, Nothing, Nothing)
     End Sub
 
+    Private Function GetPreferredTemplatesFolder(asmDoc As AssemblyDocument, fallbackFolder As String) As String
+        Dim app As Inventor.Application = asmDoc.Parent
+        Dim vaultRoot As String = ""
+
+        ' Prefer project workspace as vault/local root if available.
+        Try
+            Dim project As DesignProject = app.DesignProjectManager.ActiveDesignProject
+            If project IsNot Nothing AndAlso Not String.IsNullOrEmpty(project.WorkspacePath) Then
+                vaultRoot = project.WorkspacePath
+            End If
+        Catch
+        End Try
+
+        ' Fallback: infer root by known "/Tooted/" segment convention.
+        If String.IsNullOrEmpty(vaultRoot) Then
+            Try
+                Dim fullPath As String = asmDoc.FullFileName
+                Dim marker As String = "\Tooted\"
+                Dim idx As Integer = fullPath.IndexOf(marker, StringComparison.OrdinalIgnoreCase)
+                If idx > 0 Then
+                    vaultRoot = fullPath.Substring(0, idx)
+                End If
+            Catch
+            End Try
+        End If
+
+        If String.IsNullOrEmpty(vaultRoot) Then vaultRoot = fallbackFolder
+        Dim pref As String = System.IO.Path.Combine(vaultRoot, "Templates")
+        If System.IO.Directory.Exists(pref) Then Return pref
+
+        ' Secondary fallback: project templates path.
+        Try
+            Dim p As DesignProject = app.DesignProjectManager.ActiveDesignProject
+            If p IsNot Nothing AndAlso Not String.IsNullOrEmpty(p.TemplatesPath) AndAlso System.IO.Directory.Exists(p.TemplatesPath) Then
+                Return p.TemplatesPath
+            End If
+        Catch
+        End Try
+
+        Return fallbackFolder
+    End Function
+
+    Private Function GetTemplateCandidates(folderPath As String) As List(Of String)
+        Dim files As New List(Of String)()
+        Try
+            If System.IO.Directory.Exists(folderPath) Then
+                For Each f As String In System.IO.Directory.GetFiles(folderPath, "*.xlsx")
+                    Dim fn As String = System.IO.Path.GetFileName(f)
+                    If Not fn.StartsWith("~$", StringComparison.OrdinalIgnoreCase) Then
+                        files.Add(f)
+                    End If
+                Next
+            End If
+        Catch
+        End Try
+        files.Sort()
+        Return files
+    End Function
+
+    Private Function BrowseTemplateFile(preferredFolder As String, fallbackFolder As String) As String
+        Do
+            Dim ofd As New System.Windows.Forms.OpenFileDialog()
+            ofd.Title = "Vali Excel mall"
+            ofd.Filter = "Excel|*.xlsx;*.xls;*.xlsm|Kõik failid|*.*"
+            ofd.InitialDirectory = If(System.IO.Directory.Exists(preferredFolder), preferredFolder, fallbackFolder)
+            If ofd.ShowDialog() <> System.Windows.Forms.DialogResult.OK Then Return ""
+
+            Dim pickedName As String = System.IO.Path.GetFileName(ofd.FileName)
+            If pickedName.StartsWith("~$", StringComparison.OrdinalIgnoreCase) Then
+                System.Windows.Forms.MessageBox.Show("Exceli ajutisi lukufaile (~$...) ei saa mallina kasutada. Vali palun päris mallifail.", "Ekspordi BOM")
+                Continue Do
+            End If
+            Return ofd.FileName
+        Loop
+    End Function
+
+    Private Function SelectTemplateFromListOrBrowse(asmDoc As AssemblyDocument, templates As List(Of String), templatesFolder As String, ByRef verboseFlag As Boolean) As String
+        Dim frm As New System.Windows.Forms.Form()
+        frm.Text = "Vali BOM mall"
+        frm.Width = 470
+        frm.Height = 500
+        frm.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen
+        frm.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog
+        frm.MaximizeBox = False
+        frm.MinimizeBox = False
+
+        Dim lbl As New System.Windows.Forms.Label()
+        lbl.Text = "Leitud mallid kaustas: " & templatesFolder
+        lbl.Left = 10
+        lbl.Top = 10
+        lbl.Width = 430
+        frm.Controls.Add(lbl)
+
+        Dim lst As New System.Windows.Forms.ListBox()
+        lst.Left = 10
+        lst.Top = 35
+        lst.Width = 430
+        lst.Height = 380
+        For Each p As String In templates
+            lst.Items.Add(System.IO.Path.GetFileName(p))
+        Next
+        frm.Controls.Add(lst)
+
+        Dim btnBrowse As New System.Windows.Forms.Button()
+        btnBrowse.Text = "Sirvi..."
+        btnBrowse.Left = 10
+        btnBrowse.Top = 425
+        btnBrowse.Width = 90
+        frm.Controls.Add(btnBrowse)
+
+        Dim btnOK As New System.Windows.Forms.Button()
+        btnOK.Text = "OK"
+        btnOK.Left = 280
+        btnOK.Top = 425
+        btnOK.Width = 80
+        btnOK.DialogResult = System.Windows.Forms.DialogResult.OK
+        frm.Controls.Add(btnOK)
+        frm.AcceptButton = btnOK
+
+        Dim btnCancel As New System.Windows.Forms.Button()
+        btnCancel.Text = "Tühista"
+        btnCancel.Left = 360
+        btnCancel.Top = 425
+        btnCancel.Width = 80
+        btnCancel.DialogResult = System.Windows.Forms.DialogResult.Cancel
+        frm.Controls.Add(btnCancel)
+        frm.CancelButton = btnCancel
+
+        Dim chkVerbose As New System.Windows.Forms.CheckBox()
+        chkVerbose.Text = "Detailne logi"
+        chkVerbose.Left = 110
+        chkVerbose.Top = 429
+        chkVerbose.Width = 120
+        chkVerbose.Checked = verboseFlag
+        chkVerbose.Anchor = System.Windows.Forms.AnchorStyles.Bottom Or System.Windows.Forms.AnchorStyles.Left
+        frm.Controls.Add(chkVerbose)
+
+        Dim browsePicked As String = ""
+        AddHandler btnBrowse.Click, Sub(sender, e)
+            browsePicked = BrowseTemplateFile(templatesFolder, templatesFolder)
+            If Not String.IsNullOrEmpty(browsePicked) Then
+                frm.DialogResult = System.Windows.Forms.DialogResult.OK
+                frm.Close()
+            End If
+        End Sub
+
+        ' Preselect likely template based on active model state name.
+        Dim preselectIdx As Integer = GetLikelyTemplateIndex(asmDoc, templates)
+        If preselectIdx < 0 AndAlso templates.Count > 0 Then preselectIdx = 0
+        If preselectIdx >= 0 AndAlso preselectIdx < lst.Items.Count Then
+            lst.SelectedIndex = preselectIdx
+            VLog("BOMExport: Template preselected index=" & preselectIdx & " file=" & System.IO.Path.GetFileName(templates(preselectIdx)), Nothing, Nothing)
+        End If
+
+        Dim dr As System.Windows.Forms.DialogResult = frm.ShowDialog()
+        If dr <> System.Windows.Forms.DialogResult.OK Then Return ""
+        verboseFlag = chkVerbose.Checked
+
+        If Not String.IsNullOrEmpty(browsePicked) Then
+            VLog("BOMExport: Template selected via browse: " & browsePicked, Nothing, Nothing)
+            Return browsePicked
+        End If
+        If lst.SelectedIndex >= 0 AndAlso lst.SelectedIndex < templates.Count Then
+            VLog("BOMExport: Template selected from list: " & templates(lst.SelectedIndex), Nothing, Nothing)
+            Return templates(lst.SelectedIndex)
+        End If
+        Return ""
+    End Function
+
+    Private Function GetActiveModelStateName(asmDoc As AssemblyDocument) As String
+        Try
+            Dim ms As Object = asmDoc.ComponentDefinition.ModelStates.ActiveModelState
+            If ms IsNot Nothing Then Return CStr(ms.Name)
+        Catch
+        End Try
+        Return ""
+    End Function
+
+    Private Function GetLikelyTemplateIndex(asmDoc As AssemblyDocument, templates As List(Of String)) As Integer
+        If templates Is Nothing OrElse templates.Count = 0 Then Return -1
+        Dim stateName As String = GetActiveModelStateName(asmDoc)
+        Dim s As String = stateName.ToLowerInvariant()
+        VLog("BOMExport: Active model state for preselection: '" & stateName & "'", Nothing, Nothing)
+
+        Dim needle As String = ""
+        If s.Contains("karkass") OrElse s.Contains("puit") Then
+            needle = "puiduspets"
+        ElseIf s.Contains("poroloon") Then
+            needle = "poroloon"
+        End If
+        If String.IsNullOrEmpty(needle) Then Return -1
+
+        For i As Integer = 0 To templates.Count - 1
+            Dim fn As String = System.IO.Path.GetFileName(templates(i)).ToLowerInvariant()
+            If fn.Contains(needle) Then
+                VLog("BOMExport: Model-state heuristic matched template '" & fn & "' by needle '" & needle & "'", Nothing, Nothing)
+                Return i
+            End If
+        Next
+        Return -1
+    End Function
+
     Public Sub ExportBOM(asmDoc As AssemblyDocument, templatePath As String, outputPath As String, Optional usePartsOnlyBomView As Boolean = False)
+        m_VerboseLogging = DEFAULT_VERBOSE_LOGGING
         InternalExport(asmDoc, templatePath, outputPath, usePartsOnlyBomView, Nothing, Nothing, Nothing)
     End Sub
 
     Public Sub ExportBatch(asmDoc As AssemblyDocument, items As List(Of ExportConfig), Optional usePartsOnlyBomView As Boolean = False)
+        m_VerboseLogging = DEFAULT_VERBOSE_LOGGING
         If items Is Nothing Then Return
         For Each ex As ExportConfig In items
             If ex Is Nothing OrElse String.IsNullOrEmpty(ex.TemplatePath) Then Continue For
@@ -92,7 +316,7 @@ Public Module BOMExportLib
     End Sub
 
     Private Sub VLog(m As String, logLines As List(Of String), logger As Object)
-        If VERBOSE_LOGGING Then
+        If m_VerboseLogging Then
             AddLog(m, logLines, logger)
         End If
     End Sub
@@ -174,6 +398,15 @@ Public Module BOMExportLib
                 End If
             End Try
 
+            If IsOutputLockedByExcel(outputPath) Then
+                Dim lockFile As String = GetExcelLockFilePath(outputPath)
+                Dim msg As String = "Väljundfail on tõenäoliselt Excelis avatud. Sule fail ja proovi uuesti." & vbCrLf & _
+                                    "Fail: " & outputPath & vbCrLf & _
+                                    "Lukufail: " & lockFile
+                AddLog("BOMExport: " & msg, logLines, logger)
+                Throw New System.Exception(msg)
+            End If
+
             If System.IO.File.Exists(outputPath) Then
                 System.IO.File.Delete(outputPath)
             End If
@@ -199,6 +432,19 @@ Public Module BOMExportLib
             End If
         End Try
     End Sub
+
+    Private Function GetExcelLockFilePath(outputPath As String) As String
+        Dim dirPath As String = System.IO.Path.GetDirectoryName(outputPath)
+        Dim fileName As String = System.IO.Path.GetFileName(outputPath)
+        If String.IsNullOrEmpty(dirPath) OrElse String.IsNullOrEmpty(fileName) Then Return ""
+        Return System.IO.Path.Combine(dirPath, "~$" & fileName)
+    End Function
+
+    Private Function IsOutputLockedByExcel(outputPath As String) As Boolean
+        Dim lockFile As String = GetExcelLockFilePath(outputPath)
+        If String.IsNullOrEmpty(lockFile) Then Return False
+        Return System.IO.File.Exists(lockFile)
+    End Function
 
     Private Sub SaveWorkbookAs(wb As Object, outputPath As String, logLines As List(Of String), logger As Object)
         Dim ext As String = System.IO.Path.GetExtension(outputPath).ToLowerInvariant()
@@ -670,20 +916,6 @@ Public Module BOMExportLib
     End Function
 
     Private Function GetDrawingValue(inner As String, asmDoc As AssemblyDocument, srcDoc As Document, logLines As List(Of String), logger As Object) As Object
-        If srcDoc Is Nothing Then Return ""
-
-        Dim partNumber As String = GetPropertyString(srcDoc, "Part Number", kDesignProps)
-        If String.IsNullOrEmpty(partNumber) Then
-            VLog("BOMExport: Drawing lookup skipped - source document has no Part Number", logLines, logger)
-            Return ""
-        End If
-
-        Dim info As BOMDrawingInfo = GetDrawingInfoForPart(partNumber, asmDoc, srcDoc, logLines, logger)
-        If info Is Nothing OrElse Not info.Found Then
-            VLog("BOMExport: Drawing lookup '" & inner & "' -> <not found> for part " & partNumber, logLines, logger)
-            Return ""
-        End If
-
         Dim key As String = inner
         If key.StartsWith("Drawing.", StringComparison.OrdinalIgnoreCase) Then
             key = key.Substring(8).Trim()
@@ -691,7 +923,34 @@ Public Module BOMExportLib
             key = ""
         End If
 
+        If srcDoc Is Nothing Then
+            If key.Equals("exists", StringComparison.OrdinalIgnoreCase) OrElse key.Equals("hasdrawing", StringComparison.OrdinalIgnoreCase) OrElse key.Equals("has", StringComparison.OrdinalIgnoreCase) Then
+                Return "False"
+            End If
+            Return ""
+        End If
+
+        Dim partNumber As String = GetPropertyString(srcDoc, "Part Number", kDesignProps)
+        If String.IsNullOrEmpty(partNumber) Then
+            VLog("BOMExport: Drawing lookup skipped - source document has no Part Number", logLines, logger)
+            If key.Equals("exists", StringComparison.OrdinalIgnoreCase) OrElse key.Equals("hasdrawing", StringComparison.OrdinalIgnoreCase) OrElse key.Equals("has", StringComparison.OrdinalIgnoreCase) Then
+                Return "False"
+            End If
+            Return ""
+        End If
+
+        Dim info As BOMDrawingInfo = GetDrawingInfoForPart(partNumber, asmDoc, srcDoc, logLines, logger)
+        If info Is Nothing OrElse Not info.Found Then
+            VLog("BOMExport: Drawing lookup '" & inner & "' -> <not found> for part " & partNumber, logLines, logger)
+            If key.Equals("exists", StringComparison.OrdinalIgnoreCase) OrElse key.Equals("hasdrawing", StringComparison.OrdinalIgnoreCase) OrElse key.Equals("has", StringComparison.OrdinalIgnoreCase) Then
+                Return "False"
+            End If
+            Return ""
+        End If
+
         Select Case key.ToLowerInvariant()
+            Case "exists", "hasdrawing", "has"
+                Return If(info.Found, "True", "False")
             Case "filename", "name", "file"
                 Return info.FileName
             Case "path", "fullpath"

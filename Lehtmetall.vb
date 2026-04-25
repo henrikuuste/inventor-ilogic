@@ -4,6 +4,7 @@
 ' with sheet metal expressions, and creates flat pattern.
 
 AddVbFile "Lib/UtilsLib.vb"
+AddVbFile "Lib/CustomPropertiesLib.vb"
 
 Sub Main()
     Dim app As Inventor.Application = ThisApplication
@@ -46,7 +47,8 @@ Sub Main()
     ' Check if already sheet metal
     Const SHEET_METAL_GUID As String = "{9C464203-9BAE-11D3-8BAD-0060B0CE6BB4}"
     If partDoc.SubType = SHEET_METAL_GUID Then
-        UtilsLib.LogWarn("Lehtmetall: This part is already sheet metal.")
+        UtilsLib.LogInfo("Lehtmetall: Part is already sheet metal. Validating properties and flat pattern...")
+        ValidateAndRepairExistingSheetMetal(app, partDoc)
         Exit Sub
     End If
     
@@ -84,7 +86,7 @@ Sub Main()
     ExportThicknessAsProperty(smCompDef)
     UtilsLib.LogInfo("Lehtmetall: Exported Thickness as iProperty")
     
-    ' Set Width and Length custom properties with expressions
+    ' Set Width and Length custom properties as numeric values
     SetSheetMetalProperties(partDoc)
     UtilsLib.LogInfo("Lehtmetall: Set Width and Length properties")
     
@@ -182,11 +184,7 @@ End Sub
 
 Sub ExportThicknessAsProperty(smCompDef As SheetMetalComponentDefinition)
     Try
-        Dim thicknessParam As Parameter = smCompDef.Thickness
-        thicknessParam.ExposedAsProperty = True
-        thicknessParam.CustomPropertyFormat.PropertyType = CustomPropertyTypeEnum.kTextPropertyType
-        thicknessParam.CustomPropertyFormat.ShowUnitsString = True
-        thicknessParam.CustomPropertyFormat.Units = "mm"
+        CustomPropertiesLib.EnsureSheetMetalThicknessExport(smCompDef)
     Catch ex As Exception
         UtilsLib.LogWarn("Lehtmetall: Could not export Thickness as iProperty. " & ex.Message)
     End Try
@@ -194,13 +192,7 @@ End Sub
 
 Sub SetSheetMetalProperties(partDoc As PartDocument)
     Try
-        Dim propSet As PropertySet = partDoc.PropertySets.Item("Inventor User Defined Properties")
-        
-        ' Set Width property with expression linking to Sheet Metal Width parameter
-        SetOrAddProperty(propSet, "Width", "=<Sheet Metal Width>")
-        
-        ' Set Length property with expression linking to Sheet Metal Length parameter
-        SetOrAddProperty(propSet, "Length", "=<Sheet Metal Length>")
+        CustomPropertiesLib.ValidateAndFixDimensionProperties(partDoc)
     Catch ex As Exception
         UtilsLib.LogWarn("Lehtmetall: Could not set Width/Length properties. " & ex.Message)
     End Try
@@ -221,8 +213,69 @@ Sub CreateFlatPattern(smCompDef As SheetMetalComponentDefinition, aSideFace As F
     Try
         smCompDef.ASideFace = aSideFace
         smCompDef.Unfold()
+        If smCompDef.HasFlatPattern Then
+            smCompDef.FlatPattern.ExitEdit()
+        End If
         UtilsLib.LogInfo("Lehtmetall: Flat pattern created")
     Catch ex As Exception
         UtilsLib.LogError("Lehtmetall: Could not create flat pattern: " & ex.Message)
     End Try
 End Sub
+
+Sub ValidateAndRepairExistingSheetMetal(app As Inventor.Application, partDoc As PartDocument)
+    Dim smCompDef As SheetMetalComponentDefinition = CType(partDoc.ComponentDefinition, SheetMetalComponentDefinition)
+    Dim fixes As Integer = 0
+
+    SetSheetMetalStyle(smCompDef, "Default_mm")
+
+    Dim aSideFace As Face = Nothing
+    Try
+        aSideFace = smCompDef.ASideFace
+    Catch
+    End Try
+
+    If aSideFace IsNot Nothing Then
+        Dim measuredThickness As Double = MeasureThicknessAlongNormal(app, aSideFace)
+        If measuredThickness > 0 Then
+            Dim currentThickness As Double = smCompDef.Thickness.Value
+            If Math.Abs(currentThickness - measuredThickness) > 0.001 Then
+                SetMeasuredThickness(smCompDef, measuredThickness)
+                fixes += 1
+                UtilsLib.LogInfo("Lehtmetall: Fixed sheet metal thickness to " & FormatNumber(measuredThickness * 10, 3) & " mm")
+            End If
+        Else
+            UtilsLib.LogWarn("Lehtmetall: Could not measure thickness from the current A-side face.")
+        End If
+    Else
+        UtilsLib.LogWarn("Lehtmetall: A-side face is not set. Thickness verification skipped.")
+    End If
+
+    ExportThicknessAsProperty(smCompDef)
+    If CustomPropertiesLib.ValidateAndFixDimensionProperties(partDoc) Then
+        fixes += 1
+        UtilsLib.LogInfo("Lehtmetall: Repaired dimension custom properties.")
+    End If
+
+    If Not smCompDef.HasFlatPattern Then
+        If aSideFace Is Nothing Then
+            UtilsLib.LogInfo("Lehtmetall: Flat pattern missing and A-side not set. Please select A-side face.")
+            aSideFace = PickASideFace(app)
+        End If
+
+        If aSideFace IsNot Nothing Then
+            CreateFlatPattern(smCompDef, aSideFace)
+            SetSheetMetalProperties(partDoc)
+            fixes += 1
+        Else
+            UtilsLib.LogWarn("Lehtmetall: Flat pattern was not created because A-side face was not selected.")
+        End If
+    End If
+
+    partDoc.Update()
+    If fixes = 0 Then
+        UtilsLib.LogInfo("Lehtmetall: Validation complete. No fixes were needed.")
+    Else
+        UtilsLib.LogInfo("Lehtmetall: Validation complete. Applied " & fixes & " fix(es).")
+    End If
+End Sub
+
