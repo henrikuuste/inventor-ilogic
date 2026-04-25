@@ -132,7 +132,8 @@ Public Module DocumentUpdateLib
             Return False
         End If
         
-        ' Add triggers (skips duplicates internally)
+        ' Remove all existing triggers for this rule, then add new ones
+        RemoveAllTriggersForRule(doc, RULE_NAME)
         If triggers IsNot Nothing Then
             For Each trigger As UpdateTrigger In triggers
                 AddTrigger(doc, trigger)
@@ -268,6 +269,42 @@ Public Module DocumentUpdateLib
             Return False
         End Try
     End Function
+    
+    ''' <summary>
+    ''' Removes all event triggers for a specific rule from the document.
+    ''' </summary>
+    ''' <param name="doc">The document</param>
+    ''' <param name="ruleName">The rule name to remove triggers for</param>
+    Public Sub RemoveAllTriggersForRule(ByVal doc As Document, ByVal ruleName As String)
+        If doc Is Nothing OrElse String.IsNullOrEmpty(ruleName) Then Exit Sub
+        
+        Dim propSet As PropertySet = GetEventTriggersPropertySet(doc)
+        If propSet Is Nothing Then Exit Sub
+        
+        ' Collect properties to delete (can't delete while iterating)
+        Dim propsToDelete As New System.Collections.Generic.List(Of [Property])
+        
+        For Each prop As [Property] In propSet
+            Try
+                If CStr(prop.Value) = ruleName Then
+                    propsToDelete.Add(prop)
+                End If
+            Catch
+            End Try
+        Next
+        
+        ' Delete collected properties
+        For Each prop As [Property] In propsToDelete
+            Try
+                prop.Delete()
+            Catch
+            End Try
+        Next
+        
+        If propsToDelete.Count > 0 Then
+            LogInfo("Removed " & propsToDelete.Count & " existing trigger(s) for rule: " & ruleName)
+        End If
+    End Sub
     
     ''' <summary>
     ''' Adds an event trigger to the Uuenda rule if not already present.

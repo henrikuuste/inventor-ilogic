@@ -105,7 +105,7 @@ Public Module DimensionUpdateLib
             DocumentUpdateLib.UpdateTrigger.PartGeometryChange, _
             DocumentUpdateLib.UpdateTrigger.UserParameterChange, _
             DocumentUpdateLib.UpdateTrigger.ModelParameterChange, _
-            DocumentUpdateLib.UpdateTrigger.BeforeVaultCheckIn _
+            DocumentUpdateLib.UpdateTrigger.BeforeSave _
         }
         
         Dim result As Boolean = DocumentUpdateLib.RegisterUpdateHandler(doc, iLogicAuto, HANDLER_UID, codeLines, triggers)
