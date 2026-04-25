@@ -34,6 +34,18 @@ Public Module DocumentUpdateLib
     ' TRIGGER ENUM
     ' ============================================================================
     
+    ' Known iLogic Event Trigger PropIds (base values, actual PropId = base + index):
+    '   PropId=400  -> AfterDocOpen
+    '   PropId=700  -> BeforeDocSave
+    '   PropId=800  -> AfterDocSave
+    '   PropId=1000 -> AfterAnyParamChange
+    '   PropId=1200 -> PartBodyChanged
+    '   PropId=1400 -> AfterMaterialChange
+    '   PropId=1600 -> AfterAnyiPropertyChange
+    '   PropId=2800 -> AfterModelStateActivated
+    '   PropId=3000 -> AfterAnyUserParamChange
+    '   PropId=3100 -> BeforeVaultCheckIn
+    
     ''' <summary>
     ''' Event triggers for the Uuenda rule. Callers use this enum instead of PropIds.
     ''' </summary>
@@ -46,6 +58,8 @@ Public Module DocumentUpdateLib
         PartGeometryChange = 6
         MaterialChange = 7
         iPropertyChange = 8
+        ModelStateActivated = 9
+        BeforeVaultCheckIn = 10
     End Enum
     
     ' ============================================================================
@@ -388,6 +402,12 @@ Public Module DocumentUpdateLib
             Case UpdateTrigger.iPropertyChange
                 propId = 1600
                 propName = "AfterAnyiPropertyChange"
+            Case UpdateTrigger.ModelStateActivated
+                propId = 2800
+                propName = "AfterModelStateActivated"
+            Case UpdateTrigger.BeforeVaultCheckIn
+                propId = 3100
+                propName = "BeforeVaultCheckIn"
             Case Else
                 propId = 0
                 propName = ""
