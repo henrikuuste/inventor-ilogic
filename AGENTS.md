@@ -905,7 +905,7 @@ ctrlDef.Execute()  ' Shows checkout dialog
 | Drawing view spacing/positioning | Use `view.Width` and `view.Height`, not model `RangeBox` dimensions |
 | Extent dimension spacing | Use `CAMDrawingLib.DIMENSION_OFFSET` (25mm) for spacing from model |
 | Sheet resize fails | Move views within new bounds FIRST, then resize sheet |
-| Component patterns to browser folder | `BrowserFolder.Add()` fails with E_FAIL for all pattern types (Mirror, Rectangular, Circular). Patterns must be moved manually. |
+| Component patterns to browser folder | `BrowserFolder.Add()` fails for patterns. Use `oPane.AddBrowserFolder(name, collection)` for new folders. For existing folders with patterns: delete folder, re-query occurrence nodes by name, recreate. Mirror patterns detected via browser tree (NativeObject throws E_NOTIMPL). |
 | Mirror Component Pattern suppression | Mirror Component Patterns (Inventor 2026 associative) cannot be suppressed via API. `NativeObject` throws E_NOTIMPL, and suppressing individual occurrences breaks/flips the pattern. User must manually configure model states for Mirror patterns. |
 | Parameter formula `max(a, b)` fails | Use semicolon: `max(a; b)` - Inventor uses `;` as argument separator |
 | Parameter name starts with digit | Prefix with letter: `M_00011_Name` instead of `00011_Name` |

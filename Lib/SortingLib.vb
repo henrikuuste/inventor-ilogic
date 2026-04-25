@@ -77,7 +77,7 @@ Public Module SortingLib
     ''' <summary>
     ''' Creates folders and assigns occurrences based on material patterns.
     ''' Only creates folders that will have parts assigned to them.
-    ''' Component patterns cannot be moved via API and are logged for manual action.
+    ''' Uses AddBrowserFolder with ObjectCollection to support patterns.
     ''' Returns the list of folder names that were created (have parts).
     ''' </summary>
     Private Function ApplyFolders( _
@@ -87,44 +87,24 @@ Public Module SortingLib
         
         UtilsLib.LogInfo("SortingLib: Assigning occurrences to folders...")
         
-        ' First pass: determine which folders will have parts
-        Dim foldersWithParts As New HashSet(Of String)
+        Dim app As Inventor.Application = asmDoc.Parent
+        Dim asmDef As AssemblyComponentDefinition = asmDoc.ComponentDefinition
         
-        For Each occ As ComponentOccurrence In asmDoc.ComponentDefinition.Occurrences
-            Dim materialName As String = UtilsLib.GetOccurrenceMaterial(occ)
-            If String.IsNullOrEmpty(materialName) Then Continue For
-            
-            Dim targetFolder As String = GetTargetFolder(materialName, folderPatterns)
-            If Not String.IsNullOrEmpty(targetFolder) Then
-                foldersWithParts.Add(targetFolder)
-            End If
-        Next
-        
-        ' Create only folders that will have parts
-        For Each folderName As String In foldersWithParts
-            UtilsLib.LogInfo("SortingLib: Creating/verifying folder '" & folderName & "'")
-            UtilsLib.GetOrCreateFolder(oPane, folderName)
-        Next
-        
-        ' Log folders that won't be created
-        For Each folderName As String In folderPatterns.Keys
-            If Not foldersWithParts.Contains(folderName) Then
-                UtilsLib.LogInfo("SortingLib: Skipping folder '" & folderName & "' (no matching parts)")
-            End If
-        Next
-        
-        ' Track which patterns and nodes we've already processed
-        Dim processedPatterns As New HashSet(Of String)
+        ' Collect browser nodes by target folder
+        ' Key: folder name, Value: list of browser nodes to add
+        Dim folderNodes As New Dictionary(Of String, List(Of BrowserNode))
         Dim processedNodes As New HashSet(Of String)
+        Dim processedPatterns As New HashSet(Of String)
         
         Dim assignedCount As Integer = 0
         Dim skippedCount As Integer = 0
         Dim patternCount As Integer = 0
         Dim errorCount As Integer = 0
         
-        UtilsLib.LogInfo("SortingLib: Processing " & asmDoc.ComponentDefinition.Occurrences.Count & " occurrences...")
+        UtilsLib.LogInfo("SortingLib: Processing " & asmDef.Occurrences.Count & " occurrences...")
         
-        For Each occ As ComponentOccurrence In asmDoc.ComponentDefinition.Occurrences
+        ' First pass: collect standalone occurrences (skip pattern elements)
+        For Each occ As ComponentOccurrence In asmDef.Occurrences
             Dim materialName As String = UtilsLib.GetOccurrenceMaterial(occ)
             
             If String.IsNullOrEmpty(materialName) Then
@@ -148,71 +128,381 @@ Public Module SortingLib
                 Catch
                 End Try
                 
+                ' Handle pattern elements - find parent pattern via browser tree
                 If isPatternElement Then
-                    ' Component patterns cannot be moved to folders via API.
-                    ' The pattern itself must be moved manually, but folder-level 
-                    ' suppression will handle it during model state configuration.
-                    Dim patternName As String = GetPatternName(occ, oPane)
-                    
-                    If Not String.IsNullOrEmpty(patternName) AndAlso Not processedPatterns.Contains(patternName) Then
-                        processedPatterns.Add(patternName)
-                        UtilsLib.LogInfo("SortingLib: Pattern '" & patternName & "' -> '" & targetFolder & "' (move pattern to folder manually)")
-                        patternCount += 1
-                    End If
+                    Try
+                        ' Find the pattern's browser node by walking up the tree
+                        Dim occNode As BrowserNode = oPane.GetBrowserNodeFromObject(occ)
+                        Dim patternNode As BrowserNode = FindParentPatternNode(occNode)
+                        
+                        If patternNode IsNot Nothing Then
+                            Dim patternKey As String = patternNode.FullPath
+                            
+                            If Not processedPatterns.Contains(patternKey) Then
+                                processedPatterns.Add(patternKey)
+                                
+                                ' Check if pattern already in target folder
+                                Dim patternCurrentFolder As String = UtilsLib.GetNodeFolder(patternNode)
+                                Dim patternAlreadyInPlace As Boolean = (patternCurrentFolder = targetFolder)
+                                
+                                ' Add pattern to collection (even if already there, for folder recreation)
+                                If Not folderNodes.ContainsKey(targetFolder) Then
+                                    folderNodes.Add(targetFolder, New List(Of BrowserNode))
+                                End If
+                                folderNodes(targetFolder).Add(patternNode)
+                                
+                                If Not patternAlreadyInPlace Then
+                                    UtilsLib.LogInfo("SortingLib: Queuing pattern '" & patternNode.BrowserNodeDefinition.Label & "' for '" & targetFolder & "'")
+                                    patternCount += 1
+                                End If
+                            End If
+                        End If
+                    Catch ex As Exception
+                        UtilsLib.LogWarn("SortingLib: Error processing pattern element '" & occ.Name & "': " & ex.Message)
+                    End Try
                     Continue For
-                Else
-                    ' Standalone occurrence - move it directly
-                    Dim oNode As BrowserNode = oPane.GetBrowserNodeFromObject(occ)
-                    Dim movableNode As BrowserNode = UtilsLib.GetMovableParentNode(oPane, oNode)
-                    
-                    Dim nodeKey As String = movableNode.FullPath
-                    
-                    If processedNodes.Contains(nodeKey) Then Continue For
-                    processedNodes.Add(nodeKey)
-                    
-                    Dim currentFolder As String = UtilsLib.GetNodeFolder(movableNode)
-                    If currentFolder = targetFolder Then Continue For
-                    
-                    UtilsLib.LogInfo("SortingLib: Moving '" & movableNode.BrowserNodeDefinition.Label & "' to '" & targetFolder & "'")
-                    Dim folder As BrowserFolder = UtilsLib.GetOrCreateFolder(oPane, targetFolder)
-                    folder.Add(movableNode)
+                End If
+                
+                ' Standalone occurrence - get its movable node
+                Dim oNode As BrowserNode = oPane.GetBrowserNodeFromObject(occ)
+                Dim movableNode As BrowserNode = UtilsLib.GetMovableParentNode(oPane, oNode)
+                
+                Dim nodeKey As String = movableNode.FullPath
+                
+                If processedNodes.Contains(nodeKey) Then Continue For
+                processedNodes.Add(nodeKey)
+                
+                ' Check if already in target folder
+                Dim currentFolder As String = UtilsLib.GetNodeFolder(movableNode)
+                Dim alreadyInPlace As Boolean = (currentFolder = targetFolder)
+                
+                ' Add to collection for this folder (even if already there, for folder recreation)
+                If Not folderNodes.ContainsKey(targetFolder) Then
+                    folderNodes.Add(targetFolder, New List(Of BrowserNode))
+                End If
+                folderNodes(targetFolder).Add(movableNode)
+                
+                If Not alreadyInPlace Then
+                    UtilsLib.LogInfo("SortingLib: Queuing '" & movableNode.BrowserNodeDefinition.Label & "' for '" & targetFolder & "'")
                     assignedCount += 1
                 End If
                 
             Catch ex As Exception
-                UtilsLib.LogWarn("SortingLib: Error moving '" & occ.Name & "': " & ex.Message)
+                UtilsLib.LogWarn("SortingLib: Error processing '" & occ.Name & "': " & ex.Message)
                 errorCount += 1
             End Try
         Next
         
-        UtilsLib.LogInfo("SortingLib: Moved " & assignedCount & " occurrence(s), " & patternCount & " pattern(s) need manual move, skipped " & skippedCount & " (no material), " & errorCount & " errors")
+        ' Second pass: collect any remaining patterns via OccurrencePatterns collection
+        ' (Rectangular/Circular patterns that weren't detected via occurrence iteration)
+        Try
+            Dim occPatterns As OccurrencePatterns = asmDef.OccurrencePatterns
+            If occPatterns.Count > 0 Then
+                UtilsLib.LogInfo("SortingLib: Checking " & occPatterns.Count & " OccurrencePatterns...")
+            End If
+            
+            For Each pattern As OccurrencePattern In occPatterns
+                Try
+                    ' Get material from first occurrence in the pattern
+                    Dim firstOcc As ComponentOccurrence = Nothing
+                    Try
+                        firstOcc = pattern.OccurrencePatternElements.Item(1).Occurrences.Item(1)
+                    Catch
+                        Continue For
+                    End Try
+                    
+                    If firstOcc Is Nothing Then Continue For
+                    
+                    Dim materialName As String = UtilsLib.GetOccurrenceMaterial(firstOcc)
+                    If String.IsNullOrEmpty(materialName) Then Continue For
+                    
+                    Dim targetFolder As String = GetTargetFolder(materialName, folderPatterns)
+                    If String.IsNullOrEmpty(targetFolder) Then
+                        UtilsLib.LogInfo("SortingLib: No folder match for pattern '" & pattern.Name & "' (material: " & materialName & ")")
+                        Continue For
+                    End If
+                    
+                    ' Check if pattern already processed
+                    If processedPatterns.Contains(pattern.Name) Then Continue For
+                    processedPatterns.Add(pattern.Name)
+                    
+                    ' Get pattern browser node
+                    Dim patternNode As BrowserNode = oPane.GetBrowserNodeFromObject(pattern)
+                    If patternNode Is Nothing Then
+                        UtilsLib.LogWarn("SortingLib: Could not get browser node for pattern '" & pattern.Name & "'")
+                        Continue For
+                    End If
+                    
+                    ' Check if already in target folder
+                    Dim currentFolder As String = UtilsLib.GetNodeFolder(patternNode)
+                    If currentFolder = targetFolder Then
+                        UtilsLib.LogInfo("SortingLib: Pattern '" & pattern.Name & "' already in '" & targetFolder & "'")
+                        Continue For
+                    End If
+                    
+                    ' Add to collection for this folder
+                    If Not folderNodes.ContainsKey(targetFolder) Then
+                        folderNodes.Add(targetFolder, New List(Of BrowserNode))
+                    End If
+                    folderNodes(targetFolder).Add(patternNode)
+                    
+                    UtilsLib.LogInfo("SortingLib: Queuing pattern '" & pattern.Name & "' for '" & targetFolder & "'")
+                    patternCount += 1
+                    
+                Catch ex As Exception
+                    UtilsLib.LogWarn("SortingLib: Error processing pattern: " & ex.Message)
+                    errorCount += 1
+                End Try
+            Next
+        Catch ex As Exception
+            UtilsLib.LogWarn("SortingLib: Error accessing OccurrencePatterns: " & ex.Message)
+        End Try
         
-        Return New List(Of String)(foldersWithParts)
+        ' Third pass: create folders or add items to existing folders
+        Dim createdFolders As New List(Of String)
+        
+        For Each kvp As KeyValuePair(Of String, List(Of BrowserNode)) In folderNodes
+            Dim folderName As String = kvp.Key
+            Dim nodesToAdd As List(Of BrowserNode) = kvp.Value
+            
+            If nodesToAdd.Count = 0 Then Continue For
+            
+            Try
+                ' Check if folder already exists
+                Dim existingFolder As BrowserFolder = UtilsLib.FindFolder(oPane, folderName)
+                
+                ' Separate items into: already in place vs need to be moved
+                Dim itemsToMove As New List(Of BrowserNode)
+                For Each node As BrowserNode In nodesToAdd
+                    Dim nodeFolder As String = UtilsLib.GetNodeFolder(node)
+                    If nodeFolder <> folderName Then
+                        itemsToMove.Add(node)
+                    End If
+                Next
+                
+                ' If all items are already in place, nothing to do
+                If itemsToMove.Count = 0 Then
+                    UtilsLib.LogInfo("SortingLib: Folder '" & folderName & "' already has all " & nodesToAdd.Count & " items")
+                    createdFolders.Add(folderName)
+                    Continue For
+                End If
+                
+                If existingFolder IsNot Nothing Then
+                    ' Folder exists - try to add new items one by one
+                    Dim failedNodes As New List(Of BrowserNode)
+                    
+                    For Each node As BrowserNode In itemsToMove
+                        Try
+                            existingFolder.Add(node)
+                        Catch
+                            ' BrowserFolder.Add fails for patterns - collect for retry
+                            failedNodes.Add(node)
+                        End Try
+                    Next
+                    
+                    ' If some nodes failed (likely patterns), recreate folder with fresh references
+                    If failedNodes.Count > 0 Then
+                        UtilsLib.LogInfo("SortingLib: Recreating folder '" & folderName & "' to include " & failedNodes.Count & " pattern(s)...")
+                        
+                        Try
+                            ' Remember all items that should be in the folder
+                            Dim allOccNames As New List(Of String)
+                            For Each node As BrowserNode In nodesToAdd
+                                Try
+                                    Dim nativeObj As Object = node.NativeObject
+                                    If TypeOf nativeObj Is ComponentOccurrence Then
+                                        allOccNames.Add(CType(nativeObj, ComponentOccurrence).Name)
+                                    End If
+                                Catch
+                                End Try
+                            Next
+                            
+                            ' Delete the folder
+                            existingFolder.Delete()
+                            
+                            ' Get fresh browser node references from occurrences and patterns
+                            Dim freshCollection As ObjectCollection = app.TransientObjects.CreateObjectCollection()
+                            
+                            ' Add occurrences by name lookup
+                            For Each occName As String In allOccNames
+                                Try
+                                    Dim occ As ComponentOccurrence = asmDef.Occurrences.ItemByName(occName)
+                                    Dim freshNode As BrowserNode = oPane.GetBrowserNodeFromObject(occ)
+                                    Dim movableNode As BrowserNode = UtilsLib.GetMovableParentNode(oPane, freshNode)
+                                    freshCollection.Add(movableNode)
+                                Catch
+                                End Try
+                            Next
+                            
+                            ' Add patterns via FindParentPatternNode for pattern elements
+                            For Each node As BrowserNode In failedNodes
+                                Try
+                                    ' For patterns, get fresh reference via the occurrence
+                                    Dim nativeObj As Object = Nothing
+                                    Try : nativeObj = node.NativeObject : Catch : End Try
+                                    
+                                    If nativeObj Is Nothing Then
+                                        ' Mirror pattern - find via browser tree
+                                        ' The pattern node itself should still be valid after folder delete
+                                        freshCollection.Add(node)
+                                    ElseIf TypeOf nativeObj Is OccurrencePattern Then
+                                        Dim freshNode As BrowserNode = oPane.GetBrowserNodeFromObject(nativeObj)
+                                        freshCollection.Add(freshNode)
+                                    End If
+                                Catch
+                                End Try
+                            Next
+                            
+                            ' Create new folder with all items
+                            Dim newFolder As BrowserFolder = oPane.AddBrowserFolder(folderName, freshCollection)
+                            newFolder.AllowReorder = True
+                            newFolder.AllowDelete = True
+                            UtilsLib.LogInfo("SortingLib: Recreated folder '" & folderName & "'")
+                        Catch ex As Exception
+                            UtilsLib.LogWarn("SortingLib: Could not recreate folder '" & folderName & "': " & ex.Message)
+                            errorCount += 1
+                        End Try
+                    Else
+                        UtilsLib.LogInfo("SortingLib: Added " & itemsToMove.Count & " items to folder '" & folderName & "'")
+                    End If
+                    
+                    createdFolders.Add(folderName)
+                Else
+                    ' New folder - create with all items using AddBrowserFolder (supports patterns)
+                    UtilsLib.LogInfo("SortingLib: Creating new folder '" & folderName & "' with " & itemsToMove.Count & " items...")
+                    
+                    Dim nodeCollection As ObjectCollection = app.TransientObjects.CreateObjectCollection()
+                    For Each node As BrowserNode In itemsToMove
+                        nodeCollection.Add(node)
+                    Next
+                    
+                    Dim newFolder As BrowserFolder = oPane.AddBrowserFolder(folderName, nodeCollection)
+                    newFolder.AllowReorder = True
+                    newFolder.AllowDelete = True
+                    
+                    createdFolders.Add(folderName)
+                    UtilsLib.LogInfo("SortingLib: Created folder '" & folderName & "'")
+                End If
+                
+            Catch ex As Exception
+                UtilsLib.LogWarn("SortingLib: Error with folder '" & folderName & "': " & ex.Message)
+                errorCount += 1
+            End Try
+        Next
+        
+        ' Also track folders that already exist and have correct items
+        For Each folderName As String In folderPatterns.Keys
+            If Not createdFolders.Contains(folderName) Then
+                Dim existingFolder As BrowserFolder = UtilsLib.FindFolder(oPane, folderName)
+                If existingFolder IsNot Nothing Then
+                    createdFolders.Add(folderName)
+                End If
+            End If
+        Next
+        
+        UtilsLib.LogInfo("SortingLib: Moved " & assignedCount & " occurrence(s), " & patternCount & " pattern(s), skipped " & skippedCount & " (no material), " & errorCount & " errors")
+        
+        Return createdFolders
     End Function
     
     ''' <summary>
-    ''' Gets the pattern name for a pattern element occurrence.
+    ''' Finds the parent pattern browser node for a pattern element occurrence.
+    ''' Works for Mirror, Rectangular, and Circular component patterns.
     ''' </summary>
-    Private Function GetPatternName(occ As ComponentOccurrence, oPane As BrowserPane) As String
-        ' Try via PatternElement.Parent
+    Private Function FindParentPatternNode(occNode As BrowserNode) As BrowserNode
+        If occNode Is Nothing Then Return Nothing
+        
         Try
-            Dim patternElement As Object = occ.PatternElement
-            If patternElement IsNot Nothing AndAlso patternElement.Parent IsNot Nothing Then
-                Return patternElement.Parent.Name
+            ' Walk up the browser tree looking for a pattern node
+            Dim currentNode As BrowserNode = occNode.Parent
+            Dim depth As Integer = 0
+            
+            While currentNode IsNot Nothing AndAlso depth < 10
+                depth += 1
+                Try
+                    Dim label As String = currentNode.BrowserNodeDefinition.Label
+                    
+                    ' Check NativeObject type
+                    Dim nativeObj As Object = Nothing
+                    Dim nativeObjError As Boolean = False
+                    Try
+                        nativeObj = currentNode.NativeObject
+                    Catch
+                        nativeObjError = True
+                    End Try
+                    
+                    ' If NativeObject threw error (Mirror patterns do this) and parent is root/folder
+                    If nativeObjError Then
+                        Try
+                            If currentNode.Parent IsNot Nothing AndAlso IsAssemblyRootOrFolder(currentNode.Parent) Then
+                                Return currentNode
+                            End If
+                        Catch
+                        End Try
+                    End If
+                    
+                    ' If NativeObject is an OccurrencePattern, we found it
+                    If nativeObj IsNot Nothing AndAlso TypeOf nativeObj Is OccurrencePattern Then
+                        Return currentNode
+                    End If
+                    
+                    ' If this node is the assembly root, stop searching
+                    If IsAssemblyRootOrFolder(currentNode) Then
+                        Exit While
+                    End If
+                    
+                Catch
+                End Try
+                
+                Try
+                    currentNode = currentNode.Parent
+                Catch
+                    Exit While
+                End Try
+            End While
+        Catch
+        End Try
+        
+        Return Nothing
+    End Function
+    
+    ''' <summary>
+    ''' Checks if a browser node is the assembly root or a browser folder.
+    ''' </summary>
+    Private Function IsAssemblyRootOrFolder(node As BrowserNode) As Boolean
+        If node Is Nothing Then Return False
+        
+        Dim label As String = ""
+        Try
+            label = node.BrowserNodeDefinition.Label
+        Catch
+        End Try
+        
+        Try
+            ' Check if it's a folder
+            Dim nativeObj As Object = node.NativeObject
+            If nativeObj IsNot Nothing AndAlso TypeOf nativeObj Is BrowserFolder Then
+                Return True
             End If
         Catch
         End Try
         
-        ' Fallback: extract from FullPath
         Try
-            Dim oNode As BrowserNode = oPane.GetBrowserNodeFromObject(occ)
-            Return UtilsLib.ExtractPatternNameFromPath(oNode.FullPath)
+            ' Check if it's the top/root node (no parent)
+            If node.Parent Is Nothing Then 
+                Return True
+            End If
         Catch
         End Try
         
-        Return ""
+        ' Check if label indicates assembly root (ends with .iam or contains .iam followed by space/bracket)
+        If label.EndsWith(".iam") OrElse label.Contains(".iam ") OrElse label.Contains(".iam[") Then
+            Return True
+        End If
+        
+        Return False
     End Function
-    
+
     ''' <summary>
     ''' Matches material name against folder patterns, returns folder name or empty string.
     ''' </summary>
@@ -413,6 +703,12 @@ Public Module SortingLib
                 dv = designViews.Add(viewName)
                 UtilsLib.LogInfo("SortingLib: Created design view '" & viewName & "'")
             End If
+            
+            ' Disable camera auto-save so view only controls visibility
+            Try
+                dv.AutoSaveCamera = False
+            Catch
+            End Try
             
             ' Activate and configure
             dv.Activate()
