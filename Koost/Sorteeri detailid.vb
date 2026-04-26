@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' Sorteeri detailid - Sort assembly components by material into folders
 ' 

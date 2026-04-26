@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' RemoveEventTriggers - Remove event triggers for a specific rule
 '

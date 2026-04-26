@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' WorkFeatureLib - Work Feature Creation and Management
 ' 

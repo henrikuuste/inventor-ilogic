@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' Lisa vaated - Add projected views to existing base view
 ' 

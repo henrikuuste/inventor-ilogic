@@ -1,3 +1,4 @@
+<!-- Copyright (c) 2026 Henri Kuuste -->
 # Excel BOM template format
 
 ## Layout

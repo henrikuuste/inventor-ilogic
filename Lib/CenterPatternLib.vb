@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' CenterPatternLib - Center-Based Occurrence Pattern Library
 ' 

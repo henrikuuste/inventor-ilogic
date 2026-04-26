@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' RotateOriginAxes - Reorient Part via Derived Transformation
 ' 

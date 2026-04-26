@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' TestUpdateDerivedRef - Try creating new derived definition approach
 ' ============================================================================

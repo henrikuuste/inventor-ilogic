@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' Ekspordi BOM - Export Bill of Materials to an Excel template
 '

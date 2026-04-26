@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' Uuenda lehe suurus - Fit sheet to content with padding
 ' 

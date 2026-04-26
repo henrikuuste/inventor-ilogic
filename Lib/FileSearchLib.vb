@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' FileSearchLib - Generic file search utilities with depth-first traversal
 ' 

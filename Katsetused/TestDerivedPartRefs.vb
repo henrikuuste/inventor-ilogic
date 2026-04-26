@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' TestDerivedPartRefs - Diagnostic test for derived part reference update
 '

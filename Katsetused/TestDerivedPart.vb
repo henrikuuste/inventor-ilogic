@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' TestDerivedPart - Test creating a derived part from a single solid body
 ' 

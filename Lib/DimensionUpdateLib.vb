@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' DimensionUpdateLib - Register Self-Contained Dimension Update Handler
 '

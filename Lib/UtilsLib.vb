@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' UtilsLib - Generic Utility Functions for Inventor iLogic
 ' 

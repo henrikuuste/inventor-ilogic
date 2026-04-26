@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' CAMDrawingLib - Library for CAM drawing automation
 ' 

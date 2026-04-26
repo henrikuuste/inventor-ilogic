@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 AddVbFile "Lib/UtilsLib.vb"
 
 Imports Inventor

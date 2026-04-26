@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' ReleaseAllVariants - Release All Variants from Excel Configuration
 ' 

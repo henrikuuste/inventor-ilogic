@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' Nimeta detailid - Rename assembly occurrences with descriptive names
 ' 

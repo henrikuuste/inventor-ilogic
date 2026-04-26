@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' TestSaveCopyAs - Test SaveAs with copy flag AND ApprenticeServer
 ' ============================================================================

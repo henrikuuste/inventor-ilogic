@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' Uuenda 1:1 joonis - Update existing 1:1 scale drawing
 ' 

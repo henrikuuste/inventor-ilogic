@@ -1,3 +1,4 @@
+<!-- Copyright (c) 2026 Henri Kuuste -->
 # Inventor iLogic Development Guidelines
 
 This document captures constraints and best practices for writing Autodesk Inventor iLogic rules and VB scripts.

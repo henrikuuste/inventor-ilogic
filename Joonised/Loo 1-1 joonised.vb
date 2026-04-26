@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' Loo 1:1 joonised - Create/Update 1:1 scale drawings for CAM applications
 ' 

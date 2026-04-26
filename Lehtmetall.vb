@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' Lehtmetall - Convert solid part to sheet metal
 ' Converts the active part to sheet metal, measures thickness from geometry,
 ' exports Thickness as iProperty, sets Width/Length custom properties

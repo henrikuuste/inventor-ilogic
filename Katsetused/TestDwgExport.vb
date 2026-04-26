@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' TestDwgExport - Test DWG/DXF export with 2010 format at 1:1 scale
 ' 

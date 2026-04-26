@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' SupportPlacementLib - Library for Parametric Birch Support Placement
 ' 

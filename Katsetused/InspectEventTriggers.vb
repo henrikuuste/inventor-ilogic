@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' InspectEventTriggers - Inspect existing iLogic Event Triggers
 '

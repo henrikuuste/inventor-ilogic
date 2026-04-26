@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' Lisa mõõdud - Add extent dimensions to drawing views
 ' 

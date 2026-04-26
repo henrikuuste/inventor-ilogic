@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' PlaceSupport - Parametric Birch Support Placement Tool
 ' 

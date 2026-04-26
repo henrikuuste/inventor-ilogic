@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' BinaryReferenceUpdateLib - Update derived part references via binary editing
 '

@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' TestReplaceReference - Test ComponentOccurrence.Replace Functionality
 ' 

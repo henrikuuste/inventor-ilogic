@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' Loo komponendid - Create components from multi-body master part
 ' 

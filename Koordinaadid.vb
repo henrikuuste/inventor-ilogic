@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' Koordinaadid - UCS Creation at Bounding Box Positions
 ' 

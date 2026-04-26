@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' BOMExportLib - Export assembly BOM to Excel using template placeholders
 ' See project docs for template layout (auto-detected last mapping row with {{,

@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' UpdateSupportProperties - Batch iProperty Update for Kask24 Supports
 ' 

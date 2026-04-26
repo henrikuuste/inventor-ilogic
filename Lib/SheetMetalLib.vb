@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' SheetMetalLib - Sheet metal conversion with auto A-side detection
 ' 

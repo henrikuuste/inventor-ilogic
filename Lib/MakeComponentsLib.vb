@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' MakeComponentsLib - Core logic for creating derived parts from solid bodies
 ' 

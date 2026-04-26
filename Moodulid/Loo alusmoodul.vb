@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' Loo alusmoodul - Create base module folder structure
 ' 

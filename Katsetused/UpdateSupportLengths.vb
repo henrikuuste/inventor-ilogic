@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' UpdateSupportLengths - Recalculate Support Position and Length from References
 ' 

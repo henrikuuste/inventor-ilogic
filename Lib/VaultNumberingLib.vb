@@ -1,3 +1,4 @@
+' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
 ' VaultNumberingLib - Vault WebServices API wrapper for numbering and folders
 ' 
@@ -516,6 +517,78 @@ Public Module VaultNumberingLib
         End If
         
         Return success
+    End Function
+    
+    ' ============================================================================
+    ' Vault Path to Local Path Conversion
+    ' ============================================================================
+    
+    ' Convert Vault path to local file system path using workspace root
+    ' This is the reverse of ConvertLocalPathToVaultPath
+    ' Example: "$/Tooted/Project/Subfolder" -> "C:\_SoftcomVault\Tooted\Project\Subfolder"
+    ' Parameters:
+    '   vaultPath - Vault path starting with $/ or $ (e.g., "$/Tooted/Project")
+    '   workspaceRoot - Local workspace root that maps to $ in Vault (e.g., "C:\_SoftcomVault")
+    ' Returns: Local path, or empty string if conversion fails
+    Public Function ConvertVaultPathToLocalPath(vaultPath As String, workspaceRoot As String) As String
+        If String.IsNullOrEmpty(vaultPath) Then Return ""
+        If String.IsNullOrEmpty(workspaceRoot) Then Return ""
+        
+        ' Normalize paths
+        vaultPath = vaultPath.TrimEnd("/"c)
+        workspaceRoot = workspaceRoot.TrimEnd("\"c)
+        
+        ' Handle different Vault path formats
+        Dim relativePath As String = ""
+        
+        If vaultPath = "$" Then
+            ' Root folder
+            Return workspaceRoot
+        ElseIf vaultPath.StartsWith("$/") Then
+            ' Standard format: $/Folder/Subfolder
+            relativePath = vaultPath.Substring(2)
+        ElseIf vaultPath.StartsWith("$\") Then
+            ' Alternative format with backslash
+            relativePath = vaultPath.Substring(2)
+        Else
+            ' Invalid format - must start with $
+            UtilsLib.LogWarn("VaultNumberingLib: Invalid Vault path (must start with $): " & vaultPath)
+            Return ""
+        End If
+        
+        ' Convert forward slashes to backslashes and combine
+        relativePath = relativePath.Replace("/", "\")
+        
+        If String.IsNullOrEmpty(relativePath) Then
+            Return workspaceRoot
+        End If
+        
+        Return workspaceRoot & "\" & relativePath
+    End Function
+    
+    ' Get local path for a Vault path using detected workspace root
+    ' Convenience function that combines DetectWorkspaceRoot and ConvertVaultPathToLocalPath
+    ' Parameters:
+    '   conn - Vault connection object
+    '   vaultPath - Vault path (e.g., "$/Tooted/Project")
+    '   anyLocalPath - Any known local path in the Vault workspace (used to detect root)
+    ' Returns: Local path, or empty string if conversion fails
+    Public Function GetLocalPathForVaultPath(conn As Object, _
+                                             vaultPath As String, _
+                                             anyLocalPath As String) As String
+        If conn Is Nothing Then
+            UtilsLib.LogWarn("VaultNumberingLib: No Vault connection for GetLocalPathForVaultPath")
+            Return ""
+        End If
+        
+        ' Detect workspace root from the provided local path
+        Dim workspaceRoot As String = DetectWorkspaceRoot(conn, anyLocalPath)
+        If String.IsNullOrEmpty(workspaceRoot) Then
+            UtilsLib.LogWarn("VaultNumberingLib: Could not detect workspace root")
+            Return ""
+        End If
+        
+        Return ConvertVaultPathToLocalPath(vaultPath, workspaceRoot)
     End Function
 
 End Module
