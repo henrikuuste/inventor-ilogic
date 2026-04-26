@@ -18,8 +18,6 @@
 '   In calling script (BEFORE AddVbFile):
 '     AddReference "Autodesk.Connectivity.WebServices"
 '     AddReference "Autodesk.DataManagement.Client.Framework.Vault"
-'     AddReference "Autodesk.DataManagement.Client.Framework.Vault.Forms"
-'     AddReference "Connectivity.Application.VaultBase"
 '     AddReference "Connectivity.InventorAddin.EdmAddin"
 '     AddVbFile "Lib/UtilsLib.vb"
 '     AddVbFile "Lib/VaultNumberingLib.vb"
@@ -834,9 +832,9 @@ Public Module VaultNumberingLib
     ' Note: Requires Connectivity.Application.VaultBase reference
     Public Function SyncFileFromVault(vaultFilePath As String) As Boolean
         Try
-            ' Get VDF connection
+            ' Get VDF connection via EdmAddin (same as GetVaultConnection)
             Dim vdfConn As Autodesk.DataManagement.Client.Framework.Vault.Currency.Connections.Connection
-            vdfConn = Connectivity.Application.VaultBase.ConnectionManager.Instance.Connection
+            vdfConn = Connectivity.InventorAddin.EdmAddin.EdmSecurity.Instance.VaultConnection()
             
             If vdfConn Is Nothing Then
                 UtilsLib.LogWarn("VaultNumberingLib: No VDF connection for SyncFileFromVault")
