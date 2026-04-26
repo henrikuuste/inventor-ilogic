@@ -10,6 +10,7 @@
 ' Usage: Run on an open drawing to resize the sheet to fit content.
 ' ============================================================================
 
+AddVbFile "Lib/RuntimeLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/FileSearchLib.vb"
 AddVbFile "Lib/CAMDrawingLib.vb"
@@ -19,6 +20,8 @@ Imports System.Windows.Forms
 Imports Inventor
 
 Sub Main()
+    If Not AppRuntime.Initialize(ThisApplication) Then Return
+    
     Dim app As Inventor.Application = ThisApplication
     UtilsLib.SetLogger(Logger)
     UtilsLib.LogInfo("Uuenda lehe suurus: Starting...")

@@ -22,6 +22,7 @@ AddReference "Autodesk.DataManagement.Client.Framework.Vault.Forms"
 AddReference "Connectivity.InventorAddin.EdmAddin"
 
 ' Libraries come after references (UtilsLib before VaultNumberingLib for Vault logging)
+AddVbFile "Lib/RuntimeLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/DocumentUpdateLib.vb"
 AddVbFile "Lib/DimensionUpdateLib.vb"
@@ -38,6 +39,8 @@ Imports System.Windows.Forms
 Imports Inventor
 
 Sub Main()
+    If Not AppRuntime.Initialize(ThisApplication) Then Return
+    
     Dim app As Inventor.Application = ThisApplication
     UtilsLib.SetLogger(Logger)
     

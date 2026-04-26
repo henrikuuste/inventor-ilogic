@@ -16,9 +16,12 @@
 '
 ' ============================================================================
 
+AddVbFile "Lib/RuntimeLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 
 Sub Main()
+    If Not AppRuntime.Initialize(ThisApplication) Then Return
+    
     Dim app As Inventor.Application = ThisApplication
     Dim doc As Document = app.ActiveDocument
     

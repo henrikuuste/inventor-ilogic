@@ -1,4 +1,5 @@
 ' Copyright (c) 2026 Henri Kuuste
+AddVbFile "Lib/RuntimeLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 
 Imports Inventor
@@ -16,6 +17,7 @@ Imports Inventor
 '   - Works with work planes and planar faces.
 
 Sub Main()
+    If Not AppRuntime.Initialize(ThisApplication) Then Return
 
     Dim app As Inventor.Application = ThisApplication
     

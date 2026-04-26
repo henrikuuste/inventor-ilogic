@@ -27,6 +27,7 @@
 '
 ' ============================================================================
 
+AddVbFile "Lib/RuntimeLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/GeoLib.vb"
 AddVbFile "Lib/WorkFeatureLib.vb"
@@ -35,6 +36,8 @@ AddVbFile "Lib/DocumentUpdateLib.vb"
 AddVbFile "Lib/CenterPatternLib.vb"
 
 Sub Main()
+    If Not AppRuntime.Initialize(ThisApplication) Then Return
+    
     Dim app As Inventor.Application = ThisApplication
     Dim doc As Document = app.ActiveDocument
     Dim iLogicAuto As Object = iLogicVb.Automation

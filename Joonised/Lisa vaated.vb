@@ -11,6 +11,7 @@
 '        Select the base view or the first view will be used.
 ' ============================================================================
 
+AddVbFile "Lib/RuntimeLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/FileSearchLib.vb"
 AddVbFile "Lib/CAMDrawingLib.vb"
@@ -20,6 +21,8 @@ Imports System.Windows.Forms
 Imports Inventor
 
 Sub Main()
+    If Not AppRuntime.Initialize(ThisApplication) Then Return
+    
     Dim app As Inventor.Application = ThisApplication
     UtilsLib.SetLogger(Logger)
     UtilsLib.LogInfo("Lisa vaated: Starting...")

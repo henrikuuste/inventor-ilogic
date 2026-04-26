@@ -11,6 +11,7 @@
 ' - If nothing is selected, all top-level occurrences are renamed
 ' ============================================================================
 
+AddVbFile "Lib/RuntimeLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/OccurrenceNamingLib.vb"
 
@@ -18,6 +19,8 @@ Imports System.Windows.Forms
 Imports Inventor
 
 Sub Main()
+    If Not AppRuntime.Initialize(ThisApplication) Then Return
+    
     Dim app As Inventor.Application = ThisApplication
     
     ' Enable immediate logging

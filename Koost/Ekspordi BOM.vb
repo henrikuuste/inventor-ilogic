@@ -10,10 +10,13 @@
 ' ============================================================================
 
 AddReference "System.Data"
+AddVbFile "Lib/RuntimeLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/BOMExportLib.vb"
 
 Sub Main()
+    If Not AppRuntime.Initialize(ThisApplication) Then Return
+    
     UtilsLib.SetLogger(Logger)
     Dim app As Inventor.Application = ThisApplication
 

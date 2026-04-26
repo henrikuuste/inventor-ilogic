@@ -1,4 +1,5 @@
 ' Copyright (c) 2026 Henri Kuuste
+AddVbFile "Lib/RuntimeLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 
 Imports Inventor
@@ -13,6 +14,8 @@ Imports Inventor
 ' The appearance will be restored to what is defined by the material.
 
 Sub Main()
+    If Not AppRuntime.Initialize(ThisApplication) Then Return
+    
     Dim app As Inventor.Application = ThisApplication
     UtilsLib.SetLogger(Logger)
     

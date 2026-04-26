@@ -4,12 +4,15 @@
 ' exports Thickness as iProperty, sets Width/Length custom properties
 ' with sheet metal expressions, and creates flat pattern.
 
+AddVbFile "Lib/RuntimeLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/DocumentUpdateLib.vb"
 AddVbFile "Lib/DimensionUpdateLib.vb"
 AddVbFile "Lib/CustomPropertiesLib.vb"
 
 Sub Main()
+    If Not AppRuntime.Initialize(ThisApplication) Then Return
+    
     Dim app As Inventor.Application = ThisApplication
     Dim doc As Document = ThisDoc.Document
     

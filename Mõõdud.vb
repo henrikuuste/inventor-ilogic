@@ -20,6 +20,7 @@
 ' (Thickness, Width, Length) on geometry/parameter changes.
 ' ============================================================================
 
+AddVbFile "Lib/RuntimeLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/DocumentUpdateLib.vb"
 AddVbFile "Lib/DimensionUpdateLib.vb"
@@ -30,6 +31,8 @@ Imports System.Windows.Forms
 Imports Inventor
 
 Sub Main()
+    If Not AppRuntime.Initialize(ThisApplication) Then Return
+    
     UtilsLib.SetLogger(Logger)
     
     Dim app As Inventor.Application = ThisApplication
