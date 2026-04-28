@@ -8,8 +8,8 @@ Domain terminology for the Inventor Moodulid (Module Release) system.
 | Term | Definition | Aliases to avoid |
 |------|------------|------------------|
 | **Alusmoodul** | A parametric base module containing masters and derived parts, stored in `Alusmoodulid/` | Base module, source module, design module |
-| **Moodul** | A released, production-ready module with frozen geometry, stored in `Moodulid/` | Release, output, product |
-| **Variant** | A specific parameter configuration defined in the Excel table | Configuration, version, instance |
+| **Moodul** | A released, production-ready module with frozen geometry, stored in `Moodulid/{MooduliNimi}/` | Release, output, product, variant |
+| **Väljastamine** | The process of creating a **Moodul** from an **Alusmoodul** | Release, vabastamine |
 | **Submodule** | A component group within a module (e.g., Karkass, Poroloon) | Component group, section, subsystem |
 
 ## Part Classification
@@ -25,10 +25,10 @@ Domain terminology for the Inventor Moodulid (Module Release) system.
 
 | Term | Definition | Aliases to avoid |
 |------|------------|------------------|
-| **Shared Part** | A part with identical geometry across ALL variants of a module | Common part, universal part |
-| **Unique Part** | A part with different geometry for different variants | Variant-specific part, custom part |
-| **Ühine** | The shared folder (`Moodulid/Ühine/`) containing parts used across variants or modules | Common, shared folder |
-| **Cross-Module Sharing** | Reuse of a shared part by multiple different modules of the same product | Inter-module sharing |
+| **Shared Part** | A part with identical geometry across ALL moodulid of an alusmoodul | Common part, universal part |
+| **Unique Part** | A part with different geometry for different moodulid | Variant-specific part, moodulispetsiifiline |
+| **Ühine** | The shared folder (`Moodulid/Ühine/`) containing parts used across moodulid or alusmoodulid | Common, shared folder |
+| **Cross-Module Sharing** | Reuse of a shared part by multiple different alusmoodulid of the same product | Inter-module sharing |
 
 ## Geometry Analysis
 
@@ -36,7 +36,7 @@ Domain terminology for the Inventor Moodulid (Module Release) system.
 |------|------------|------------------|
 | **Geometry Fingerprint** | A deterministic hash of part geometry (volume, surface area, bounding box) used to compare shapes | Signature, hash, geometry ID |
 | **Full Fingerprint** | Source part number + geometry fingerprint; used for cross-module sharing to ensure same SOURCE part (stable across renames) | Combined fingerprint |
-| **Variant Matrix** | A mapping of Part × Variant → Geometry Fingerprint used to classify parts as shared or unique | Analysis matrix, fingerprint table |
+| **Mooduli Matrix** | A mapping of Part × Moodul → Geometry Fingerprint used to classify parts as shared or unique | Variant matrix, analysis matrix, fingerprint table |
 
 ## File Operations
 
@@ -56,29 +56,29 @@ Domain terminology for the Inventor Moodulid (Module Release) system.
 
 ## Relationships
 
-- A **Moodul** is created by releasing an **Alusmoodul**
+- A **Moodul** is created by **Väljastamine** of an **Alusmoodul**
 - An **Alusmoodul** contains one or more **Masters**
 - A **Master** generates multiple **Derived Parts**
-- A **Variant** defines parameter values for all **Masters** in a module
-- A **Shared Part** has one **Fingerprint** across all **Variants**
-- A **Unique Part** has different **Fingerprints** for different **Variants**
+- Each row in `moodulid.xlsx` defines parameter values for one **Moodul**
+- A **Shared Part** has one **Fingerprint** across all **Moodulid**
+- A **Unique Part** has different **Fingerprints** for different **Moodulid**
 - **Cross-Module Sharing** is detected by matching **Fingerprints** in the **Manifest**
 - A **Standalone Copy** is created from a **Derived Part** by breaking **Heritage** links
 - An **Assembly Snapshot** uses a **Reference Map** to point to released parts
 
 ## Example dialogue
 
-> **Dev:** "When we release an **Alusmoodul**, do we copy the **Masters**?"
+> **Dev:** "When we do **Väljastamine** of an **Alusmoodul**, do we copy the **Masters**?"
 
 > **Domain expert:** "No — **Masters** stay in `Alusmoodulid/`. We only create **Standalone Copies** of **Derived Parts** and **Manual Parts**. The **Masters** are never released."
 
-> **Dev:** "How do we know if a part should go to **Ühine** or a **Variant** folder?"
+> **Dev:** "How do we know if a part should go to **Ühine** or a **Moodul** folder?"
 
-> **Domain expert:** "We compute the **Fingerprint** for each part across all **Variants**. If the **Fingerprint** is identical for ALL **Variants**, it's a **Shared Part** and goes to **Ühine**. Otherwise it's a **Unique Part** and each distinct geometry gets its own file in the **Variant** folder."
+> **Domain expert:** "We compute the **Fingerprint** for each part across all **Moodulid**. If the **Fingerprint** is identical for ALL **Moodulid**, it's a **Shared Part** and goes to **Ühine**. Otherwise it's a **Unique Part** and each distinct geometry gets its own file in the **Moodul** folder."
 
-> **Dev:** "What about parts shared between different modules, like brackets used in both Selg and Iste?"
+> **Dev:** "What about parts shared between different alusmoodulid, like brackets used in both Selg and Iste?"
 
-> **Domain expert:** "That's **Cross-Module Sharing**. When releasing the second module, we check the **Manifest** for matching **Fingerprints**. If we find a match in **Ühine**, we reuse that file instead of creating a duplicate."
+> **Domain expert:** "That's **Cross-Module Sharing**. During **Väljastamine** of the second alusmoodul, we check the **Manifest** for matching **Fingerprints**. If we find a match in **Ühine**, we reuse that file instead of creating a duplicate."
 
 > **Dev:** "So the **Manifest** is key for avoiding duplicate Vault numbers?"
 
@@ -88,7 +88,11 @@ Domain terminology for the Inventor Moodulid (Module Release) system.
 
 - **"Module"** was used to mean both the parametric design (`Alusmoodul`) and the released output (`Moodul`). These are distinct: an **Alusmoodul** is editable with live parameters, while a **Moodul** is frozen for production.
 
-- **"Shared"** can mean shared across variants (same module) OR shared across modules (different modules). Both go to **Ühine**, but the detection mechanism differs: variant sharing uses the **Variant Matrix**, while module sharing uses the **Manifest**.
+- **"Variant"** should NOT be used in Estonian. In English code/docs, "variant" may appear, but in Estonian UI and user-facing text, always use **moodul/moodulid**.
+
+- **"vabastamine"** is incorrect for "release" in this context. Use **väljastamine** instead.
+
+- **"Shared"** can mean shared across moodulid (same alusmoodul) OR shared across alusmoodulid (different source modules). Both go to **Ühine**, but the detection mechanism differs: moodul sharing uses the **Mooduli Matrix**, while cross-module sharing uses the **Manifest**.
 
 - **"Copy"** is overloaded: `File.Copy` preserves **Heritage** (required for `ReplaceReference`), while a **Standalone Copy** explicitly breaks derivation links. Use "copy with heritage" vs "standalone copy" to distinguish.
 
@@ -108,10 +112,10 @@ Several files use "skeleton" in comments to refer to **Master** parts:
 - `Katsetused/RotateOriginAxes.vb:454,457` - "Source part may have no solid bodies"
 
 ### MEDIUM: "variant-specific" instead of "Unique Part"
-`docs/plans/2026-04-26-module-release-cycle.md` extensively uses "variant-specific part" (lines 53, 57, 819, 1115-1116, 1297). The canonical term is **Unique Part**. Note: "variant-specific" as an adjective is acceptable; the issue is when it's used as a noun phrase replacing "Unique Part".
+`docs/plans/2026-04-26-module-release-cycle.md` extensively uses "variant-specific part" (lines 53, 57, 819, 1115-1116, 1297). The canonical term is **Unique Part**. Note: In Estonian, use "moodulispetsiifiline" not "variandispetsiifiline".
 
 ### LOW: "release log" instead of "Manifest"
 - `docs/research/2026-04-26-moodulid-api-research.md:473` - "persist release log"
 
 ### LOW: ReleaseConfig class naming
-`Lib/ExcelReaderLib.vb` defines `ReleaseConfig` class, mixing "Release" (alias for Moodul) with "Config" (alias for Variant). Consider renaming to `VariantDefinition` or `VariantSpec`.
+`Lib/ExcelReaderLib.vb` defines `ReleaseConfig` class, mixing "Release" (alias for Moodul) with "Config" (alias for Variant). Consider renaming to `MoodulDefinition` or `MoodulSpec`.

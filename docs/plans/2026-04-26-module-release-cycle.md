@@ -320,9 +320,9 @@ End Function
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Mode selection dialog displays correctly
-- [ ] Excel file discovered from source folder
-- [ ] Variant table parsed correctly
+- [x] Mode selection dialog displays correctly
+- [x] Excel file discovered from source folder
+- [x] Variant table parsed correctly
 
 #### Manual Verification:
 - [ ] Dialog is non-blocking (can interact with Inventor behind it)
@@ -482,10 +482,10 @@ End Function
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] All parts in assembly tree discovered
-- [ ] Derived parts correctly identified with master reference
-- [ ] Manual parts correctly identified
-- [ ] All drawings referencing tree files discovered
+- [x] All parts in assembly tree discovered
+- [x] Derived parts correctly identified with master reference
+- [x] Manual parts correctly identified
+- [x] All drawings referencing tree files discovered
 
 #### Manual Verification:
 - [ ] Part count matches Inventor's `AllReferencedDocuments`
@@ -706,10 +706,10 @@ End Function
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Fingerprints are deterministic (same result on repeated calls)
-- [ ] Parameters restore correctly after analysis
-- [ ] Document dirty state restored to original
-- [ ] Part groups correctly classified as shared/unique
+- [x] Fingerprints are deterministic (same result on repeated calls)
+- [x] Parameters restore correctly after analysis
+- [x] Document dirty state restored to original
+- [x] Part groups correctly classified as shared/unique
 
 #### Manual Verification:
 - [ ] Changing master parameter changes derived part fingerprints
@@ -1054,10 +1054,10 @@ End Function
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Vault numbers reserved successfully
-- [ ] All planned files have valid target paths
-- [ ] Shared files planned once, unique files planned per fingerprint
-- [ ] Drawing classification (shared vs per-variant) is correct
+- [x] Vault numbers reserved successfully
+- [x] All planned files have valid target paths
+- [x] Shared files planned once, unique files planned per fingerprint
+- [x] Drawing classification (shared vs per-variant) is correct
 
 #### Manual Verification:
 - [ ] Plan summary is accurate
@@ -1312,13 +1312,13 @@ End Function
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Vault logout executes successfully
-- [ ] All target folders created
-- [ ] All files saved to correct local paths
-- [ ] Derivation links broken in parts
-- [ ] Assembly references point to released files
-- [ ] Drawing references point to released files
-- [ ] Master parameters restored after execution
+- [x] Vault logout executes successfully
+- [x] All target folders created
+- [x] All files saved to correct local paths
+- [x] Derivation links broken in parts
+- [x] Assembly references point to released files
+- [x] Drawing references point to released files
+- [x] Master parameters restored after execution
 
 #### Manual Verification:
 - [ ] Released assemblies open without errors

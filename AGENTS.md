@@ -135,6 +135,7 @@ Dim customView As DrawingView = sheet.DrawingViews.AddBaseView( _
 
 | When Writing... | NEVER Do This | ALWAYS Do This Instead |
 |-----------------|---------------|------------------------|
+| Logging | Collect logs, output at end; write to files | Use `Logger.Info()` or `UtilsLib.LogInfo()` in real-time during execution |
 | Lambda with ByRef param | `AddHandler btn.Click, Sub() byRefParam = x` | Store in `frm.Tag`, read after `ShowDialog()` |
 | Forms controls | `New TextBox()` | `New System.Windows.Forms.TextBox()` |
 | Control position/size | `New Point(x,y)`, `New Size(w,h)` | Use `.Left`, `.Top`, `.Width`, `.Height` |
@@ -187,19 +188,40 @@ Before writing ANY library module code, verify:
 
 ### Logging
 
-- Use `Logger.Info()`, `Logger.Warn()`, `Logger.Error()` to log to the iLogic log window
-- **Do NOT use MessageBox.Show()** for informational summaries or progress updates
-- Prefix log messages with the rule name for easy filtering, e.g., `Logger.Info("Lehtmetall: Starting conversion...")`
-- **Early-exit errors** (where the rule cannot run at all) should use **both** Logger and MessageBox:
+**CRITICAL RULES:**
+
+1. **ALWAYS log during script execution** - Use `Logger.Info()`, `Logger.Warn()`, `Logger.Error()` to output progress and results as they happen
+2. **NEVER log at the end** - Do NOT accumulate logs in a list and output them at the end. Log messages must appear in real-time during execution
+3. **NEVER write to external log files** - Do NOT use `System.IO.File.WriteAllText()` or any file-based logging. The iLogic log window is the only log destination
+4. **Do NOT use MessageBox.Show()** for informational summaries or progress updates
+5. Prefix log messages with the rule name for easy filtering, e.g., `Logger.Info("Lehtmetall: Starting conversion...")`
+
+**Early-exit errors** (where the rule cannot run at all) should use **both** Logger and MessageBox:
   - Logger message in English for the log
   - MessageBox message in Estonian for the user
   - This ensures the user sees immediate feedback when a rule fails to start
 
 ```vb
+' BAD - accumulates logs and outputs at end
+Dim logs As New List(Of String)
+logs.Add("Step 1 done")
+logs.Add("Step 2 done")
+For Each msg In logs
+    Logger.Info(msg)  ' All output at end - WRONG!
+Next
+
+' BAD - writes to external file
+Dim logPath As String = "C:\temp\log.txt"
+System.IO.File.WriteAllText(logPath, report.ToString())  ' NEVER do this
+
 ' BAD - blocks user with popup for information
 MessageBox.Show("Conversion complete. Thickness: 2.5 mm", "Lehtmetall")
 
-' GOOD - logs to iLogic log without blocking
+' GOOD - logs in real-time during execution
+Logger.Info("Lehtmetall: Step 1 - Analyzing sheet metal...")
+' ... do step 1 ...
+Logger.Info("Lehtmetall: Step 2 - Creating flat pattern...")
+' ... do step 2 ...
 Logger.Info("Lehtmetall: Conversion complete. Thickness: 2.5 mm")
 
 ' GOOD - early-exit error with both Logger and MessageBox
@@ -213,6 +235,11 @@ End If
 aSideFace = app.CommandManager.Pick(SelectionFilterEnum.kPartFacePlanarFilter, _
     "Vali A-külje pind (ülemine pind) - ESC tühistamiseks")
 ```
+
+**For library modules** (where `Logger` is not directly available):
+- Pass log messages back to the caller who can output them immediately
+- Or pass a logging delegate/callback that logs in real-time
+- The library should call the logging mechanism during execution, not collect logs for later
 
 ## File Structure
 
@@ -471,22 +498,33 @@ These are available in the iLogic execution context:
 - They are **NOT accessible inside a `Public Module`** included via `AddVbFile`
 - This causes: `'iLogicVb' is not declared. It may be inaccessible due to its protection level.`
 - **Solution: Pass these objects as parameters from the calling script**
-- **For Logger: Pass a `List(Of String)` to collect log messages, then output them in the caller:**
+- **For Logger: Use UtilsLib.LogInfo/LogWarn/LogError which logs in real-time:**
 
 ```vb
-' In library module - collect logs
-Public Sub DoWork(ByVal logs As System.Collections.Generic.List(Of String))
-    logs.Add("MyLib: Starting work...")
-    logs.Add("MyLib: Work completed")
+' RECOMMENDED PATTERN: Use UtilsLib for real-time logging from library modules
+
+' In calling script (Sub Main) - initialize UtilsLib logger FIRST
+AddVbFile "Lib/UtilsLib.vb"
+AddVbFile "Lib/MyLibrary.vb"
+
+Sub Main()
+    UtilsLib.SetLogger(Logger)  ' Initialize logger - REQUIRED before any library calls
+    MyLibrary.DoWork()
 End Sub
 
-' In calling script (Sub Main) - output logs
-Dim logs As New System.Collections.Generic.List(Of String)
-MyLibrary.DoWork(logs)
-For Each logMsg As String In logs
-    Logger.Info(logMsg)
-Next
+' In library module - call UtilsLib.LogInfo directly for real-time output
+Public Module MyLibrary
+    Public Sub DoWork()
+        UtilsLib.LogInfo("MyLib: Starting work...")
+        ' ... do work step 1 ...
+        UtilsLib.LogInfo("MyLib: Step 1 complete")
+        ' ... do work step 2 ...
+        UtilsLib.LogInfo("MyLib: Work completed")
+    End Sub
+End Module
 ```
+
+**For passing other iLogic objects (iLogicVb, ThisApplication):**
 
 ```vb
 ' In the runnable script (Sub Main)
@@ -878,6 +916,8 @@ ctrlDef.Execute()  ' Shows checkout dialog
 
 | Issue | Solution |
 |-------|----------|
+| **Logging at end of script** | **NEVER collect logs and output at end. Use Logger.Info() or UtilsLib.LogInfo() during execution** |
+| **External log files** | **NEVER use System.IO.File to write logs. Only use iLogic log window** |
 | **ByRef in lambda** | **NEVER use ByRef params in lambda. Store in form.Tag, read AFTER ShowDialog()** |
 | Module-level Dim/Const outside Module | Declare inside Sub Main or pass via parameters |
 | Module inside Sub Main | Separate into different files |
