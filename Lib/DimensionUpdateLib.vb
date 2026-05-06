@@ -10,9 +10,11 @@
 '        AddVbFile "Lib/DocumentUpdateLib.vb"
 '
 ' Example:
-'   DimensionUpdateLib.RegisterDimensionHandler(partDoc, iLogicVb.Automation, "Z", "X", "Y")
-'   ' For sheet metal (axes are empty, uses flat pattern formulas):
+'   DimensionUpdateLib.RegisterDimensionHandler(partDoc, iLogicVb.Automation, "Z", "X", "Y", "Normal")
+'   ' Sheet metal without Unwrap (axes empty; sets BB_DimensionSource Lehtmetall if 6th arg omitted):
 '   DimensionUpdateLib.RegisterDimensionHandler(partDoc, iLogicVb.Automation, "", "", "")
+'   ' Pinnalaotus (axes empty; pass explicit source — part may still be sheet-metal subtype):
+'   DimensionUpdateLib.RegisterDimensionHandler(partDoc, iLogicVb.Automation, "", "", "", "Pinnalaotus")
 ' ============================================================================
 
 Imports Inventor
@@ -65,14 +67,16 @@ Public Module DimensionUpdateLib
     ''' </summary>
     ''' <param name="doc">Part document</param>
     ''' <param name="iLogicAuto">iLogicVb.Automation object</param>
-    ''' <param name="thicknessAxis">Thickness axis (X/Y/Z or V:x,y,z format), empty for sheet metal</param>
-    ''' <param name="widthAxis">Width axis (X/Y/Z or V:x,y,z format), empty for sheet metal</param>
-    ''' <param name="lengthAxis">Length axis (X/Y/Z or V:x,y,z format), empty for sheet metal</param>
+    ''' <param name="thicknessAxis">Thickness axis (X/Y/Z or V:x,y,z format), empty for sheet metal / Pinnalaotus</param>
+    ''' <param name="widthAxis">Width axis (X/Y/Z or V:x,y,z format), empty for sheet metal / Pinnalaotus</param>
+    ''' <param name="lengthAxis">Length axis (X/Y/Z or V:x,y,z format), empty for sheet metal / Pinnalaotus</param>
+    ''' <param name="dimensionSource">BB_DimensionSource: Normal | Lehtmetall | Pinnalaotus. Empty = infer (axes non-empty → Normal, else Lehtmetall).</param>
     ''' <returns>True if successful</returns>
     Public Function RegisterDimensionHandler(ByVal doc As Document, ByVal iLogicAuto As Object, _
                                              ByVal thicknessAxis As String, ByVal widthAxis As String, _
-                                             ByVal lengthAxis As String) As Boolean
-        LogInfo("RegisterDimensionHandler called - T:" & thicknessAxis & " W:" & widthAxis & " L:" & lengthAxis)
+                                             ByVal lengthAxis As String, _
+                                             Optional ByVal dimensionSource As String = "") As Boolean
+        LogInfo("RegisterDimensionHandler called - T:" & thicknessAxis & " W:" & widthAxis & " L:" & lengthAxis & " Source:" & dimensionSource)
         
         If doc Is Nothing OrElse iLogicAuto Is Nothing Then
             LogError("RegisterDimensionHandler: doc or iLogicAuto is Nothing")
@@ -90,11 +94,45 @@ Public Module DimensionUpdateLib
         ' Remove legacy rule if present
         RemoveLegacyRule(partDoc, iLogicAuto)
         
-        ' Store axis configuration in custom properties (only for normal parts)
-        If Not String.IsNullOrEmpty(thicknessAxis) Then
-            SetCustomProperty(partDoc, "BB_ThicknessAxis", thicknessAxis)
-            SetCustomProperty(partDoc, "BB_WidthAxis", widthAxis)
-            LogInfo("Stored axis config: T=" & thicknessAxis & " W=" & widthAxis)
+        Dim resolvedSource As String = dimensionSource
+        If String.IsNullOrEmpty(resolvedSource) Then
+            If Not String.IsNullOrEmpty(thicknessAxis) OrElse Not String.IsNullOrEmpty(widthAxis) Then
+                resolvedSource = "Normal"
+            Else
+                resolvedSource = "Lehtmetall"
+            End If
+        End If
+        
+        SetCustomProperty(partDoc, "BB_DimensionSource", resolvedSource)
+        LogInfo("BB_DimensionSource = " & resolvedSource)
+        
+        If resolvedSource = "Normal" Then
+            If Not String.IsNullOrEmpty(thicknessAxis) Then
+                SetCustomProperty(partDoc, "BB_ThicknessAxis", thicknessAxis)
+                SetCustomProperty(partDoc, "BB_WidthAxis", widthAxis)
+                LogInfo("Stored axis config: T=" & thicknessAxis & " W=" & widthAxis)
+            End If
+            DeleteCustomPropertyIfPresent(partDoc, "BB_PinnalaotusSolidBodyName")
+        ElseIf resolvedSource = "Pinnalaotus" Then
+            If Not String.IsNullOrEmpty(thicknessAxis) AndAlso Not String.IsNullOrEmpty(widthAxis) Then
+                SetCustomProperty(partDoc, "BB_ThicknessAxis", thicknessAxis)
+                SetCustomProperty(partDoc, "BB_WidthAxis", widthAxis)
+                If Not String.IsNullOrEmpty(lengthAxis) Then
+                    SetCustomProperty(partDoc, "BB_LengthAxis", lengthAxis)
+                Else
+                    DeleteCustomPropertyIfPresent(partDoc, "BB_LengthAxis")
+                End If
+                LogInfo("Stored Pinnalaotus axis config: T=" & thicknessAxis & " W=" & widthAxis)
+            Else
+                DeleteCustomPropertyIfPresent(partDoc, "BB_ThicknessAxis")
+                DeleteCustomPropertyIfPresent(partDoc, "BB_WidthAxis")
+                DeleteCustomPropertyIfPresent(partDoc, "BB_LengthAxis")
+            End If
+        Else
+            DeleteCustomPropertyIfPresent(partDoc, "BB_ThicknessAxis")
+            DeleteCustomPropertyIfPresent(partDoc, "BB_WidthAxis")
+            DeleteCustomPropertyIfPresent(partDoc, "BB_LengthAxis")
+            DeleteCustomPropertyIfPresent(partDoc, "BB_PinnalaotusSolidBodyName")
         End If
         
         ' Build self-contained update code
@@ -169,6 +207,15 @@ Public Module DimensionUpdateLib
         End Try
     End Sub
     
+    Private Sub DeleteCustomPropertyIfPresent(ByVal doc As Document, ByVal propName As String)
+        Try
+            Dim propSet As PropertySet = doc.PropertySets.Item("Inventor User Defined Properties")
+            Dim p As [Property] = propSet.Item(propName)
+            If p IsNot Nothing Then p.Delete()
+        Catch
+        End Try
+    End Sub
+    
     ''' <summary>
     ''' Builds self-contained VB code lines for dimension updates.
     ''' This code has NO external dependencies and works on any computer.
@@ -199,7 +246,207 @@ Public Module DimensionUpdateLib
         lines.Add("    Dim widthVal As Double = 0")
         lines.Add("    Dim lengthVal As Double = 0")
         lines.Add("    ")
-        lines.Add("    If isSheetMetal Then")
+        lines.Add("    Dim dimensionSource As String = """"")
+        lines.Add("    Try")
+        lines.Add("        dimensionSource = CStr(partDoc.PropertySets.Item(""Inventor User Defined Properties"").Item(""BB_DimensionSource"").Value)")
+        lines.Add("    Catch")
+        lines.Add("    End Try")
+        lines.Add("    ")
+        lines.Add("    ' Pinnalaotus dims only when BB_DimensionSource says so (Unwrap may exist but user chose Normal / Lehtmetall)")
+        lines.Add("    Dim usePinnalaotusDims As Boolean = (dimensionSource = ""Pinnalaotus"")")
+        lines.Add("    ")
+        lines.Add("    If usePinnalaotusDims Then")
+        lines.Add("        ' Unwrap + Thicken: measure named solid when possible; sorted bbox or BB_* V: axes")
+        lines.Add("        Try")
+        lines.Add("            Dim unwrapsPL As UnwrapFeatures = compDef.Features.UnwrapFeatures")
+        lines.Add("            If unwrapsPL.Count > 0 Then")
+        lines.Add("                Dim unwrapFeat As UnwrapFeature = unwrapsPL.Item(1)")
+        lines.Add("                Dim unwrapSurf As SurfaceBody = Nothing")
+        lines.Add("                Try")
+        lines.Add("                    If unwrapFeat.SurfaceBodies.Count > 0 Then unwrapSurf = unwrapFeat.SurfaceBodies.Item(1)")
+        lines.Add("                Catch")
+        lines.Add("                End Try")
+        lines.Add("                Dim measBody As SurfaceBody = Nothing")
+        lines.Add("                Dim bodyHint As String = """"")
+        lines.Add("                Try")
+        lines.Add("                    bodyHint = CStr(partDoc.PropertySets.Item(""Inventor User Defined Properties"").Item(""BB_PinnalaotusSolidBodyName"").Value)")
+        lines.Add("                Catch")
+        lines.Add("                End Try")
+        lines.Add("                If bodyHint <> """" Then")
+        lines.Add("                    Try")
+        lines.Add("                        For Each bHint As SurfaceBody In compDef.SurfaceBodies")
+        lines.Add("                            If bHint.Name = bodyHint Then")
+        lines.Add("                                measBody = bHint")
+        lines.Add("                                Exit For")
+        lines.Add("                            End If")
+        lines.Add("                        Next")
+        lines.Add("                    Catch")
+        lines.Add("                    End Try")
+        lines.Add("                End If")
+        lines.Add("                Dim thickenFeat As ThickenFeature = Nothing")
+        lines.Add("                If unwrapSurf IsNot Nothing Then")
+        lines.Add("                    For Each thPL As ThickenFeature In compDef.Features.ThickenFeatures")
+        lines.Add("                        Dim hitPL As Boolean = False")
+        lines.Add("                        Try")
+        lines.Add("                            Dim defPL As Object = Nothing")
+        lines.Add("                            Try")
+        lines.Add("                                defPL = thPL.Definition")
+        lines.Add("                            Catch")
+        lines.Add("                            End Try")
+        lines.Add("                            Dim fcPL As Object = Nothing")
+        lines.Add("                            Try")
+        lines.Add("                                fcPL = thPL.ClientFaces")
+        lines.Add("                            Catch")
+        lines.Add("                            End Try")
+        lines.Add("                            If fcPL Is Nothing AndAlso defPL IsNot Nothing Then")
+        lines.Add("                                Try")
+        lines.Add("                                    fcPL = defPL.FaceCollection")
+        lines.Add("                                Catch")
+        lines.Add("                                End Try")
+        lines.Add("                                If fcPL Is Nothing Then")
+        lines.Add("                                    Try")
+        lines.Add("                                        fcPL = defPL.Faces")
+        lines.Add("                                    Catch")
+        lines.Add("                                    End Try")
+        lines.Add("                                End If")
+        lines.Add("                            End If")
+        lines.Add("                            If fcPL IsNot Nothing Then")
+        lines.Add("                                For Each fPL As Face In fcPL")
+        lines.Add("                                    Try")
+        lines.Add("                                        If fPL.Parent Is unwrapSurf Then")
+        lines.Add("                                            hitPL = True")
+        lines.Add("                                            Exit For")
+        lines.Add("                                        End If")
+        lines.Add("                                    Catch")
+        lines.Add("                                    End Try")
+        lines.Add("                                    Try")
+        lines.Add("                                        If CType(fPL.Parent, SurfaceBody).Name = unwrapSurf.Name Then")
+        lines.Add("                                            hitPL = True")
+        lines.Add("                                            Exit For")
+        lines.Add("                                        End If")
+        lines.Add("                                    Catch")
+        lines.Add("                                    End Try")
+        lines.Add("                                Next")
+        lines.Add("                            End If")
+        lines.Add("                        Catch")
+        lines.Add("                        End Try")
+        lines.Add("                        If hitPL Then")
+        lines.Add("                            thickenFeat = thPL")
+        lines.Add("                            Exit For")
+        lines.Add("                        End If")
+        lines.Add("                    Next")
+        lines.Add("                End If")
+        lines.Add("                If thickenFeat Is Nothing Then")
+        lines.Add("                    Try")
+        lines.Add("                        Dim allTh As ThickenFeatures = compDef.Features.ThickenFeatures")
+        lines.Add("                        If allTh.Count = 1 Then thickenFeat = allTh.Item(1)")
+        lines.Add("                        If thickenFeat Is Nothing AndAlso allTh.Count > 0 Then thickenFeat = allTh.Item(allTh.Count)")
+        lines.Add("                    Catch")
+        lines.Add("                    End Try")
+        lines.Add("                End If")
+        lines.Add("                thicknessVal = 0")
+        lines.Add("                If thickenFeat IsNot Nothing Then")
+        lines.Add("                    Try")
+        lines.Add("                        Dim dPL As Object = thickenFeat.Definition")
+        lines.Add("                        If dPL IsNot Nothing Then")
+        lines.Add("                            Try")
+        lines.Add("                                Dim tpPL As Object = dPL.Thickness")
+        lines.Add("                                If tpPL IsNot Nothing Then thicknessVal = Math.Abs(CDbl(tpPL.Value))")
+        lines.Add("                            Catch")
+        lines.Add("                            End Try")
+        lines.Add("                            If thicknessVal < 0.00001 Then")
+        lines.Add("                                Try")
+        lines.Add("                                    Dim tdPL As Object = dPL.Distance")
+        lines.Add("                                    If tdPL IsNot Nothing Then thicknessVal = Math.Abs(CDbl(tdPL.Value))")
+        lines.Add("                                Catch")
+        lines.Add("                                End Try")
+        lines.Add("                            End If")
+        lines.Add("                        End If")
+        lines.Add("                    Catch")
+        lines.Add("                    End Try")
+        lines.Add("                End If")
+        lines.Add("                If measBody Is Nothing AndAlso thickenFeat IsNot Nothing Then")
+        lines.Add("                    Try")
+        lines.Add("                        If thickenFeat.SurfaceBodies.Count > 0 Then measBody = thickenFeat.SurfaceBodies.Item(1)")
+        lines.Add("                    Catch")
+        lines.Add("                    End Try")
+        lines.Add("                End If")
+        lines.Add("                If measBody Is Nothing Then measBody = unwrapSurf")
+        lines.Add("                If measBody IsNot Nothing Then")
+        lines.Add("                    Dim tAxisStr As String = """"")
+        lines.Add("                    Dim wAxisStr As String = """"")
+        lines.Add("                    Try")
+        lines.Add("                        tAxisStr = CStr(partDoc.PropertySets.Item(""Inventor User Defined Properties"").Item(""BB_ThicknessAxis"").Value)")
+        lines.Add("                    Catch")
+        lines.Add("                    End Try")
+        lines.Add("                    Try")
+        lines.Add("                        wAxisStr = CStr(partDoc.PropertySets.Item(""Inventor User Defined Properties"").Item(""BB_WidthAxis"").Value)")
+        lines.Add("                    Catch")
+        lines.Add("                    End Try")
+        lines.Add("                    If tAxisStr.StartsWith(""V:"") AndAlso wAxisStr.StartsWith(""V:"") Then")
+        lines.Add("                        Dim tx As Double = 0, ty As Double = 0, tz As Double = 0")
+        lines.Add("                        Dim wx As Double = 0, wy As Double = 0, wz As Double = 0")
+        lines.Add("                        Dim lx As Double = 0, ly As Double = 0, lz As Double = 0")
+        lines.Add("                        Try")
+        lines.Add("                            Dim tParts() As String = tAxisStr.Substring(2).Split("",""c)")
+        lines.Add("                            If tParts.Length = 3 Then")
+        lines.Add("                                tx = Double.Parse(tParts(0), System.Globalization.CultureInfo.InvariantCulture)")
+        lines.Add("                                ty = Double.Parse(tParts(1), System.Globalization.CultureInfo.InvariantCulture)")
+        lines.Add("                                tz = Double.Parse(tParts(2), System.Globalization.CultureInfo.InvariantCulture)")
+        lines.Add("                            End If")
+        lines.Add("                        Catch")
+        lines.Add("                        End Try")
+        lines.Add("                        Try")
+        lines.Add("                            Dim wParts() As String = wAxisStr.Substring(2).Split("",""c)")
+        lines.Add("                            If wParts.Length = 3 Then")
+        lines.Add("                                wx = Double.Parse(wParts(0), System.Globalization.CultureInfo.InvariantCulture)")
+        lines.Add("                                wy = Double.Parse(wParts(1), System.Globalization.CultureInfo.InvariantCulture)")
+        lines.Add("                                wz = Double.Parse(wParts(2), System.Globalization.CultureInfo.InvariantCulture)")
+        lines.Add("                            End If")
+        lines.Add("                        Catch")
+        lines.Add("                        End Try")
+        lines.Add("                        lx = ty * wz - tz * wy")
+        lines.Add("                        ly = tz * wx - tx * wz")
+        lines.Add("                        lz = tx * wy - ty * wx")
+        lines.Add("                        Dim minT As Double = Double.MaxValue, maxT As Double = Double.MinValue")
+        lines.Add("                        Dim minW As Double = Double.MaxValue, maxW As Double = Double.MinValue")
+        lines.Add("                        Dim minL As Double = Double.MaxValue, maxL As Double = Double.MinValue")
+        lines.Add("                        Try")
+        lines.Add("                            For Each vtx As Vertex In measBody.Vertices")
+        lines.Add("                                Dim ppt As Point = vtx.Point")
+        lines.Add("                                Dim pT As Double = ppt.X * tx + ppt.Y * ty + ppt.Z * tz")
+        lines.Add("                                Dim pW As Double = ppt.X * wx + ppt.Y * wy + ppt.Z * wz")
+        lines.Add("                                Dim pL As Double = ppt.X * lx + ppt.Y * ly + ppt.Z * lz")
+        lines.Add("                                If pT < minT Then minT = pT")
+        lines.Add("                                If pT > maxT Then maxT = pT")
+        lines.Add("                                If pW < minW Then minW = pW")
+        lines.Add("                                If pW > maxW Then maxW = pW")
+        lines.Add("                                If pL < minL Then minL = pL")
+        lines.Add("                                If pL > maxL Then maxL = pL")
+        lines.Add("                            Next")
+        lines.Add("                        Catch")
+        lines.Add("                        End Try")
+        lines.Add("                        If minT < Double.MaxValue Then")
+        lines.Add("                            If thicknessVal < 0.00001 Then thicknessVal = maxT - minT")
+        lines.Add("                        End If")
+        lines.Add("                        If minW < Double.MaxValue Then widthVal = maxW - minW")
+        lines.Add("                        If minL < Double.MaxValue Then lengthVal = maxL - minL")
+        lines.Add("                    Else")
+        lines.Add("                        Dim rb As Box = measBody.RangeBox")
+        lines.Add("                        Dim sx As Double = Math.Abs(rb.MaxPoint.X - rb.MinPoint.X)")
+        lines.Add("                        Dim sy As Double = Math.Abs(rb.MaxPoint.Y - rb.MinPoint.Y)")
+        lines.Add("                        Dim sz As Double = Math.Abs(rb.MaxPoint.Z - rb.MinPoint.Z)")
+        lines.Add("                        Dim dims() As Double = {sx, sy, sz}")
+        lines.Add("                        System.Array.Sort(dims)")
+        lines.Add("                        If thicknessVal < 0.00001 Then thicknessVal = dims(0)")
+        lines.Add("                        widthVal = dims(1)")
+        lines.Add("                        lengthVal = dims(2)")
+        lines.Add("                    End If")
+        lines.Add("                End If")
+        lines.Add("            End If")
+        lines.Add("        Catch")
+        lines.Add("        End Try")
+        lines.Add("    ElseIf isSheetMetal Then")
         lines.Add("        ' Sheet metal: get dimensions from flat pattern via API")
         lines.Add("        Try")
         lines.Add("            Dim smCompDef As SheetMetalComponentDefinition = CType(compDef, SheetMetalComponentDefinition)")
@@ -414,7 +661,7 @@ Public Module DimensionUpdateLib
         lines.Add("    Dim lengthMm As Double = Math.Round(lengthVal * 10.0, 1)")
         lines.Add("    ")
         lines.Add("    ' Debug logging")
-        lines.Add("    Logger.Info(""[DimensionUpdate] isSheetMetal="" & isSheetMetal.ToString())")
+        lines.Add("    Logger.Info(""[DimensionUpdate] dimensionSource="" & dimensionSource & "" isSheetMetal="" & isSheetMetal.ToString())")
         lines.Add("    Logger.Info(""[DimensionUpdate] Raw values (cm): T="" & thicknessVal.ToString() & "" W="" & widthVal.ToString() & "" L="" & lengthVal.ToString())")
         lines.Add("    Logger.Info(""[DimensionUpdate] Converted (mm): T="" & thicknessMm.ToString() & "" W="" & widthMm.ToString() & "" L="" & lengthMm.ToString())")
         lines.Add("    ")

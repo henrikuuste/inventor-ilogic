@@ -635,6 +635,131 @@ Public Module BoundingBoxStockLib
         Return maxProj - minProj
     End Function
 
+    ''' <summary>
+    ''' Oriented extent along (dirX,dirY,dirZ) for a single surface body only (e.g. Pinnalaotus thickened solid).
+    ''' </summary>
+    Public Function GetOrientedExtentForSurfaceBody(ByVal body As SurfaceBody, ByVal dirX As Double, ByVal dirY As Double, ByVal dirZ As Double) As Double
+        Dim minProj As Double = Double.MaxValue
+        Dim maxProj As Double = Double.MinValue
+        Try
+            For Each vertex As Vertex In body.Vertices
+                Dim pt As Point = vertex.Point
+                Dim proj As Double = pt.X * dirX + pt.Y * dirY + pt.Z * dirZ
+                If proj < minProj Then minProj = proj
+                If proj > maxProj Then maxProj = proj
+            Next
+        Catch
+        End Try
+        If minProj = Double.MaxValue Then Return 0
+        Return maxProj - minProj
+    End Function
+
+    ' ============================================================================
+    ' Auto-detect axes from one body (same heuristic as AutoDetectAxesFromGeometry)
+    ' ============================================================================
+
+    ''' <summary>
+    ''' Find thickness direction from face normals with smallest oriented extent on this body only.
+    ''' Use for Pinnalaotus measurement geometry at arbitrary angles (same idea as normal-part auto-detect).
+    ''' </summary>
+    Public Function AutoDetectAxesFromSurfaceBody(ByVal body As SurfaceBody, _
+                                                   ByRef thicknessAxis As String, ByRef widthAxis As String, ByRef lengthAxis As String) As Boolean
+        thicknessAxis = ""
+        widthAxis = ""
+        lengthAxis = ""
+
+        Dim bestNormalX As Double = 0, bestNormalY As Double = 0, bestNormalZ As Double = 0
+        Dim minExtent As Double = Double.MaxValue
+        Dim foundNormal As Boolean = False
+        Dim checkedNormals As New System.Collections.Generic.List(Of String)
+
+        Try
+            For Each face As Face In body.Faces
+                Dim nx As Double = 0, ny As Double = 0, nz As Double = 0
+                If GetFaceNormal(face, nx, ny, nz) Then
+                    Dim len As Double = Math.Sqrt(nx * nx + ny * ny + nz * nz)
+                    If len > 0.0001 Then
+                        nx /= len : ny /= len : nz /= len
+                    End If
+
+                    If nx < -0.0001 OrElse (Math.Abs(nx) < 0.0001 AndAlso ny < -0.0001) OrElse _
+                       (Math.Abs(nx) < 0.0001 AndAlso Math.Abs(ny) < 0.0001 AndAlso nz < -0.0001) Then
+                        nx = -nx : ny = -ny : nz = -nz
+                    End If
+
+                    Dim normalKey As String = Math.Round(nx, 3).ToString() & "," & _
+                                              Math.Round(ny, 3).ToString() & "," & _
+                                              Math.Round(nz, 3).ToString()
+
+                    If checkedNormals.Contains(normalKey) Then Continue For
+                    checkedNormals.Add(normalKey)
+
+                    Dim extent As Double = GetOrientedExtentForSurfaceBody(body, nx, ny, nz)
+
+                    If extent > 0 AndAlso extent < minExtent Then
+                        minExtent = extent
+                        bestNormalX = nx
+                        bestNormalY = ny
+                        bestNormalZ = nz
+                        foundNormal = True
+                    End If
+                End If
+            Next
+        Catch ex As Exception
+            UtilsLib.LogWarn("BoundingBoxStockLib: AutoDetectAxesFromSurfaceBody failed: " & ex.Message)
+            Return False
+        End Try
+
+        If Not foundNormal Then
+            UtilsLib.LogInfo("BoundingBoxStockLib: AutoDetectAxesFromSurfaceBody found no suitable normal.")
+            Return False
+        End If
+
+        Dim toleranceDot As Double = 0.9998
+        Dim dotX As Double = Math.Abs(bestNormalX)
+        Dim dotY As Double = Math.Abs(bestNormalY)
+        Dim dotZ As Double = Math.Abs(bestNormalZ)
+
+        If dotX > toleranceDot Then
+            thicknessAxis = "X"
+        ElseIf dotY > toleranceDot Then
+            thicknessAxis = "Y"
+        ElseIf dotZ > toleranceDot Then
+            thicknessAxis = "Z"
+        Else
+            thicknessAxis = VectorToString(bestNormalX, bestNormalY, bestNormalZ)
+        End If
+
+        If IsVectorFormat(thicknessAxis) Then
+            Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
+            Dim lx As Double = 0, ly As Double = 0, lz As Double = 0
+            ComputePerpendicularVectors(bestNormalX, bestNormalY, bestNormalZ, wx, wy, wz, lx, ly, lz)
+
+            Dim widthExtent As Double = GetOrientedExtentForSurfaceBody(body, wx, wy, wz)
+            Dim lengthExtent As Double = GetOrientedExtentForSurfaceBody(body, lx, ly, lz)
+
+            If lengthExtent >= widthExtent Then
+                lengthAxis = VectorToString(lx, ly, lz)
+                widthAxis = VectorToString(wx, wy, wz)
+            Else
+                lengthAxis = VectorToString(wx, wy, wz)
+                widthAxis = VectorToString(lx, ly, lz)
+            End If
+        Else
+            Dim xSize As Double = 0, ySize As Double = 0, zSize As Double = 0
+            Try
+                Dim box As Box = body.RangeBox
+                xSize = Math.Abs(box.MaxPoint.X - box.MinPoint.X)
+                ySize = Math.Abs(box.MaxPoint.Y - box.MinPoint.Y)
+                zSize = Math.Abs(box.MaxPoint.Z - box.MinPoint.Z)
+            Catch
+            End Try
+            AssignWidthLength(thicknessAxis, xSize, ySize, zSize, widthAxis, lengthAxis)
+        End If
+
+        Return True
+    End Function
+
     Public Function PickAxisWithDescription(ByVal app As Inventor.Application, ByRef axisDesc As String) As String
         axisDesc = ""
         
@@ -865,6 +990,24 @@ Public Module BoundingBoxStockLib
         Return "V:" & vx.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture) & "," & _
                       vy.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture) & "," & _
                       vz.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture)
+    End Function
+
+    ''' <summary>
+    ''' Convert X/Y/Z axis label to V: form so oriented Pinnalaotus math always uses body projections.
+    ''' </summary>
+    Public Function PrincipalAxisToVectorString(ByVal axis As String) As String
+        If String.IsNullOrEmpty(axis) Then Return ""
+        If axis.StartsWith("V:") Then Return axis
+        Select Case axis.Trim().ToUpperInvariant()
+            Case "X"
+                Return VectorToString(1, 0, 0)
+            Case "Y"
+                Return VectorToString(0, 1, 0)
+            Case "Z"
+                Return VectorToString(0, 0, 1)
+            Case Else
+                Return axis
+        End Select
     End Function
 
     Public Sub ComputePerpendicularVectors(ByVal tx As Double, ByVal ty As Double, ByVal tz As Double, _

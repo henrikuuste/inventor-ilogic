@@ -5,6 +5,8 @@
 ' Provides functions to:
 ' - Create drawings from template with 1:1 scale views
 ' - Place all 6 orthographic views in T-layout
+' - Pinnalaotus DVR (thickened manufactured solid): AddBaseView AdditionalOptions DesignViewRepresentation + DVR activate fallback + MemberSpecific sync
+' - EnsureOrthographicCamViewsForPart: reuse views when layout exists (used by Joonised/Loo 1-1 joonised.vb; run Komponendid/Pinnalaotuse vaated.vb first on the part for DVRs)
 ' - Resize sheets to fit part extents
 ' - Add extent dimensions
 ' - Export to DWG/DXF (2010 format)
@@ -12,6 +14,7 @@
 ' Dependencies:
 '   UtilsLib (logging). AddVbFile "Lib/UtilsLib.vb" BEFORE this file.
 '   FileSearchLib (depth-first search). AddVbFile "Lib/FileSearchLib.vb" BEFORE this file.
+'   UnwrapLib (Pinnalaotus). AddVbFile "Lib/UnwrapLib.vb" BEFORE this file when using parts with Unwrap.
 '   In Sub Main: UtilsLib.SetLogger(Logger)
 '
 ' Usage:
@@ -22,6 +25,7 @@
 ' ============================================================================
 
 Imports Inventor
+Imports Microsoft.VisualBasic
 Imports System.Collections.Generic
 
 Public Module CAMDrawingLib
@@ -72,9 +76,15 @@ Public Module CAMDrawingLib
     ' ============================================================================
     
     ' Determine the appropriate base view orientation for a part
-    ' Priority: 1) Sheet metal flat pattern, 2) BB_ThicknessAxis property, 3) Default front
-    Public Function DetermineBaseViewOrientation(partDoc As PartDocument) As ViewOrientationTypeEnum
-        ' Check if sheet metal with flat pattern
+    ' Priority: 1) Pinnalaotus DVR drawing (unwrap+thicken, BB_DimensionSource), 2) Sheet metal flat pattern, 3) BB_ThicknessAxis, 4) Default front
+    Public Function DetermineBaseViewOrientation(partDoc As PartDocument, _
+                                                 Optional forcePinnalaotusDvr As Boolean = False) As ViewOrientationTypeEnum
+        If UnwrapLib.ShouldUsePinnalaotusDvrInDrawing(partDoc, forcePinnalaotusDvr) Then
+            UtilsLib.LogInfo("CAMDrawingLib: Pinnalaotus DVR drawing - using Top view for flat thickened body")
+            Return ViewOrientationTypeEnum.kTopViewOrientation
+        End If
+        
+        ' Sheet metal flat pattern only when not using Pinnalaotus DVR (unwrap may exist on SM subtype parts)
         If IsSheetMetal(partDoc) AndAlso HasFlatPattern(partDoc) Then
             UtilsLib.LogInfo("CAMDrawingLib: Part is sheet metal with flat pattern - using Top view")
             Return ViewOrientationTypeEnum.kTopViewOrientation  ' Flat pattern uses top view + SetFlatPatternView
@@ -1167,10 +1177,14 @@ Public Module CAMDrawingLib
     ' Returns (width, height) in mm
     ' Handles sheet metal flat patterns (single view) and regular parts (T-layout)
     Public Function CalculateSheetSize(partDoc As PartDocument, _
-                                       dimSpaceMm As Double) As Double()
-        ' Check for sheet metal flat pattern
-        If IsSheetMetal(partDoc) AndAlso HasFlatPattern(partDoc) Then
+                                       dimSpaceMm As Double, _
+                                       Optional forcePinnalaotusDvr As Boolean = False) As Double()
+        If Not UnwrapLib.ShouldUsePinnalaotusDvrInDrawing(partDoc, forcePinnalaotusDvr) AndAlso IsSheetMetal(partDoc) AndAlso HasFlatPattern(partDoc) Then
             Return CalculateFlatPatternSheetSize(partDoc, dimSpaceMm)
+        End If
+        
+        If UnwrapLib.ShouldUsePinnalaotusDvrInDrawing(partDoc, forcePinnalaotusDvr) Then
+            Return CalculatePinnalaotusMeasurementSheetSize(partDoc, dimSpaceMm)
         End If
         
         Dim partBox As Box = partDoc.ComponentDefinition.RangeBox
@@ -1264,6 +1278,35 @@ Public Module CAMDrawingLib
         
         Return New Double() {sheetWidth, sheetHeight}
     End Function
+    
+    ' Sheet sizing for Pinnalaotus DVR views (thickened measurement body only, not whole part)
+    Private Function CalculatePinnalaotusMeasurementSheetSize(partDoc As PartDocument, _
+                                                                 dimSpaceMm As Double) As Double()
+        Dim partBox As Box
+        Try
+            Dim mb As SurfaceBody = UnwrapLib.GetPinnalaotusMeasurementBody(partDoc)
+            If mb IsNot Nothing Then
+                partBox = mb.RangeBox
+            Else
+                partBox = partDoc.ComponentDefinition.RangeBox
+            End If
+        Catch
+            partBox = partDoc.ComponentDefinition.RangeBox
+        End Try
+        
+        Dim xSize As Double = (partBox.MaxPoint.X - partBox.MinPoint.X) * 10
+        Dim ySize As Double = (partBox.MaxPoint.Y - partBox.MinPoint.Y) * 10
+        Dim zSize As Double = (partBox.MaxPoint.Z - partBox.MinPoint.Z) * 10
+        
+        UtilsLib.LogInfo("CAMDrawingLib: Pinnalaotus measurement box (mm): " & FormatNumber(xSize, 1) & " x " & _
+                 FormatNumber(ySize, 1) & " x " & FormatNumber(zSize, 1))
+        
+        Dim sheetWidth As Double = 2 * xSize + 2 * ySize + 5 * dimSpaceMm + 2 * dimSpaceMm
+        Dim sheetHeight As Double = 2 * ySize + zSize + 4 * dimSpaceMm + 2 * dimSpaceMm
+        sheetWidth = Math.Max(sheetWidth, 100)
+        sheetHeight = Math.Max(sheetHeight, 80)
+        Return New Double() {sheetWidth, sheetHeight}
+    End Function
 
     ' ============================================================================
     ' View Placement
@@ -1271,23 +1314,32 @@ Public Module CAMDrawingLib
     
     ' Add all 6 orthographic views at 1:1 scale in T-layout
     ' Returns list of created views
-    ' Handles: sheet metal (flat pattern), BB_ThicknessAxis orientation, default front
+    ' Handles: Pinnalaotus DVR (thickened manufactured body only), sheet metal flat pattern, BB_ThicknessAxis, default front
     ' Creates the base view, then calls AddViewsToExistingBase for projected views
     Public Function AddAllViews(sheet As Sheet, _
                                 partDoc As PartDocument, _
                                 app As Inventor.Application, _
                                 Optional dimOffsetCm As Double = DEFAULT_DIMENSION_OFFSET, _
-                                Optional viewGapCm As Double = DEFAULT_VIEW_GAP) As List(Of DrawingView)
+                                Optional viewGapCm As Double = DEFAULT_VIEW_GAP, _
+                                Optional forcePinnalaotusDvr As Boolean = False) As List(Of DrawingView)
         
-        ' Get part dimensions for positioning
+        ' Get part dimensions for positioning (Pinnalaotus DVR: use measurement body, not full multibody extents)
         Dim partBox As Box = partDoc.ComponentDefinition.RangeBox
+        If UnwrapLib.ShouldUsePinnalaotusDvrInDrawing(partDoc, forcePinnalaotusDvr) Then
+            Try
+                Dim mbPos As SurfaceBody = UnwrapLib.GetPinnalaotusMeasurementBody(partDoc)
+                If mbPos IsNot Nothing Then partBox = mbPos.RangeBox
+            Catch
+            End Try
+        End If
         Dim ySize As Double = (partBox.MaxPoint.Y - partBox.MinPoint.Y)  ' in cm
         
         ' Determine base view orientation
-        Dim baseOrientation As ViewOrientationTypeEnum = DetermineBaseViewOrientation(partDoc)
+        Dim baseOrientation As ViewOrientationTypeEnum = DetermineBaseViewOrientation(partDoc, forcePinnalaotusDvr)
         
-        ' Check for sheet metal flat pattern
-        Dim useSheetMetalFlatPattern As Boolean = IsSheetMetal(partDoc) AndAlso HasFlatPattern(partDoc)
+        ' Sheet metal flat pattern: not when using Pinnalaotus DVR (unwrap can exist on SM subtype parts)
+        Dim useSheetMetalFlatPattern As Boolean = Not UnwrapLib.ShouldUsePinnalaotusDvrInDrawing(partDoc, forcePinnalaotusDvr) AndAlso _
+            IsSheetMetal(partDoc) AndAlso HasFlatPattern(partDoc)
         If useSheetMetalFlatPattern Then
             UtilsLib.LogInfo("CAMDrawingLib: Will use sheet metal flat pattern view")
         End If
@@ -1313,7 +1365,7 @@ Public Module CAMDrawingLib
             End If
             
             If Not useSheetMetalFlatPattern Then
-                baseView = CreateBaseView(sheet, partDoc, app, frontX, frontY, baseOrientation)
+                baseView = CreateBaseView(sheet, partDoc, app, frontX, frontY, baseOrientation, forcePinnalaotusDvr)
             End If
         Catch ex As Exception
             UtilsLib.LogWarn("CAMDrawingLib: Failed to create base view: " & ex.Message)
@@ -1337,14 +1389,89 @@ Public Module CAMDrawingLib
         Return AddViewsToExistingBase(sheet, baseView, partDoc, app, dimOffsetCm, viewGapCm)
     End Function
     
-    ' Create a base view with the specified orientation
-    ' Handles arbitrary camera for custom thickness axis
+    ' Create a base view with the specified orientation.
+    ' For parts, ModelDocument view name is ignored by AddBaseView; use AdditionalOptions DesignViewRepresentation and/or activate Pinnalaotus DVR.
     Private Function CreateBaseView(sheet As Sheet, _
                                      partDoc As PartDocument, _
                                      app As Inventor.Application, _
                                      posX As Double, _
                                      posY As Double, _
-                                     orientation As ViewOrientationTypeEnum) As DrawingView
+                                     orientation As ViewOrientationTypeEnum, _
+                                     Optional forcePinnalaotusDvr As Boolean = False) As DrawingView
+        If UnwrapLib.ShouldUsePinnalaotusDvrInDrawing(partDoc, forcePinnalaotusDvr) Then
+            Dim manufacturedDvr As DesignViewRepresentation = UnwrapLib.GetOrCreatePinnalaotusDVR(partDoc)
+            If manufacturedDvr Is Nothing Then
+                UtilsLib.LogWarn("CAMDrawingLib: Pinnalaotus DVR missing; creating base view without DVR options")
+                Return CreateBaseViewCore(sheet, partDoc, app, posX, posY, orientation, Nothing)
+            End If
+            
+            Dim manufacturedRepName As String = manufacturedDvr.Name
+            
+            Try
+                partDoc.Activate()
+            Catch
+            End Try
+            
+            Dim pinOpts As NameValueMap = Nothing
+            Try
+                pinOpts = app.TransientObjects.CreateNameValueMap()
+                pinOpts.Add("DesignViewRepresentation", manufacturedRepName)
+                pinOpts.Add("DesignViewAssociative", True)
+            Catch ex As Exception
+                UtilsLib.LogWarn("CAMDrawingLib: Could not build Pinnalaotus AdditionalOptions: " & ex.Message)
+                pinOpts = Nothing
+            End Try
+            
+            If pinOpts IsNot Nothing Then
+                Try
+                    Dim withOpts As DrawingView = CreateBaseViewCore(sheet, partDoc, app, posX, posY, orientation, pinOpts)
+                    If withOpts IsNot Nothing Then
+                        UtilsLib.LogInfo("CAMDrawingLib: Base view created with DesignViewRepresentation """ & manufacturedRepName & """")
+                        Return withOpts
+                    End If
+                Catch ex As Exception
+                    UtilsLib.LogWarn("CAMDrawingLib: AddBaseView with DesignViewRepresentation failed: " & ex.Message)
+                End Try
+            End If
+            
+            manufacturedDvr = UnwrapLib.GetOrCreatePinnalaotusDVR(partDoc)
+            If manufacturedDvr IsNot Nothing Then
+                Dim compDef As PartComponentDefinition = partDoc.ComponentDefinition
+                Dim dvrs As DesignViewRepresentations = compDef.RepresentationsManager.DesignViewRepresentations
+                Dim restoreName As String = ""
+                Try
+                    Dim av As DesignViewRepresentation = compDef.RepresentationsManager.ActiveDesignViewRepresentation
+                    If av IsNot Nothing Then restoreName = av.Name
+                Catch
+                End Try
+                Try
+                    manufacturedDvr.Activate()
+                    UtilsLib.LogInfo("CAMDrawingLib: Activated """ & manufacturedDvr.Name & """ for AddBaseView (fallback)")
+                    Return CreateBaseViewCore(sheet, partDoc, app, posX, posY, orientation, Nothing)
+                Finally
+                    Try
+                        If restoreName <> "" Then
+                            dvrs.Item(restoreName).Activate()
+                        Else
+                            UnwrapLib.ActivateDefaultOrMasterDesignView(partDoc)
+                        End If
+                    Catch
+                        UnwrapLib.ActivateDefaultOrMasterDesignView(partDoc)
+                    End Try
+                End Try
+            End If
+        End If
+        Return CreateBaseViewCore(sheet, partDoc, app, posX, posY, orientation, Nothing)
+    End Function
+    
+    ' Core AddBaseView logic; optional AdditionalOptions (e.g. DesignViewRepresentation for Pinnalaotus manufactured DVR).
+    Private Function CreateBaseViewCore(sheet As Sheet, _
+                                     partDoc As PartDocument, _
+                                     app As Inventor.Application, _
+                                     posX As Double, _
+                                     posY As Double, _
+                                     orientation As ViewOrientationTypeEnum, _
+                                     Optional additionalOptions As NameValueMap = Nothing) As DrawingView
         Dim baseView As DrawingView = Nothing
         Dim baseName As String = "Front"
         
@@ -1354,14 +1481,37 @@ Public Module CAMDrawingLib
             
             If camera IsNot Nothing Then
                 Try
-                    baseView = sheet.DrawingViews.AddBaseView( _
-                        partDoc, _
-                        app.TransientGeometry.CreatePoint2d(posX, posY), _
-                        1.0, _
-                        ViewOrientationTypeEnum.kArbitraryViewOrientation, _
-                        DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
-                        "", _
-                        camera)
+                    If additionalOptions IsNot Nothing Then
+                        Try
+                            baseView = sheet.DrawingViews.AddBaseView( _
+                                partDoc, _
+                                app.TransientGeometry.CreatePoint2d(posX, posY), _
+                                1.0, _
+                                ViewOrientationTypeEnum.kArbitraryViewOrientation, _
+                                DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
+                                "", _
+                                camera, _
+                                additionalOptions)
+                        Catch
+                            baseView = sheet.DrawingViews.AddBaseView( _
+                                partDoc, _
+                                app.TransientGeometry.CreatePoint2d(posX, posY), _
+                                1.0, _
+                                ViewOrientationTypeEnum.kArbitraryViewOrientation, _
+                                DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
+                                "", _
+                                camera)
+                        End Try
+                    Else
+                        baseView = sheet.DrawingViews.AddBaseView( _
+                            partDoc, _
+                            app.TransientGeometry.CreatePoint2d(posX, posY), _
+                            1.0, _
+                            ViewOrientationTypeEnum.kArbitraryViewOrientation, _
+                            DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
+                            "", _
+                            camera)
+                    End If
                     baseName = "Custom"
                     UtilsLib.LogInfo("CAMDrawingLib: Created base view with arbitrary camera")
                 Catch ex As Exception
@@ -1377,13 +1527,35 @@ Public Module CAMDrawingLib
         
         ' Create standard orientation view if not already created
         If baseView Is Nothing Then
-            baseView = sheet.DrawingViews.AddBaseView( _
-                partDoc, _
-                app.TransientGeometry.CreatePoint2d(posX, posY), _
-                1.0, _
-                orientation, _
-                DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
-                Nothing, Nothing)
+            If additionalOptions IsNot Nothing Then
+                Try
+                    baseView = sheet.DrawingViews.AddBaseView( _
+                        partDoc, _
+                        app.TransientGeometry.CreatePoint2d(posX, posY), _
+                        1.0, _
+                        orientation, _
+                        DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
+                        Nothing, Nothing, _
+                        additionalOptions)
+                Catch ex As Exception
+                    UtilsLib.LogWarn("CAMDrawingLib: AddBaseView with AdditionalOptions failed, retrying without: " & ex.Message)
+                    baseView = sheet.DrawingViews.AddBaseView( _
+                        partDoc, _
+                        app.TransientGeometry.CreatePoint2d(posX, posY), _
+                        1.0, _
+                        orientation, _
+                        DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
+                        Nothing, Nothing)
+                End Try
+            Else
+                baseView = sheet.DrawingViews.AddBaseView( _
+                    partDoc, _
+                    app.TransientGeometry.CreatePoint2d(posX, posY), _
+                    1.0, _
+                    orientation, _
+                    DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
+                    Nothing, Nothing)
+            End If
             
             baseName = GetViewOrientationName(orientation)
         End If
@@ -1392,6 +1564,255 @@ Public Module CAMDrawingLib
         UtilsLib.LogInfo("CAMDrawingLib: Base view created: " & baseName)
         
         Return baseView
+    End Function
+    
+    ' ============================================================================
+    ' Orthographic layout reuse + Pinnalaotus (manufactured) DVR on existing drawing views
+    ' ============================================================================
+    
+    ''' <summary>
+    ''' Sets MemberSpecificDesignViewRepresentation when the COM object supports it (standard part drawing views).
+    ''' </summary>
+    Public Function TryAssignMemberSpecificDesignView(view As DrawingView, representationName As String) As Boolean
+        If view Is Nothing OrElse String.IsNullOrEmpty(representationName) Then Return False
+        Try
+            CallByName(view, "MemberSpecificDesignViewRepresentation", CallType.Set, representationName)
+            Return True
+        Catch ex As Exception
+            UtilsLib.LogInfo("CAMDrawingLib: MemberSpecificDesignViewRepresentation not applied for """ & view.Name & """: " & ex.Message)
+            Return False
+        End Try
+    End Function
+    
+    Private Function DrawingViewReferencesPart(view As DrawingView, partDoc As PartDocument) As Boolean
+        Try
+            Dim desc = view.ReferencedDocumentDescriptor
+            If desc Is Nothing Then Return False
+            Dim vPathRaw As String = ""
+            Try
+                vPathRaw = CStr(desc.FullDocumentName)
+            Catch
+            End Try
+            If String.IsNullOrEmpty(vPathRaw) Then
+                Try
+                    vPathRaw = CStr(desc.FullFileName)
+                Catch
+                    Return False
+                End Try
+            End If
+            Dim vPath As String = System.IO.Path.GetFullPath(vPathRaw)
+            Dim pPath As String = System.IO.Path.GetFullPath(partDoc.FullFileName)
+            Return vPath.Equals(pPath, StringComparison.OrdinalIgnoreCase)
+        Catch
+            Return False
+        End Try
+    End Function
+    
+    Private Function IsDrawingViewBase(view As DrawingView) As Boolean
+        Try
+            Return view.ParentView Is Nothing
+        Catch
+            Return True
+        End Try
+    End Function
+    
+    ''' <summary>
+    ''' First base drawing view on the sheet that references the given part.
+    ''' </summary>
+    Public Function FindOrthographicBaseViewForPart(sheet As Sheet, partDoc As PartDocument) As DrawingView
+        For Each v As DrawingView In sheet.DrawingViews
+            If Not DrawingViewReferencesPart(v, partDoc) Then Continue For
+            If Not IsDrawingViewBase(v) Then Continue For
+            Return v
+        Next
+        Return Nothing
+    End Function
+    
+    ''' <summary>
+    ''' True when the sheet has a base view for the part plus Top/Bottom/Left/Right/Back named views for that part.
+    ''' </summary>
+    Public Function HasCompleteOrthographicLayoutForPart(sheet As Sheet, partDoc As PartDocument) As Boolean
+        If FindOrthographicBaseViewForPart(sheet, partDoc) Is Nothing Then Return False
+        Dim names As String() = {"Top", "Bottom", "Left", "Right", "Back"}
+        For Each nm As String In names
+            Dim found As DrawingView = FindViewByName(sheet, nm)
+            If found Is Nothing OrElse Not DrawingViewReferencesPart(found, partDoc) Then Return False
+        Next
+        Return True
+    End Function
+    
+    ''' <summary>
+    ''' Ordered list Front (base), Top, Bottom, Left, Right, Back for the part when present.
+    ''' </summary>
+    Public Function CollectOrthographicViewsForPart(sheet As Sheet, partDoc As PartDocument) As List(Of DrawingView)
+        Dim result As New List(Of DrawingView)
+        Dim baseV As DrawingView = FindOrthographicBaseViewForPart(sheet, partDoc)
+        If baseV Is Nothing Then Return result
+        result.Add(baseV)
+        Dim names As String() = {"Top", "Bottom", "Left", "Right", "Back"}
+        For Each nm As String In names
+            Dim found As DrawingView = FindViewByName(sheet, nm)
+            If found IsNot Nothing AndAlso DrawingViewReferencesPart(found, partDoc) Then result.Add(found)
+        Next
+        Return result
+    End Function
+    
+    ''' <summary>
+    ''' Applies Pinnalaotus manufactured DVR (actual name may be <c>Pinnalaotus</c> or legacy <c>BB_Pinnalaotus</c>) to sheet views that reference the part.
+    ''' </summary>
+    Public Sub SyncPinnalaotusDesignViewsOnSheet(sheet As Sheet, _
+                                                  partDoc As PartDocument, _
+                                                  drawDoc As DrawingDocument, _
+                                                  Optional forcePinnalaotusDvr As Boolean = False)
+        If Not UnwrapLib.ShouldUsePinnalaotusDvrInDrawing(partDoc, forcePinnalaotusDvr) Then Return
+        Dim manufacturedDvr As DesignViewRepresentation = UnwrapLib.GetOrCreatePinnalaotusDVR(partDoc)
+        If manufacturedDvr Is Nothing Then Return
+        
+        Dim repName As String = manufacturedDvr.Name
+        Dim applied As Integer = 0
+        For Each v As DrawingView In sheet.DrawingViews
+            If Not DrawingViewReferencesPart(v, partDoc) Then Continue For
+            If TryAssignMemberSpecificDesignView(v, repName) Then applied += 1
+        Next
+        UtilsLib.LogInfo("CAMDrawingLib: Pinnalaotus DVR sync (" & repName & ") attempted on " & applied & " view(s)")
+        Try
+            drawDoc.Update()
+        Catch ex As Exception
+            UtilsLib.LogWarn("CAMDrawingLib: Drawing update after DVR sync: " & ex.Message)
+        End Try
+    End Sub
+    
+    ''' <summary>
+    ''' Adds Top/Bottom/Left/Right/Back when missing (same layout as AddViewsToExistingBase).
+    ''' </summary>
+    Public Sub AddMissingOrthographicProjections(sheet As Sheet, _
+                                                baseView As DrawingView, _
+                                                partDoc As PartDocument, _
+                                                app As Inventor.Application, _
+                                                Optional dimOffsetCm As Double = DEFAULT_DIMENSION_OFFSET, _
+                                                Optional viewGapCm As Double = DEFAULT_VIEW_GAP)
+        If baseView Is Nothing Then Return
+        If baseView.IsFlatPatternView Then Return
+        
+        Dim dimSpace As Double = CalculateViewSpacing(partDoc, dimOffsetCm, viewGapCm)
+        Dim baseX As Double = baseView.Position.X
+        Dim baseY As Double = baseView.Position.Y
+        Dim baseWidth As Double = baseView.Width
+        Dim baseHeight As Double = baseView.Height
+        
+        If FindViewByName(sheet, "Top") Is Nothing Then
+            Try
+                Dim topY As Double = baseY + baseHeight / 2 + dimSpace + baseWidth / 2
+                Dim topView As DrawingView = sheet.DrawingViews.AddProjectedView( _
+                    baseView, app.TransientGeometry.CreatePoint2d(baseX, topY), _
+                    DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, Nothing)
+                Try : topView.Name = "Top" : Catch : End Try
+                Dim actualTopY As Double = baseY + baseHeight / 2 + dimSpace + topView.Height / 2
+                topView.Position = app.TransientGeometry.CreatePoint2d(baseX, actualTopY)
+                UtilsLib.LogInfo("CAMDrawingLib: Added missing Top view")
+            Catch ex As Exception
+                UtilsLib.LogWarn("CAMDrawingLib: Failed to add Top view: " & ex.Message)
+            End Try
+        End If
+        
+        Dim bottomView As DrawingView = FindViewByName(sheet, "Bottom")
+        If bottomView Is Nothing Then
+            Try
+                Dim bottomY As Double = baseY - baseHeight / 2 - dimSpace - baseWidth / 2
+                bottomView = sheet.DrawingViews.AddProjectedView( _
+                    baseView, app.TransientGeometry.CreatePoint2d(baseX, bottomY), _
+                    DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, Nothing)
+                Try : bottomView.Name = "Bottom" : Catch : End Try
+                Dim actualBottomY As Double = baseY - baseHeight / 2 - dimSpace - bottomView.Height / 2
+                bottomView.Position = app.TransientGeometry.CreatePoint2d(baseX, actualBottomY)
+                UtilsLib.LogInfo("CAMDrawingLib: Added missing Bottom view")
+            Catch ex As Exception
+                UtilsLib.LogWarn("CAMDrawingLib: Failed to add Bottom view: " & ex.Message)
+            End Try
+        End If
+        
+        If FindViewByName(sheet, "Left") Is Nothing Then
+            Try
+                Dim leftX As Double = baseX - baseWidth / 2 - dimSpace - baseHeight / 2
+                Dim leftView As DrawingView = sheet.DrawingViews.AddProjectedView( _
+                    baseView, app.TransientGeometry.CreatePoint2d(leftX, baseY), _
+                    DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, Nothing)
+                Try : leftView.Name = "Left" : Catch : End Try
+                Dim actualLeftX As Double = baseX - baseWidth / 2 - dimSpace - leftView.Width / 2
+                leftView.Position = app.TransientGeometry.CreatePoint2d(actualLeftX, baseY)
+                UtilsLib.LogInfo("CAMDrawingLib: Added missing Left view")
+            Catch ex As Exception
+                UtilsLib.LogWarn("CAMDrawingLib: Failed to add Left view: " & ex.Message)
+            End Try
+        End If
+        
+        If FindViewByName(sheet, "Right") Is Nothing Then
+            Try
+                Dim rightX As Double = baseX + baseWidth / 2 + dimSpace + baseHeight / 2
+                Dim rightView As DrawingView = sheet.DrawingViews.AddProjectedView( _
+                    baseView, app.TransientGeometry.CreatePoint2d(rightX, baseY), _
+                    DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, Nothing)
+                Try : rightView.Name = "Right" : Catch : End Try
+                Dim actualRightX As Double = baseX + baseWidth / 2 + dimSpace + rightView.Width / 2
+                rightView.Position = app.TransientGeometry.CreatePoint2d(actualRightX, baseY)
+                UtilsLib.LogInfo("CAMDrawingLib: Added missing Right view")
+            Catch ex As Exception
+                UtilsLib.LogWarn("CAMDrawingLib: Failed to add Right view: " & ex.Message)
+            End Try
+        End If
+        
+        bottomView = FindViewByName(sheet, "Bottom")
+        If FindViewByName(sheet, "Back") Is Nothing AndAlso bottomView IsNot Nothing Then
+            Try
+                Dim backY As Double = bottomView.Position.Y - bottomView.Height / 2 - dimSpace - baseHeight / 2
+                Dim backView As DrawingView = sheet.DrawingViews.AddProjectedView( _
+                    bottomView, app.TransientGeometry.CreatePoint2d(baseX, backY), _
+                    DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, Nothing)
+                Try : backView.Name = "Back" : Catch : End Try
+                Dim actualBackY As Double = bottomView.Position.Y - bottomView.Height / 2 - dimSpace - backView.Height / 2
+                backView.Position = app.TransientGeometry.CreatePoint2d(baseX, actualBackY)
+                UtilsLib.LogInfo("CAMDrawingLib: Added missing Back view")
+            Catch ex As Exception
+                UtilsLib.LogWarn("CAMDrawingLib: Failed to add Back view: " & ex.Message)
+            End Try
+        End If
+    End Sub
+    
+    ''' <summary>
+    ''' Reuses existing orthographic views when present; otherwise creates them via AddAllViews.
+    ''' Syncs Pinnalaotus (manufactured) DVR onto views referencing the part when applicable.
+    ''' </summary>
+    Public Function EnsureOrthographicCamViewsForPart(sheet As Sheet, _
+                                                       partDoc As PartDocument, _
+                                                       app As Inventor.Application, _
+                                                       drawDoc As DrawingDocument, _
+                                                       Optional dimOffsetCm As Double = DEFAULT_DIMENSION_OFFSET, _
+                                                       Optional viewGapCm As Double = DEFAULT_VIEW_GAP, _
+                                                       Optional forcePinnalaotusDvr As Boolean = False) As List(Of DrawingView)
+        Try
+            partDoc.Activate()
+        Catch
+        End Try
+        
+        If HasCompleteOrthographicLayoutForPart(sheet, partDoc) Then
+            SyncPinnalaotusDesignViewsOnSheet(sheet, partDoc, drawDoc, forcePinnalaotusDvr)
+            Return CollectOrthographicViewsForPart(sheet, partDoc)
+        End If
+        
+        Dim baseView As DrawingView = FindOrthographicBaseViewForPart(sheet, partDoc)
+        If baseView IsNot Nothing Then
+            AddMissingOrthographicProjections(sheet, baseView, partDoc, app, dimOffsetCm, viewGapCm)
+            SyncPinnalaotusDesignViewsOnSheet(sheet, partDoc, drawDoc, forcePinnalaotusDvr)
+            Return CollectOrthographicViewsForPart(sheet, partDoc)
+        End If
+        
+        If sheet.DrawingViews.Count > 0 Then
+            UtilsLib.LogWarn("CAMDrawingLib: No orthographic base found for this part on a non-empty sheet; adding full CAM view set.")
+        End If
+        
+        Dim created As List(Of DrawingView) = AddAllViews(sheet, partDoc, app, dimOffsetCm, viewGapCm, forcePinnalaotusDvr)
+        SyncPinnalaotusDesignViewsOnSheet(sheet, partDoc, drawDoc, forcePinnalaotusDvr)
+        Return created
     End Function
     
     ' Reposition existing views with new spacing based on updated geometry

@@ -5,7 +5,7 @@
 ' Töötab nii detaili kui koostu dokumentidega:
 ' - Detailis: töötleb aktiivset detaili
 ' - Koostus: töötleb valitud detailid
-' - Töötab nii tavaliste kui lehtmetalli detailidega
+' - Töötab nii tavaliste, lehtmetalli kui pinnalaotusega detailidega
 '
 ' Shows all parts in a single DataGridView dialog where user can:
 ' - See T/W/L measurements for each part
@@ -13,7 +13,15 @@
 ' - Flip width/length
 ' - Pick a face for custom axis orientation
 '
-' Sheet metal parts use flat pattern for dimensions (no axis selection).
+' Pinnalaotus (Unwrap) is detected from UnwrapFeatures, not from part SubType.
+' If Unwrap exists, Telg defaults to Pinnalaotus but you can switch to Normal (gabariit)
+' or Lehtmetall (flat pattern) when the part is sheet-metal subtype; choice is stored in BB_DimensionSource.
+' Pinnalaotus thickness axis defaults to the unwrap flat surface plane normal; W/L come from that basis on
+' the measurement body. If no planar unwrap face is found, falls back to smallest-extent heuristic on the body.
+' Use "Vali pind" if the automatic thickness direction is wrong.
+'
+' Sheet metal without Unwrap uses flat pattern for dimensions (Telg locked to Lehtmetall).
+' Pure Pinnalaotus uses unwrap+thicken for dimensions.
 ' Normal parts use bounding box with configurable axis orientation.
 '
 ' Registers "Uuenda" rule handler that auto-updates dimension properties
@@ -25,6 +33,7 @@ AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/DocumentUpdateLib.vb"
 AddVbFile "Lib/DimensionUpdateLib.vb"
 AddVbFile "Lib/BoundingBoxStockLib.vb"
+AddVbFile "Lib/UnwrapLib.vb"
 
 Imports System.Collections.Generic
 Imports System.Windows.Forms
@@ -112,13 +121,13 @@ Sub Main()
                                     customAxisDescs, selectedFlags, pickRowIndex)
 
         If dlgResult = DialogResult.Retry AndAlso pickRowIndex >= 0 AndAlso pickRowIndex < partDocs.Count Then
-            ' Skip face pick for sheet metal parts
-            If customAxisDescs(pickRowIndex) = "Lehtmetall" Then
+            ' Sheet metal flat pattern: no face pick
+            If IsLehtmetallMode(customAxisDescs(pickRowIndex)) Then
                 pickRowIndex = -1
                 Continue Do
             End If
             
-            ' User clicked "Vali pind" - do face pick
+            ' User clicked "Vali pind" or Kohandatud — do face pick
             Dim partDoc As PartDocument = partDocs(pickRowIndex)
             Logger.Info("Mõõdud: Picking face for '" & partNames(pickRowIndex) & "'")
 
@@ -128,7 +137,9 @@ Sub Main()
                 
                 If pickedVector <> "" Then
                     thicknessAxes(pickRowIndex) = pickedVector
-                    customAxisDescs(pickRowIndex) = planeDesc
+                    If customAxisDescs(pickRowIndex) <> "Pinnalaotus" Then
+                        customAxisDescs(pickRowIndex) = planeDesc
+                    End If
                     
                     ' Compute perpendicular vectors for width/length
                     Dim tx As Double = 0, ty As Double = 0, tz As Double = 0
@@ -137,9 +148,21 @@ Sub Main()
                     BoundingBoxStockLib.ParseVectorComponents(pickedVector, tx, ty, tz)
                     BoundingBoxStockLib.ComputePerpendicularVectors(tx, ty, tz, wx, wy, wz, lx, ly, lz)
                     
-                    ' Measure extents to determine which is width vs length
-                    Dim widthExtent As Double = BoundingBoxStockLib.GetOrientedExtent(partDoc, wx, wy, wz)
-                    Dim lengthExtent As Double = BoundingBoxStockLib.GetOrientedExtent(partDoc, lx, ly, lz)
+                    Dim widthExtent As Double
+                    Dim lengthExtent As Double
+                    If customAxisDescs(pickRowIndex) = "Pinnalaotus" Then
+                        Dim measBody As SurfaceBody = UnwrapLib.GetPinnalaotusMeasurementBody(partDoc)
+                        If measBody IsNot Nothing Then
+                            widthExtent = UnwrapLib.GetOrientedExtentForBody(measBody, wx, wy, wz)
+                            lengthExtent = UnwrapLib.GetOrientedExtentForBody(measBody, lx, ly, lz)
+                        Else
+                            widthExtent = BoundingBoxStockLib.GetOrientedExtent(partDoc, wx, wy, wz)
+                            lengthExtent = BoundingBoxStockLib.GetOrientedExtent(partDoc, lx, ly, lz)
+                        End If
+                    Else
+                        widthExtent = BoundingBoxStockLib.GetOrientedExtent(partDoc, wx, wy, wz)
+                        lengthExtent = BoundingBoxStockLib.GetOrientedExtent(partDoc, lx, ly, lz)
+                    End If
                     
                     If lengthExtent >= widthExtent Then
                         lengthAxes(pickRowIndex) = BoundingBoxStockLib.VectorToString(lx, ly, lz)
@@ -174,13 +197,94 @@ Sub Main()
     For i As Integer = 0 To partDocs.Count - 1
         If selectedFlags(i) Then
             Dim partDoc As PartDocument = partDocs(i)
-            DimensionUpdateLib.RegisterDimensionHandler(partDoc, iLogicVb.Automation, thicknessAxes(i), widthAxes(i), lengthAxes(i))
+            Dim dimSrc As String = UnwrapLib.DIMENSION_SOURCE_NORMAL
+            If customAxisDescs(i) = "Lehtmetall" Then
+                dimSrc = UnwrapLib.DIMENSION_SOURCE_LEHTMETALL
+            ElseIf customAxisDescs(i) = "Pinnalaotus" Then
+                dimSrc = UnwrapLib.DIMENSION_SOURCE_PINNALAOTUS
+            End If
+            If dimSrc = UnwrapLib.DIMENSION_SOURCE_PINNALAOTUS Then
+                UnwrapLib.StorePinnalaotusMeasurementBodyProperty(partDoc)
+            End If
+            DimensionUpdateLib.RegisterDimensionHandler(partDoc, iLogicVb.Automation, thicknessAxes(i), widthAxes(i), lengthAxes(i), dimSrc)
             processedCount += 1
-            Logger.Info("Mõõdud: Updated '" & partNames(i) & "' - T:" & thicknessAxes(i) & " W:" & widthAxes(i) & " L:" & lengthAxes(i))
+            Logger.Info("Mõõdud: Updated '" & partNames(i) & "' - T:" & thicknessAxes(i) & " W:" & widthAxes(i) & " L:" & lengthAxes(i) & " [" & dimSrc & "]")
         End If
     Next
 
     Logger.Info("Mõõdud: Completed - processed " & processedCount & " part(s)")
+End Sub
+
+' ============================================================================
+' Normal-part axis lists (gabariit X/Y/Z või Kohandatud; works when Unwrap exists if user chose Normal)
+' ============================================================================
+Sub AppendNormalPartAxisLists(ByVal partDoc As PartDocument, _
+                              ByVal thicknessAxes As List(Of String), _
+                              ByVal widthAxes As List(Of String), _
+                              ByVal lengthAxes As List(Of String), _
+                              ByVal customAxisDescs As List(Of String))
+    Dim thicknessAxis As String = BoundingBoxStockLib.GetCustomPropertyValue(partDoc, "BB_ThicknessAxis", "")
+    Dim widthAxis As String = BoundingBoxStockLib.GetCustomPropertyValue(partDoc, "BB_WidthAxis", "")
+    Dim lengthAxis As String = ""
+    Dim customAxisDesc As String = ""
+    
+    Dim xSize As Double = 0, ySize As Double = 0, zSize As Double = 0
+    BoundingBoxStockLib.GetBoundingBoxSizes(partDoc, xSize, ySize, zSize)
+    
+    If thicknessAxis = "" Then
+        If Not BoundingBoxStockLib.AutoDetectAxesFromGeometry(partDoc, thicknessAxis, widthAxis, lengthAxis) Then
+            BoundingBoxStockLib.AutoDetectAxes(xSize, ySize, zSize, thicknessAxis, widthAxis, lengthAxis)
+        End If
+        
+        If BoundingBoxStockLib.IsVectorFormat(thicknessAxis) Then
+            Dim tx As Double = 0, ty As Double = 0, tz As Double = 0
+            BoundingBoxStockLib.ParseVectorComponents(thicknessAxis, tx, ty, tz)
+            customAxisDesc = "Auto (" & BoundingBoxStockLib.FormatVectorDesc(tx, ty, tz) & ")"
+        End If
+    ElseIf BoundingBoxStockLib.IsVectorFormat(thicknessAxis) Then
+        Dim tx As Double = 0, ty As Double = 0, tz As Double = 0
+        If BoundingBoxStockLib.ParseVectorComponents(thicknessAxis, tx, ty, tz) Then
+            customAxisDesc = "Custom (" & BoundingBoxStockLib.FormatVectorDesc(tx, ty, tz) & ")"
+            
+            If widthAxis = "" OrElse Not BoundingBoxStockLib.IsVectorFormat(widthAxis) Then
+                Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
+                Dim lx As Double = 0, ly As Double = 0, lz As Double = 0
+                BoundingBoxStockLib.ComputePerpendicularVectors(tx, ty, tz, wx, wy, wz, lx, ly, lz)
+                
+                Dim widthExtent As Double = BoundingBoxStockLib.GetOrientedExtent(partDoc, wx, wy, wz)
+                Dim lengthExtent As Double = BoundingBoxStockLib.GetOrientedExtent(partDoc, lx, ly, lz)
+                
+                If lengthExtent >= widthExtent Then
+                    lengthAxis = BoundingBoxStockLib.VectorToString(lx, ly, lz)
+                    widthAxis = BoundingBoxStockLib.VectorToString(wx, wy, wz)
+                Else
+                    lengthAxis = BoundingBoxStockLib.VectorToString(wx, wy, wz)
+                    widthAxis = BoundingBoxStockLib.VectorToString(lx, ly, lz)
+                End If
+            Else
+                Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
+                BoundingBoxStockLib.ParseVectorComponents(widthAxis, wx, wy, wz)
+                Dim lx As Double = ty * wz - tz * wy
+                Dim ly As Double = tz * wx - tx * wz
+                Dim lz As Double = tx * wy - ty * wx
+                lengthAxis = BoundingBoxStockLib.VectorToString(lx, ly, lz)
+            End If
+        Else
+            thicknessAxis = "Z"
+            BoundingBoxStockLib.AssignWidthLength(thicknessAxis, xSize, ySize, zSize, widthAxis, lengthAxis)
+        End If
+    Else
+        If widthAxis = "" Then
+            BoundingBoxStockLib.AssignWidthLength(thicknessAxis, xSize, ySize, zSize, widthAxis, lengthAxis)
+        Else
+            lengthAxis = BoundingBoxStockLib.GetRemainingAxis(thicknessAxis, widthAxis)
+        End If
+    End If
+    
+    thicknessAxes.Add(thicknessAxis)
+    widthAxes.Add(widthAxis)
+    lengthAxes.Add(lengthAxis)
+    customAxisDescs.Add(customAxisDesc)
 End Sub
 
 ' ============================================================================
@@ -204,7 +308,89 @@ Sub CollectPartData(ByVal partDoc As PartDocument, _
     If desc <> "" Then displayName &= " - " & desc
     partNames.Add(displayName)
     
-    ' Check if sheet metal - uses flat pattern for dimensions (no axis selection needed)
+    If UnwrapLib.HasUnwrapFeature(partDoc) Then
+        Dim src As String = BoundingBoxStockLib.GetCustomPropertyValue(partDoc, UnwrapLib.PROP_DIMENSION_SOURCE, "")
+        If src = UnwrapLib.DIMENSION_SOURCE_LEHTMETALL AndAlso IsSheetMetalPart(partDoc) Then
+            thicknessAxes.Add("")
+            widthAxes.Add("")
+            lengthAxes.Add("")
+            customAxisDescs.Add("Lehtmetall")
+            selectedFlags.Add(True)
+            Exit Sub
+        End If
+        If src = UnwrapLib.DIMENSION_SOURCE_NORMAL Then
+            AppendNormalPartAxisLists(partDoc, thicknessAxes, widthAxes, lengthAxes, customAxisDescs)
+            selectedFlags.Add(True)
+            Exit Sub
+        End If
+        
+        ' Default: Pinnalaotus (saved source empty, Pinnalaotus, or unknown)
+        Dim tAx As String = ""
+        Dim wAx As String = ""
+        Dim lAx As String = ""
+        tAx = BoundingBoxStockLib.GetCustomPropertyValue(partDoc, "BB_ThicknessAxis", "")
+        wAx = BoundingBoxStockLib.GetCustomPropertyValue(partDoc, "BB_WidthAxis", "")
+        lAx = BoundingBoxStockLib.GetCustomPropertyValue(partDoc, "BB_LengthAxis", "")
+        If BoundingBoxStockLib.IsVectorFormat(tAx) AndAlso Not BoundingBoxStockLib.IsVectorFormat(wAx) Then
+            Dim tx As Double = 0, ty As Double = 0, tz As Double = 0
+            Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
+            Dim lx As Double = 0, ly As Double = 0, lz As Double = 0
+            BoundingBoxStockLib.ParseVectorComponents(tAx, tx, ty, tz)
+            BoundingBoxStockLib.ComputePerpendicularVectors(tx, ty, tz, wx, wy, wz, lx, ly, lz)
+            Dim measBody As SurfaceBody = UnwrapLib.GetPinnalaotusMeasurementBody(partDoc)
+            Dim wExt As Double = 0, lExt As Double = 0
+            If measBody IsNot Nothing Then
+                wExt = UnwrapLib.GetOrientedExtentForBody(measBody, wx, wy, wz)
+                lExt = UnwrapLib.GetOrientedExtentForBody(measBody, lx, ly, lz)
+            Else
+                wExt = BoundingBoxStockLib.GetOrientedExtent(partDoc, wx, wy, wz)
+                lExt = BoundingBoxStockLib.GetOrientedExtent(partDoc, lx, ly, lz)
+            End If
+            If lExt >= wExt Then
+                wAx = BoundingBoxStockLib.VectorToString(wx, wy, wz)
+                lAx = BoundingBoxStockLib.VectorToString(lx, ly, lz)
+            Else
+                wAx = BoundingBoxStockLib.VectorToString(lx, ly, lz)
+                lAx = BoundingBoxStockLib.VectorToString(wx, wy, wz)
+            End If
+        ElseIf Not (BoundingBoxStockLib.IsVectorFormat(tAx) AndAlso BoundingBoxStockLib.IsVectorFormat(wAx)) Then
+            ' Prefer unwrap flat surface plane normal as thickness; fallback = smallest-extent heuristic on measurement body
+            Dim measBodyAD As SurfaceBody = UnwrapLib.GetPinnalaotusMeasurementBody(partDoc)
+            Dim unwrapF As UnwrapFeature = UnwrapLib.GetUnwrapFeature(partDoc)
+            Dim nx As Double = 0, ny As Double = 0, nz As Double = 0
+            Dim gotUnwrapNormal As Boolean = (unwrapF IsNot Nothing AndAlso UnwrapLib.TryGetUnwrapFlatSurfaceNormal(unwrapF, nx, ny, nz))
+            If gotUnwrapNormal AndAlso measBodyAD IsNot Nothing Then
+                Dim tx As Double = nx, ty As Double = ny, tz As Double = nz
+                Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
+                Dim lx As Double = 0, ly As Double = 0, lz As Double = 0
+                BoundingBoxStockLib.ComputePerpendicularVectors(tx, ty, tz, wx, wy, wz, lx, ly, lz)
+                Dim wExt As Double = UnwrapLib.GetOrientedExtentForBody(measBodyAD, wx, wy, wz)
+                Dim lExt As Double = UnwrapLib.GetOrientedExtentForBody(measBodyAD, lx, ly, lz)
+                tAx = BoundingBoxStockLib.VectorToString(tx, ty, tz)
+                If lExt >= wExt Then
+                    wAx = BoundingBoxStockLib.VectorToString(wx, wy, wz)
+                    lAx = BoundingBoxStockLib.VectorToString(lx, ly, lz)
+                Else
+                    wAx = BoundingBoxStockLib.VectorToString(lx, ly, lz)
+                    lAx = BoundingBoxStockLib.VectorToString(wx, wy, wz)
+                End If
+            ElseIf measBodyAD IsNot Nothing Then
+                Dim tg As String = "", wg As String = "", lg As String = ""
+                If BoundingBoxStockLib.AutoDetectAxesFromSurfaceBody(measBodyAD, tg, wg, lg) Then
+                    tAx = BoundingBoxStockLib.PrincipalAxisToVectorString(tg)
+                    wAx = BoundingBoxStockLib.PrincipalAxisToVectorString(wg)
+                    lAx = BoundingBoxStockLib.PrincipalAxisToVectorString(lg)
+                End If
+            End If
+        End If
+        thicknessAxes.Add(tAx)
+        widthAxes.Add(wAx)
+        lengthAxes.Add(lAx)
+        customAxisDescs.Add("Pinnalaotus")
+        selectedFlags.Add(True)
+        Exit Sub
+    End If
+    
     If IsSheetMetalPart(partDoc) Then
         thicknessAxes.Add("")
         widthAxes.Add("")
@@ -214,78 +400,7 @@ Sub CollectPartData(ByVal partDoc As PartDocument, _
         Exit Sub
     End If
     
-    ' Normal part: axis configuration
-    ' Try to read existing axis configuration from iProperties
-    Dim thicknessAxis As String = BoundingBoxStockLib.GetCustomPropertyValue(partDoc, "BB_ThicknessAxis", "")
-    Dim widthAxis As String = BoundingBoxStockLib.GetCustomPropertyValue(partDoc, "BB_WidthAxis", "")
-    Dim lengthAxis As String = ""
-    Dim customAxisDesc As String = ""
-    
-    ' Get bounding box sizes for axis-aligned detection
-    Dim xSize As Double = 0, ySize As Double = 0, zSize As Double = 0
-    BoundingBoxStockLib.GetBoundingBoxSizes(partDoc, xSize, ySize, zSize)
-    
-    If thicknessAxis = "" Then
-        ' No existing config - auto-detect from geometry
-        If Not BoundingBoxStockLib.AutoDetectAxesFromGeometry(partDoc, thicknessAxis, widthAxis, lengthAxis) Then
-            ' Fall back to axis-aligned detection
-            BoundingBoxStockLib.AutoDetectAxes(xSize, ySize, zSize, thicknessAxis, widthAxis, lengthAxis)
-        End If
-        
-        ' Set description if auto-detected a vector
-        If BoundingBoxStockLib.IsVectorFormat(thicknessAxis) Then
-            Dim tx As Double = 0, ty As Double = 0, tz As Double = 0
-            BoundingBoxStockLib.ParseVectorComponents(thicknessAxis, tx, ty, tz)
-            customAxisDesc = "Auto (" & BoundingBoxStockLib.FormatVectorDesc(tx, ty, tz) & ")"
-        End If
-    ElseIf BoundingBoxStockLib.IsVectorFormat(thicknessAxis) Then
-        ' Vector format stored
-        Dim tx As Double = 0, ty As Double = 0, tz As Double = 0
-        If BoundingBoxStockLib.ParseVectorComponents(thicknessAxis, tx, ty, tz) Then
-            customAxisDesc = "Custom (" & BoundingBoxStockLib.FormatVectorDesc(tx, ty, tz) & ")"
-            
-            ' Compute width/length if not stored
-            If widthAxis = "" OrElse Not BoundingBoxStockLib.IsVectorFormat(widthAxis) Then
-                Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
-                Dim lx As Double = 0, ly As Double = 0, lz As Double = 0
-                BoundingBoxStockLib.ComputePerpendicularVectors(tx, ty, tz, wx, wy, wz, lx, ly, lz)
-                
-                Dim widthExtent As Double = BoundingBoxStockLib.GetOrientedExtent(partDoc, wx, wy, wz)
-                Dim lengthExtent As Double = BoundingBoxStockLib.GetOrientedExtent(partDoc, lx, ly, lz)
-                
-                If lengthExtent >= widthExtent Then
-                    lengthAxis = BoundingBoxStockLib.VectorToString(lx, ly, lz)
-                    widthAxis = BoundingBoxStockLib.VectorToString(wx, wy, wz)
-                Else
-                    lengthAxis = BoundingBoxStockLib.VectorToString(wx, wy, wz)
-                    widthAxis = BoundingBoxStockLib.VectorToString(lx, ly, lz)
-                End If
-            Else
-                ' Width stored - compute length as cross product
-                Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
-                BoundingBoxStockLib.ParseVectorComponents(widthAxis, wx, wy, wz)
-                Dim lx As Double = ty * wz - tz * wy
-                Dim ly As Double = tz * wx - tx * wz
-                Dim lz As Double = tx * wy - ty * wx
-                lengthAxis = BoundingBoxStockLib.VectorToString(lx, ly, lz)
-            End If
-        Else
-            thicknessAxis = "Z"
-            BoundingBoxStockLib.AssignWidthLength(thicknessAxis, xSize, ySize, zSize, widthAxis, lengthAxis)
-        End If
-    Else
-        ' Simple axis format (X/Y/Z)
-        If widthAxis = "" Then
-            BoundingBoxStockLib.AssignWidthLength(thicknessAxis, xSize, ySize, zSize, widthAxis, lengthAxis)
-        Else
-            lengthAxis = BoundingBoxStockLib.GetRemainingAxis(thicknessAxis, widthAxis)
-        End If
-    End If
-    
-    thicknessAxes.Add(thicknessAxis)
-    widthAxes.Add(widthAxis)
-    lengthAxes.Add(lengthAxis)
-    customAxisDescs.Add(customAxisDesc)
+    AppendNormalPartAxisLists(partDoc, thicknessAxes, widthAxes, lengthAxes, customAxisDescs)
     selectedFlags.Add(True)
 End Sub
 
@@ -358,6 +473,17 @@ Function IsSheetMetalPart(ByVal partDoc As PartDocument) As Boolean
     Catch
         Return False
     End Try
+End Function
+
+' Telg readonly only for pure sheet metal (no Unwrap): flat pattern is the only mode.
+Function IsTelgDropdownLocked(ByVal partDoc As PartDocument, ByVal customAxisDesc As String) As Boolean
+    If customAxisDesc <> "Lehtmetall" Then Return False
+    Return Not UnwrapLib.HasUnwrapFeature(partDoc)
+End Function
+
+' Only sheet metal flat-pattern mode blocks face pick and thickness-plane workflow
+Function IsLehtmetallMode(ByVal customAxisDesc As String) As Boolean
+    Return customAxisDesc = "Lehtmetall"
 End Function
 
 ' ============================================================================
@@ -461,6 +587,7 @@ Function ShowBatchDialog(ByVal app As Inventor.Application, _
     colAxis.Items.Add("Z")
     colAxis.Items.Add("Kohandatud")
     colAxis.Items.Add("Lehtmetall")
+    colAxis.Items.Add("Pinnalaotus")
     dgv.Columns.Add(colAxis)
     
     ' Column: Flip button
@@ -490,17 +617,20 @@ Function ShowBatchDialog(ByVal app As Inventor.Application, _
         dgv.Rows(rowIndex).Cells("colName").Value = partNames(i)
         
         ' Calculate display values
-        UpdateRowDisplayValues(dgv.Rows(rowIndex), partDocs(i), thicknessAxes(i), widthAxes(i), lengthAxes(i))
+        UpdateRowDisplayValues(dgv.Rows(rowIndex), partDocs(i), thicknessAxes(i), widthAxes(i), lengthAxes(i), customAxisDescs(i))
         
         ' Set axis combo value
         If customAxisDescs(i) = "Lehtmetall" Then
             dgv.Rows(rowIndex).Cells("colAxis").Value = "Lehtmetall"
-            ' Make axis cell read-only for sheet metal
-            dgv.Rows(rowIndex).Cells("colAxis").ReadOnly = True
+        ElseIf customAxisDescs(i) = "Pinnalaotus" Then
+            dgv.Rows(rowIndex).Cells("colAxis").Value = "Pinnalaotus"
         ElseIf BoundingBoxStockLib.IsVectorFormat(thicknessAxes(i)) Then
             dgv.Rows(rowIndex).Cells("colAxis").Value = "Kohandatud"
         Else
             dgv.Rows(rowIndex).Cells("colAxis").Value = thicknessAxes(i)
+        End If
+        If IsTelgDropdownLocked(partDocs(i), customAxisDescs(i)) Then
+            dgv.Rows(rowIndex).Cells("colAxis").ReadOnly = True
         End If
     Next
     
@@ -513,19 +643,19 @@ Function ShowBatchDialog(ByVal app As Inventor.Application, _
         
         Dim idx As Integer = CInt(dgv.Rows(e.RowIndex).Tag)
         
-        ' Skip actions for sheet metal parts
-        If customAxisDescs(idx) = "Lehtmetall" Then Exit Sub
-        
         If e.ColumnIndex = dgv.Columns("colFlip").Index Then
+            If IsLehtmetallMode(customAxisDescs(idx)) Then Exit Sub
+            If customAxisDescs(idx) = "Pinnalaotus" AndAlso Not BoundingBoxStockLib.IsVectorFormat(thicknessAxes(idx)) Then Exit Sub
             ' Flip width/length
             Dim tempAxis As String = widthAxes(idx)
             widthAxes(idx) = lengthAxes(idx)
             lengthAxes(idx) = tempAxis
             
             ' Update display
-            UpdateRowDisplayValues(dgv.Rows(e.RowIndex), partDocs(idx), thicknessAxes(idx), widthAxes(idx), lengthAxes(idx))
+            UpdateRowDisplayValues(dgv.Rows(e.RowIndex), partDocs(idx), thicknessAxes(idx), widthAxes(idx), lengthAxes(idx), customAxisDescs(idx))
             
         ElseIf e.ColumnIndex = dgv.Columns("colPick").Index Then
+            If IsLehtmetallMode(customAxisDescs(idx)) Then Exit Sub
             ' Pick face - sync state and close form
             SyncGridToLists(dgv, selectedFlags)
             frm.Tag = idx
@@ -541,8 +671,7 @@ Function ShowBatchDialog(ByVal app As Inventor.Application, _
         
         Dim idx As Integer = CInt(dgv.Rows(e.RowIndex).Tag)
         
-        ' Skip changes for sheet metal parts
-        If customAxisDescs(idx) = "Lehtmetall" Then Exit Sub
+        If IsTelgDropdownLocked(partDocs(idx), customAxisDescs(idx)) Then Exit Sub
         
         Dim newAxisValue As Object = dgv.Rows(e.RowIndex).Cells("colAxis").Value
         If newAxisValue Is Nothing Then Exit Sub
@@ -555,6 +684,28 @@ Function ShowBatchDialog(ByVal app As Inventor.Application, _
             frm.Tag = idx
             frm.DialogResult = DialogResult.Retry
             frm.Close()
+        ElseIf newAxis = "Lehtmetall" Then
+            If Not IsSheetMetalPart(partDocs(idx)) Then
+                MessageBox.Show("Lehtmetalli mõõdud on võimalikud ainult lehtmetalli alamtüüpi detailil.", "Mõõdud")
+                dgv.Rows(e.RowIndex).Cells("colAxis").Value = "Pinnalaotus"
+                thicknessAxes(idx) = ""
+                widthAxes(idx) = ""
+                lengthAxes(idx) = ""
+                customAxisDescs(idx) = "Pinnalaotus"
+                UpdateRowDisplayValues(dgv.Rows(e.RowIndex), partDocs(idx), thicknessAxes(idx), widthAxes(idx), lengthAxes(idx), customAxisDescs(idx))
+                Exit Sub
+            End If
+            thicknessAxes(idx) = ""
+            widthAxes(idx) = ""
+            lengthAxes(idx) = ""
+            customAxisDescs(idx) = "Lehtmetall"
+            UpdateRowDisplayValues(dgv.Rows(e.RowIndex), partDocs(idx), thicknessAxes(idx), widthAxes(idx), lengthAxes(idx), customAxisDescs(idx))
+        ElseIf newAxis = "Pinnalaotus" Then
+            thicknessAxes(idx) = ""
+            widthAxes(idx) = ""
+            lengthAxes(idx) = ""
+            customAxisDescs(idx) = "Pinnalaotus"
+            UpdateRowDisplayValues(dgv.Rows(e.RowIndex), partDocs(idx), thicknessAxes(idx), widthAxes(idx), lengthAxes(idx), customAxisDescs(idx))
         ElseIf newAxis = "X" OrElse newAxis = "Y" OrElse newAxis = "Z" Then
             ' Recalculate axes for standard axis
             thicknessAxes(idx) = newAxis
@@ -570,7 +721,7 @@ Function ShowBatchDialog(ByVal app As Inventor.Application, _
             lengthAxes(idx) = newLength
             
             ' Update display
-            UpdateRowDisplayValues(dgv.Rows(e.RowIndex), partDocs(idx), thicknessAxes(idx), widthAxes(idx), lengthAxes(idx))
+            UpdateRowDisplayValues(dgv.Rows(e.RowIndex), partDocs(idx), thicknessAxes(idx), widthAxes(idx), lengthAxes(idx), customAxisDescs(idx))
         End If
     End Sub
     
@@ -658,14 +809,26 @@ End Function
 ' Update row display values (T/W/L)
 ' ============================================================================
 Sub UpdateRowDisplayValues(ByVal row As DataGridViewRow, ByVal partDoc As PartDocument, _
-                           ByVal thicknessAxis As String, ByVal widthAxis As String, ByVal lengthAxis As String)
+                           ByVal thicknessAxis As String, ByVal widthAxis As String, ByVal lengthAxis As String, _
+                           Optional ByVal customAxisDesc As String = "")
     
     Dim thicknessValue As Double = 0
     Dim widthValue As Double = 0
     Dim lengthValue As Double = 0
     
-    ' Check if sheet metal (empty axes = sheet metal)
-    If String.IsNullOrEmpty(thicknessAxis) AndAlso IsSheetMetalPart(partDoc) Then
+    ' Pinnalaotus only when selected (Unwrap may exist but user chose Normal or Lehtmetall)
+    If customAxisDesc = "Pinnalaotus" Then
+        Dim pt As Double = 0, pw As Double = 0, pl As Double = 0
+        If UnwrapLib.GetPinnalaotusDimensions(partDoc, pt, pw, pl, thicknessAxis, widthAxis, lengthAxis) Then
+            thicknessValue = pt
+            widthValue = pw
+            lengthValue = pl
+        ElseIf UnwrapLib.TryGetUnwrapSurfacePreviewExtents(partDoc, pw, pl) Then
+            thicknessValue = 0
+            widthValue = pw
+            lengthValue = pl
+        End If
+    ElseIf String.IsNullOrEmpty(thicknessAxis) AndAlso IsSheetMetalPart(partDoc) Then
         ' Sheet metal: get dimensions from flat pattern
         Try
             Dim smCompDef As SheetMetalComponentDefinition = CType(partDoc.ComponentDefinition, SheetMetalComponentDefinition)
