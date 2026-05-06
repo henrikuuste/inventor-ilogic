@@ -354,6 +354,16 @@ Public Module ModuleReleaseLib
         Return System.IO.Path.Combine(parent, "Moodulid")
     End Function
     
+    ''' <summary>
+    ''' Check if a path contains OldVersions folder (case-insensitive).
+    ''' OldVersions is a special Vault folder that stores previous versions and should not be released.
+    ''' </summary>
+    Private Function IsOldVersionsPath(path As String) As Boolean
+        If String.IsNullOrEmpty(path) Then Return False
+        Dim lowerPath As String = path.ToLower()
+        Return lowerPath.Contains("\oldversions\") OrElse lowerPath.Contains("/oldversions/")
+    End Function
+    
     ' ============================================================================
     ' Phase 2: File Discovery and Classification
     ' ============================================================================
@@ -400,7 +410,8 @@ Public Module ModuleReleaseLib
                 End If
                 
                 ' Skip OldVersions folder (special Vault folder)
-                If refPath.Contains("\OldVersions\") Then
+                If IsOldVersionsPath(refPath) Then
+                    UtilsLib.LogInfo("DiscoverAssemblyTree: Skipping OldVersions file: " & System.IO.Path.GetFileName(refPath))
                     Continue For
                 End If
                 
@@ -498,7 +509,11 @@ Public Module ModuleReleaseLib
             
             Try
                 For Each idwPath In System.IO.Directory.GetFiles(folder, "*.idw", System.IO.SearchOption.AllDirectories)
-                    If idwPath.Contains("\OldVersions\") Then Continue For
+                    ' Skip OldVersions folder (special Vault folder)
+                    If IsOldVersionsPath(idwPath) Then
+                        UtilsLib.LogInfo("DiscoverDrawings: Skipping OldVersions file: " & System.IO.Path.GetFileName(idwPath))
+                        Continue For
+                    End If
                     
                     Try
                         Dim drawDoc As DrawingDocument = CType(app.Documents.Open(idwPath, False), DrawingDocument)
@@ -1672,6 +1687,12 @@ Public Module ModuleReleaseLib
                 If file.FileType <> FileType.Part Then Continue For
                 If file.IsExisting Then Continue For
                 
+                ' Safety check: Skip any OldVersions files that might have slipped through
+                If IsOldVersionsPath(file.SourcePath) OrElse IsOldVersionsPath(file.TargetLocalPath) Then
+                    UtilsLib.LogWarn("  Skipping OldVersions file: " & System.IO.Path.GetFileName(file.SourcePath))
+                    Continue For
+                End If
+                
                 ' Skip if already processed (e.g., shared parts used by multiple moodulid)
                 If processedParts.Contains(file.TargetLocalPath) Then Continue For
                 processedParts.Add(file.TargetLocalPath)
@@ -1687,6 +1708,11 @@ Public Module ModuleReleaseLib
                 
                 For Each file As PlannedFile In context.ReleasePlan.Files
                     If file.FileType = FileType.Assembly AndAlso file.ForVariants.Contains(variantCfg.ConfigName) Then
+                        ' Safety check for OldVersions
+                        If IsOldVersionsPath(file.SourcePath) OrElse IsOldVersionsPath(file.TargetLocalPath) Then
+                            UtilsLib.LogWarn("  Skipping OldVersions file: " & System.IO.Path.GetFileName(file.SourcePath))
+                            Continue For
+                        End If
                         CreateAssemblySnapshot(app, file.SourcePath, file.TargetLocalPath, refMap, variantCfg.Parameters, file.VaultNumber)
                     End If
                 Next
@@ -1695,6 +1721,11 @@ Public Module ModuleReleaseLib
             UtilsLib.LogInfo("ExecuteRelease: Creating drawings...")
             For Each file As PlannedFile In context.ReleasePlan.Files
                 If file.FileType = FileType.Drawing Then
+                    ' Safety check for OldVersions
+                    If IsOldVersionsPath(file.SourcePath) OrElse IsOldVersionsPath(file.TargetLocalPath) Then
+                        UtilsLib.LogWarn("  Skipping OldVersions file: " & System.IO.Path.GetFileName(file.SourcePath))
+                        Continue For
+                    End If
                     Dim variantName = file.ForVariants(0)
                     Dim refMap = BuildReferenceMapForVariant(context, variantName)
                     CreateDrawingCopy(app, file.SourcePath, file.TargetLocalPath, refMap, file.VaultNumber)

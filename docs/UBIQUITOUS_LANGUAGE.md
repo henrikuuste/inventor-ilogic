@@ -1,121 +1,188 @@
 <!-- Copyright (c) 2026 Henri Kuuste -->
 # Ubiquitous Language
 
-Domain terminology for the Inventor Moodulid (Module Release) system.
+Domain terminology for the Inventor furniture engineering and manufacturing system (mööbli konstruktsioon ja tootmine).
+
+## Product Hierarchy
+
+| Term | Estonian | Definition | Aliases to avoid |
+|------|----------|------------|------------------|
+| **Product Family** | Toote perekond | A collection of related furniture products, stored at `$/Tooted/<name>/` in Vault. All files reference this in their "Project" property. | Product line, collection |
+| **Module** | Moodul | A finished unit created during final assembly by combining elements on the assembly line. | Product, variant |
+| **Element** | Element | An entity that goes through manufacturing separately, made up of parts. Usually an assembly created in manufacturing, not final assembly. Example: an armrest is an element, the full sofa is a module. | Component, subassembly |
+
+## Element Lifecycle
+
+| Term | Estonian | Definition | Aliases to avoid |
+|------|----------|------------|------------------|
+| **Base Element** | Aluselement | A parametric design containing masters and derived parts, describing how an entity is manufactured (parts and operations). Stored in `Aluselemendid/<name>/`. | Source element, design element, ~~alusmoodul~~ (old term) |
+| **Released Element** | Väljastatud element | A production-ready element with frozen geometry, created from a base element by applying parameters or mirroring. Stored in `Elemendid/<name>/`. | Variant, ~~moodul~~ (old term) |
+| **Release** | Väljastamine | The process of creating a released element from a base element. | Vabastamine (incorrect) |
 
 ## Module Lifecycle
 
-| Term | Definition | Aliases to avoid |
-|------|------------|------------------|
-| **Alusmoodul** | A parametric base module containing masters and derived parts, stored in `Alusmoodulid/` | Base module, source module, design module |
-| **Moodul** | A released, production-ready module with frozen geometry, stored in `Moodulid/{MooduliNimi}/` | Release, output, product, variant |
-| **Väljastamine** | The process of creating a **Moodul** from an **Alusmoodul** | Release, vabastamine |
-| **Submodule** | A component group within a module (e.g., Karkass, Poroloon) | Component group, section, subsystem |
+| Term | Estonian | Definition | Aliases to avoid |
+|------|----------|------------|------------------|
+| **Base Module** | Alusmoodul | An assembly file (`.iam`) defining how elements are arranged to form a module. Contains placed base elements with instance names. Stored flat in `Alusmoodulid/`. | Module template, assembly definition |
+| **Released Module** | Väljastatud moodul | A production-ready module assembly referencing released elements. Stored flat in `Moodulid/`. | Variant module |
+| **Module Matrix** | Koosluste tabel | A generated output showing all released modules × all released elements with quantities. Based on released data only, no base references. | Assembly matrix, BOM matrix |
 
 ## Part Classification
 
-| Term | Definition | Aliases to avoid |
-|------|------------|------------------|
-| **Master** | A multibody or sketch-only part used as the source for derivations; may appear in assemblies for reference (excluded from BOM) | Skeleton, parent, source part, Eskiis |
-| **Derived Part** | A part created via `DeriveBodyAsNewPart` from a master body | Child part, generated part |
-| **Manual Part** | A standalone part not derived from any master | Independent part, static part |
-| **Standalone Copy** | A released part with all derivation links broken, preserving only geometry | Frozen part, disconnected part |
+| Term | Estonian | Definition | Aliases to avoid |
+|------|----------|------------|------------------|
+| **Part** | Detail | A manufactured piece within an element. | Component, piece |
+| **Assembly** | Koost | A group of parts assembled together. Elements usually contain assemblies. | - |
+| **Subassembly** | Alamkoost | A nested assembly within an element's assembly. | Sub-component |
+| **Master** | Master | A multibody or sketch-only part used as the source for derivations; excluded from BOM. | Skeleton, Eskiis (acceptable in folder names only) |
+| **Derived Part** | Tuletatud detail | A part created via `DeriveBodyAsNewPart` from a master body. | Child part, generated part |
+| **Standalone Copy** | Iseseisev koopia | A released part with all derivation links broken, preserving only geometry. | Frozen part, disconnected part |
+
+## Material Classification
+
+| Term | Estonian | Definition | Notes |
+|------|----------|------------|-------|
+| **Wood** | Puit | Wood-based materials: vineer, PLP, kask, etc. | Complexity determines if separate drawing needed |
+| **Cardboard** | Papp | Sheet materials, usually HDF. | Grouped with frame for BOM |
+| **Foam** | Poroloon | Cushioning material. | Complex shapes need drawings |
+| **Metal** | Metall | Metal parts and hardware. | May get separate BOM in future |
+| **Frame** | Karkass | The structural wood/cardboard assembly. | - |
+
+## BOM Types
+
+| Term | Estonian | Definition | Aliases to avoid |
+|------|----------|------------|------------------|
+| **Frame BOM** | Puiduspets | BOM for wood frame parts, sent to frame contractor. Includes wood and cardboard. | Wood spec |
+| **Foam BOM** | Poroloonispets | BOM for foam parts, sent to padding contractor. | Foam spec |
 
 ## Sharing Classification
 
-| Term | Definition | Aliases to avoid |
-|------|------------|------------------|
-| **Shared Part** | A part with identical geometry across ALL moodulid of an alusmoodul | Common part, universal part |
-| **Unique Part** | A part with different geometry for different moodulid | Variant-specific part, moodulispetsiifiline |
-| **Ühine** | The shared folder (`Moodulid/Ühine/`) containing parts used across moodulid or alusmoodulid | Common, shared folder |
-| **Cross-Module Sharing** | Reuse of a shared part by multiple different alusmoodulid of the same product | Inter-module sharing |
+| Term | Estonian | Definition | Aliases to avoid |
+|------|----------|------------|------------------|
+| **Shared Part** | Ühine detail | A part with identical geometry across multiple released elements. Stored in `Elemendid/Ühine/`. | Common part, universal part |
+| **Unique Part** | Unikaalne detail | A part with different geometry for different released elements. Stored in the element's folder. | Element-specific part |
+| **Shared Folder** | Ühine | The folder `Elemendid/Ühine/` containing parts shared across elements within a product family. | Common folder |
 
 ## Geometry Analysis
 
-| Term | Definition | Aliases to avoid |
-|------|------------|------------------|
-| **Geometry Fingerprint** | A deterministic hash of part geometry (volume, surface area, bounding box) used to compare shapes | Signature, hash, geometry ID |
-| **Full Fingerprint** | Source part number + geometry fingerprint; used for cross-module sharing to ensure same SOURCE part (stable across renames) | Combined fingerprint |
-| **Mooduli Matrix** | A mapping of Part × Moodul → Geometry Fingerprint used to classify parts as shared or unique | Variant matrix, analysis matrix, fingerprint table |
+| Term | Estonian | Definition | Aliases to avoid |
+|------|----------|------------|------------------|
+| **Geometry Fingerprint** | Geomeetria sõrmejälg | A deterministic hash of part geometry (volume, surface area, bounding box) used to compare shapes. | Signature, hash |
+| **Element Matrix** | Elemendi maatriks | A mapping of Part × Released Element → Fingerprint used to classify parts as shared or unique. | Variant matrix, fingerprint table |
 
 ## File Operations
 
-| Term | Definition | Aliases to avoid |
-|------|------------|------------------|
-| **Heritage** | The shared InternalName (GUID) between a source file and its copy, required for `ReplaceReference` | Ancestry, lineage |
-| **Assembly Snapshot** | A frozen copy of an assembly with references replaced to point to released parts | Frozen assembly, variant assembly |
-| **Reference Map** | A dictionary mapping source file paths to their released counterparts | Copy map, path map |
+| Term | Estonian | Definition | Aliases to avoid |
+|------|----------|------------|------------------|
+| **Heritage** | Pärand | The shared InternalName (GUID) between a source file and its copy, required for `ReplaceReference`. | Ancestry, lineage |
+| **Reference Map** | Viidete kaart | A dictionary mapping source file paths to their released counterparts. | Copy map, path map |
+| **Manifest** | Manifest | A JSON file (`_manifest.json`) tracking released files, fingerprints, and cross-element usage. | Release log |
+
+## Mirroring
+
+| Term | Estonian | Definition | Aliases to avoid |
+|------|----------|------------|------------------|
+| **Mirror Plane** | Peegli tasand | Origin plane or work plane used to create a mirrored released element from a base element. Empty = no mirroring. | - |
+| **Mirrored Part** | Peegeldatud detail | A part that cannot be rotated to match its mirror image; requires separate manufacturing and part number. | - |
+| **Symmetric Part** | Sümmeetriline detail | A part unchanged by mirroring; can be shared between left/right elements. | - |
 
 ## Vault Integration
 
-| Term | Definition | Aliases to avoid |
-|------|------------|------------------|
-| **Numbering Scheme** | A Vault configuration that generates sequential file numbers | Number generator, numbering rule |
-| **Manifest** | A JSON file (`_manifest.json`) tracking released files, fingerprints, and cross-module usage | Release log, tracking file |
-| **Disconnect-Save-Add Workflow** | The process of logging out of Vault, saving locally, then uploading via API to control file locations | Offline save, bypass workflow |
+| Term | Estonian | Definition | Aliases to avoid |
+|------|----------|------------|------------------|
+| **Numbering Scheme** | Numeratsiooniskeem | A Vault configuration that generates sequential file numbers. | Number generator |
+| **Disconnect-Save-Add Workflow** | Lahti-Salvesta-Lisa töövoog | The process of logging out of Vault, saving locally, then uploading via API to control file locations. | Offline save |
+
+## Excel Input Files
+
+| File | Location | Purpose |
+|------|----------|---------|
+| **elemendid.xlsx** | `Aluselemendid/<element>/` | Defines released element permutations: name, parameters, mirror plane |
+| **moodulid.xlsx** | `Alusmoodulid/` | Defines released module permutations: base module, released name, instance→element mappings |
+
+## Vault Folder Structure
+
+```
+$/Tooted/<Product Family>/
+  ├── Aluselemendid/                    (base elements with parametric masters)
+  │   ├── Käetugi/                      (armrest base element)
+  │   │   ├── elemendid.xlsx            (release definitions)
+  │   │   ├── *.ipt, *.iam              (masters, parts, assemblies)
+  │   │   └── *.idw                     (drawings)
+  │   ├── Selg/                         (backrest)
+  │   └── Iste/                         (seat)
+  │
+  ├── Elemendid/                        (released elements)
+  │   ├── Ühine/                        (shared parts across elements)
+  │   ├── Käetugi_V/                    (left armrest - released)
+  │   │   ├── *.ipt, *.iam              (frozen parts, assemblies)
+  │   │   ├── *.idw                     (drawings)
+  │   │   ├── puiduspets.xlsx           (frame BOM)
+  │   │   └── poroloonispets.xlsx       (foam BOM)
+  │   ├── Käetugi_P/                    (right armrest - mirrored)
+  │   └── Iste_90/, Iste_110/           (seat variants by parameter)
+  │
+  ├── Alusmoodulid/                     (flat - assembly files only)
+  │   ├── moodulid.xlsx                 (module definitions)
+  │   ├── Diivan_2K.iam                 (2-seat sofa base module)
+  │   └── Diivan_3K.iam                 (3-seat sofa base module)
+  │
+  └── Moodulid/                         (flat - released module assemblies)
+      ├── Diivan_2K_V.iam               (2-seat with left armrest)
+      └── Diivan_2K_P.iam               (2-seat with right armrest)
+```
 
 ## Relationships
 
-- A **Moodul** is created by **Väljastamine** of an **Alusmoodul**
-- An **Alusmoodul** contains one or more **Masters**
-- A **Master** generates multiple **Derived Parts**
-- Each row in `moodulid.xlsx` defines parameter values for one **Moodul**
-- A **Shared Part** has one **Fingerprint** across all **Moodulid**
-- A **Unique Part** has different **Fingerprints** for different **Moodulid**
-- **Cross-Module Sharing** is detected by matching **Fingerprints** in the **Manifest**
-- A **Standalone Copy** is created from a **Derived Part** by breaking **Heritage** links
-- An **Assembly Snapshot** uses a **Reference Map** to point to released parts
+- A **Product Family** contains **Base Elements**, **Released Elements**, **Base Modules**, and **Released Modules**
+- A **Base Element** is released into one or more **Released Elements** via **Väljastamine**
+- A **Released Element** is created by applying parameters and/or mirroring to a **Base Element**
+- A **Base Module** defines how **Base Elements** are arranged (with instance names)
+- A **Released Module** is created by mapping instance names to specific **Released Elements**
+- An **Element** contains **Parts**, **Assemblies**, and **Subassemblies**
+- A **Part** with identical **Fingerprint** across elements is a **Shared Part** (goes to **Ühine**)
+- A **Mirrored Part** that cannot be rotated requires a separate part number
+- Each **Released Element** has a **Puiduspets** (frame BOM) and **Poroloonispets** (foam BOM)
+- The **Koosluste tabel** shows all **Released Modules** × **Released Elements** with quantities
 
-## Example dialogue
+## Example Dialogue
 
-> **Dev:** "When we do **Väljastamine** of an **Alusmoodul**, do we copy the **Masters**?"
+> **Dev:** "When we do **Väljastamine** of a **Aluselement**, what gets copied?"
 
-> **Domain expert:** "No — **Masters** stay in `Alusmoodulid/`. We only create **Standalone Copies** of **Derived Parts** and **Manual Parts**. The **Masters** are never released."
+> **Domain expert:** "We create **Standalone Copies** of all **Derived Parts** and assemblies. The **Masters** stay in the **Aluselement** folder - they're never released. Each copy goes either to the **Released Element** folder or to **Ühine** if it's shared."
 
-> **Dev:** "How do we know if a part should go to **Ühine** or a **Moodul** folder?"
+> **Dev:** "How do we know if a part goes to **Ühine**?"
 
-> **Domain expert:** "We compute the **Fingerprint** for each part across all **Moodulid**. If the **Fingerprint** is identical for ALL **Moodulid**, it's a **Shared Part** and goes to **Ühine**. Otherwise it's a **Unique Part** and each distinct geometry gets its own file in the **Moodul** folder."
+> **Domain expert:** "We compute the **Fingerprint** for each part across all **Released Elements** of that **Base Element**. If the **Fingerprint** is identical for ALL releases, it's a **Shared Part** and goes to **Ühine**."
 
-> **Dev:** "What about parts shared between different alusmoodulid, like brackets used in both Selg and Iste?"
+> **Dev:** "What about the mirrored armrest? Left and right are different **Elements**?"
 
-> **Domain expert:** "That's **Cross-Module Sharing**. During **Väljastamine** of the second alusmoodul, we check the **Manifest** for matching **Fingerprints**. If we find a match in **Ühine**, we reuse that file instead of creating a duplicate."
+> **Domain expert:** "Yes. **Käetugi_V** and **Käetugi_P** are separate **Released Elements** from the same **Base Element**. Parts that can't be rotated to match get new part numbers. **Symmetric Parts** are shared in **Ühine**."
 
-> **Dev:** "So the **Manifest** is key for avoiding duplicate Vault numbers?"
+> **Dev:** "And for **Modules** - how does **moodulid.xlsx** work?"
 
-> **Domain expert:** "Exactly. The **Manifest** tracks every **Shared Part** with its **Fingerprint**. It enables both **Cross-Module Sharing** detection and re-release optimization."
+> **Domain expert:** "The **Base Module** `.iam` defines which **Base Elements** go where, with instance names like 'Käetugi:1'. The Excel maps each instance to a specific **Released Element**. So one row might say: Base Module 'Diivan_2K', Released Module 'Diivan_2K_V', and map 'Käetugi:1' → 'Käetugi_V'."
 
-## Flagged ambiguities
+## Flagged Ambiguities
 
-- **"Module"** was used to mean both the parametric design (`Alusmoodul`) and the released output (`Moodul`). These are distinct: an **Alusmoodul** is editable with live parameters, while a **Moodul** is frozen for production.
+- **"Alusmoodul"** previously meant what we now call **Aluselement** (the parametric design). Going forward, **Alusmoodul** means the assembly file that defines module composition. All existing code using "Alusmoodul" for the parametric design should be refactored to use **Aluselement**.
 
-- **"Variant"** should NOT be used in Estonian. In English code/docs, "variant" may appear, but in Estonian UI and user-facing text, always use **moodul/moodulid**.
+- **"Moodul"** previously meant what we now call **Released Element** (a single manufactured unit). Going forward, **Moodul** means the final assembly unit created by combining elements. Existing code needs refactoring.
 
-- **"vabastamine"** is incorrect for "release" in this context. Use **väljastamine** instead.
+- **"Variant"** should NOT be used. Use **Released Element** or **Released Module** instead. The variation comes from parameters and mirroring, not "variants."
 
-- **"Shared"** can mean shared across moodulid (same alusmoodul) OR shared across alusmoodulid (different source modules). Both go to **Ühine**, but the detection mechanism differs: moodul sharing uses the **Mooduli Matrix**, while cross-module sharing uses the **Manifest**.
+- **"Kaetoes"** is incorrect Estonian. Use **Käetugi** for armrest.
 
-- **"Copy"** is overloaded: `File.Copy` preserves **Heritage** (required for `ReplaceReference`), while a **Standalone Copy** explicitly breaks derivation links. Use "copy with heritage" vs "standalone copy" to distinguish.
+## Codebase Migration Required
 
-- **"Eskiis"** (Sketch) is sometimes used as a synonym for **Master** in folder naming. Prefer **Master** in code and documentation; Eskiis is acceptable in folder names for user familiarity.
+The following terminology changes need to be applied throughout the codebase:
 
-## Codebase inconsistencies (2026-04-27)
-
-### HIGH: "Signature" vs "Fingerprint"
-`Lib/MakeComponentsLib.vb` uses `Signature` and `ComputeBodySignature()` throughout, but the canonical term is **Fingerprint**. Newer test code (`Test1_Fingerprint.vb` etc.) correctly uses `ComputePartFingerprint()`. **Action**: Rename `Signature` → `Fingerprint` and `ComputeBodySignature()` → `ComputeBodyFingerprint()` in `MakeComponentsLib.vb`.
-
-### MEDIUM: "skeleton" instead of "Master"
-Several files use "skeleton" in comments to refer to **Master** parts:
-- `Katsetused/UpdateSupportLengths.vb:7,18` - "skeleton or assembly geometry changes"
-- `Katsetused/PlaceSupport.vb:16` - "assembly/skeleton"
-
-### MEDIUM: "source part" instead of "Master"
-- `Katsetused/RotateOriginAxes.vb:454,457` - "Source part may have no solid bodies"
-
-### MEDIUM: "variant-specific" instead of "Unique Part"
-`docs/plans/2026-04-26-module-release-cycle.md` extensively uses "variant-specific part" (lines 53, 57, 819, 1115-1116, 1297). The canonical term is **Unique Part**. Note: In Estonian, use "moodulispetsiifiline" not "variandispetsiifiline".
-
-### LOW: "release log" instead of "Manifest"
-- `docs/research/2026-04-26-moodulid-api-research.md:473` - "persist release log"
-
-### LOW: ReleaseConfig class naming
-`Lib/ExcelReaderLib.vb` defines `ReleaseConfig` class, mixing "Release" (alias for Moodul) with "Config" (alias for Variant). Consider renaming to `MoodulDefinition` or `MoodulSpec`.
+| Old Term | New Term | Notes |
+|----------|----------|-------|
+| Alusmoodul (parametric design) | Aluselement | Major change - affects folder names, class names, variables |
+| Moodul (released unit) | Väljastatud element | When referring to released manufactured units |
+| Alusmoodulid/ folder | Aluselemendid/ | Vault and local folder structure |
+| Moodulid/ folder (releases) | Elemendid/ | For released elements |
+| moodulid.xlsx (element definitions) | elemendid.xlsx | Per-element release definitions |
+| Variant | Released Element/Module | Avoid "variant" terminology |
+| Signature | Fingerprint | Already partially migrated |
