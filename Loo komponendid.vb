@@ -30,6 +30,8 @@ AddVbFile "Lib/CustomPropertiesLib.vb"
 AddVbFile "Lib/VaultNumberingLib.vb"
 AddVbFile "Lib/FileSearchLib.vb"
 AddVbFile "Lib/MakeComponentsLib.vb"
+AddVbFile "Lib/BaseModuleLayoutLib.vb"
+AddVbFile "Lib/MaterialRoutingLib.vb"
 AddVbFile "Lib/SheetMetalLib.vb"
 AddVbFile "Lib/BoundingBoxStockLib.vb"
 AddVbFile "Lib/OccurrenceNamingLib.vb"
@@ -243,18 +245,24 @@ Sub Main()
         End If
     End If
     
-    ' Handle subfolder - LoadGeneralSettings already converts relative paths to absolute
-    Dim selectedSubfolder As String
-    If String.IsNullOrEmpty(generalSettings.Subfolder) Then
-        ' Default to Detailid subfolder under project root
-        selectedSubfolder = System.IO.Path.Combine(projectRoot, "Detailid")
-    Else
-        ' Use the loaded subfolder (already converted to absolute path)
-        selectedSubfolder = generalSettings.Subfolder
-    End If
-    
     Dim projectName As String = If(Not String.IsNullOrEmpty(generalSettings.ProjectName), _
                                    generalSettings.ProjectName, defaultProject)
+
+    ' Module root is now the primary output anchor (assembly + part class subfolders).
+    Dim selectedSubfolder As String = ""
+    If Not String.IsNullOrEmpty(generalSettings.BaseModuleRelativePath) Then
+        selectedSubfolder = MakeComponentsLib.ToAbsoluteProjectPath(generalSettings.BaseModuleRelativePath, projectRoot)
+    End If
+    If String.IsNullOrEmpty(selectedSubfolder) Then
+        Dim detectedModuleRoot As String = BaseModuleLayoutLib.DetectModuleRootFromMasterPath( _
+            masterDoc.FullDocumentName, projectRoot, projectName)
+        If Not String.IsNullOrEmpty(detectedModuleRoot) Then
+            selectedSubfolder = detectedModuleRoot
+        End If
+    End If
+    If String.IsNullOrEmpty(selectedSubfolder) Then
+        selectedSubfolder = System.IO.Path.Combine(projectRoot, BaseModuleLayoutLib.SEG_BASE_MODULES, defaultProject)
+    End If
     
     ' If assembly was previously created and still exists, default to UPDATE
     Dim assemblyAction As String = generalSettings.AssemblyAction
@@ -270,9 +278,9 @@ Sub Main()
     
     Do
         dialogResult = ShowMainDialog(app, masterDoc, bodies, materials, vaultConnected, templates, defaultTemplate, _
-                                      asmTemplates, defaultAsmTemplate, masterPath, workspaceRoot, selectedTemplate, _
-                                      selectedAssemblyTemplate, selectedSubfolder, projectName, assemblyAction, _
-                                      assemblyPath, pickBodyIndex)
+                                      asmTemplates, defaultAsmTemplate, masterPath, workspaceRoot, projectRoot, _
+                                      vaultConn, selectedTemplate, selectedAssemblyTemplate, selectedSubfolder, _
+                                      projectName, assemblyAction, assemblyPath, pickBodyIndex)
         
         If dialogResult = DialogResult.Retry AndAlso pickBodyIndex >= 0 AndAlso pickBodyIndex < bodies.Count Then
             ' User clicked "Vali pind" - do face pick
@@ -325,6 +333,7 @@ Sub Main()
                 .ProjectName = projectName,
                 .Template = selectedTemplate,
                 .AssemblyTemplate = selectedAssemblyTemplate,
+                .BaseModuleRelativePath = MakeComponentsLib.ToRelativeProjectPath(selectedSubfolder, projectRoot),
                 .Subfolder = selectedSubfolder,
                 .AssemblyAction = assemblyAction,
                 .AssemblyPath = assemblyPath
@@ -353,20 +362,18 @@ Sub Main()
         fileNumbers.Add(safeName)
     Next
     
-    ' Prepare output folder - selectedSubfolder is now a full path
-    ' User creates folder on disk, we ensure it exists in Vault
-    Dim outputFolder As String = selectedSubfolder
-    
-    If Not System.IO.Directory.Exists(outputFolder) Then
-        UtilsLib.LogError("Loo komponendid: Output folder does not exist: " & outputFolder)
-        MessageBox.Show("Väljundkausta ei leitud: " & vbCrLf & outputFolder & vbCrLf & vbCrLf & _
-                        "Loo kaust enne jätkamist.", "Loo komponendid")
+    ' Module root is the primary output anchor for assembly and part class folders.
+    Dim moduleRoot As String = selectedSubfolder
+    If String.IsNullOrEmpty(moduleRoot) Then
+        UtilsLib.LogError("Loo komponendid: Module root is empty")
+        MessageBox.Show("Mooduli kaust puudub.", "Loo komponendid")
         Exit Sub
     End If
-    
-    ' Ensure folder exists in Vault (if connected)
-    MakeComponentsLib.EnsureFolderInVault(outputFolder, vaultConn, workspaceRoot)
-    UtilsLib.LogInfo("Loo komponendid: Output folder: " & outputFolder)
+    If Not System.IO.Directory.Exists(moduleRoot) Then
+        System.IO.Directory.CreateDirectory(moduleRoot)
+    End If
+    MakeComponentsLib.EnsureFolderInVault(moduleRoot, vaultConn, workspaceRoot)
+    UtilsLib.LogInfo("Loo komponendid: Module root: " & moduleRoot)
     
     ' Find template path
     Dim templatePath As String = MakeComponentsLib.FindTemplate(app, selectedTemplate)
@@ -418,7 +425,16 @@ Sub Main()
             ' CREATE new part
             Dim fileNumber As String = fileNumbers(i)
             Dim fileName As String = fileNumber & ".ipt"
-            filePath = System.IO.Path.Combine(outputFolder, fileName)
+            Dim bodyOutputFolder As String = ResolveBodyOutputFolder(bi, moduleRoot)
+            If String.IsNullOrEmpty(bodyOutputFolder) Then
+                UtilsLib.LogError("Loo komponendid: Could not resolve output folder for '" & bi.Name & "'")
+                Continue For
+            End If
+            If Not System.IO.Directory.Exists(bodyOutputFolder) Then
+                System.IO.Directory.CreateDirectory(bodyOutputFolder)
+            End If
+            MakeComponentsLib.EnsureFolderInVault(bodyOutputFolder, vaultConn, workspaceRoot)
+            filePath = System.IO.Path.Combine(bodyOutputFolder, fileName)
             
             UtilsLib.LogInfo("Loo komponendid: Creating '" & bi.Name & "' as " & fileName)
         End If
@@ -528,7 +544,7 @@ Sub Main()
             End Try
         ElseIf assemblyAction = "CREATE" Then
             Dim asmFileName As String = defaultProject & "_asm.iam"
-            Dim asmFilePath As String = System.IO.Path.Combine(outputFolder, asmFileName)
+            Dim asmFilePath As String = System.IO.Path.Combine(moduleRoot, asmFileName)
             Try
                 asmDoc.SaveAs(asmFilePath, False)
                 actualAssemblyPath = asmDoc.FullDocumentName
@@ -547,6 +563,7 @@ Sub Main()
     settingsToSave.ProjectName = projectName
     settingsToSave.Template = selectedTemplate
     settingsToSave.AssemblyTemplate = selectedAssemblyTemplate
+    settingsToSave.BaseModuleRelativePath = MakeComponentsLib.ToRelativeProjectPath(selectedSubfolder, projectRoot)
     settingsToSave.Subfolder = selectedSubfolder
     settingsToSave.AssemblyAction = assemblyAction
     settingsToSave.AssemblyPath = If(Not String.IsNullOrEmpty(actualAssemblyPath), actualAssemblyPath, assemblyPath)
@@ -650,6 +667,8 @@ Function ShowMainDialog(app As Inventor.Application, _
                         defaultAsmTemplateName As String, _
                         masterPath As String, _
                         workspaceRoot As String, _
+                        projectRoot As String, _
+                        vaultConn As Object, _
                         ByRef selectedTemplate As String, _
                         ByRef selectedAssemblyTemplate As String, _
                         ByRef selectedSubfolder As String, _
@@ -716,12 +735,12 @@ Function ShowMainDialog(app As Inventor.Application, _
     cboTemplate.SelectedIndex = templateSelIdx
     frm.Controls.Add(cboTemplate)
     
-    ' Subfolder (output folder)
+    ' Module root folder (assembly + part class folders are derived from this)
     Dim lblSubfolder As New System.Windows.Forms.Label()
-    lblSubfolder.Text = "Väljundkaust:"
+    lblSubfolder.Text = "Mooduli kaust:"
     lblSubfolder.Left = 310
     lblSubfolder.Top = currentY + 3
-    lblSubfolder.Width = 80
+    lblSubfolder.Width = 85
     frm.Controls.Add(lblSubfolder)
     
     Dim txtSubfolder As New System.Windows.Forms.TextBox()
@@ -729,22 +748,31 @@ Function ShowMainDialog(app As Inventor.Application, _
     txtSubfolder.Text = selectedSubfolder
     txtSubfolder.Left = 395
     txtSubfolder.Top = currentY
-    txtSubfolder.Width = 470
+    txtSubfolder.Width = 400
     txtSubfolder.ReadOnly = True
     frm.Controls.Add(txtSubfolder)
     
     Dim btnBrowseFolder As New System.Windows.Forms.Button()
     btnBrowseFolder.Name = "btnBrowseFolder"
     btnBrowseFolder.Text = "..."
-    btnBrowseFolder.Left = 870
+    btnBrowseFolder.Left = 800
     btnBrowseFolder.Top = currentY
     btnBrowseFolder.Width = 30
     btnBrowseFolder.Height = 23
     frm.Controls.Add(btnBrowseFolder)
     
+    Dim btnCreateModule As New System.Windows.Forms.Button()
+    btnCreateModule.Name = "btnCreateModule"
+    btnCreateModule.Text = "Loo struktuur"
+    btnCreateModule.Left = 835
+    btnCreateModule.Top = currentY
+    btnCreateModule.Width = 85
+    btnCreateModule.Height = 23
+    frm.Controls.Add(btnCreateModule)
+    
     AddHandler btnBrowseFolder.Click, Sub(s, e)
         Dim fbd As New FolderBrowserDialog()
-        fbd.Description = "Vali väljundkaust komponentidele"
+        fbd.Description = "Vali mooduli kaust (Alusmoodulid\\<nimi>)"
         fbd.ShowNewFolderButton = True
         If Not String.IsNullOrEmpty(txtSubfolder.Text) AndAlso System.IO.Directory.Exists(txtSubfolder.Text) Then
             fbd.SelectedPath = txtSubfolder.Text
@@ -753,6 +781,26 @@ Function ShowMainDialog(app As Inventor.Application, _
         End If
         If fbd.ShowDialog() = DialogResult.OK Then
             txtSubfolder.Text = fbd.SelectedPath
+        End If
+    End Sub
+
+    AddHandler btnCreateModule.Click, Sub(s, e)
+        Dim moduleRootCandidate As String = txtSubfolder.Text.Trim()
+        Dim moduleName As String = ""
+        Try
+            moduleName = BaseModuleLayoutLib.GetModuleName(moduleRootCandidate)
+        Catch
+            moduleName = ""
+        End Try
+        
+        If String.IsNullOrEmpty(projectRoot) OrElse String.IsNullOrEmpty(moduleName) Then
+            MessageBox.Show("Määra esmalt mooduli kaust kujul Alusmoodulid\\<nimi>.", "Loo komponendid")
+            Exit Sub
+        End If
+        
+        Dim createdRoot As String = BaseModuleLayoutLib.EnsureBaseModuleLayout(projectRoot, moduleName, vaultConn, workspaceRoot)
+        If Not String.IsNullOrEmpty(createdRoot) Then
+            txtSubfolder.Text = createdRoot
         End If
     End Sub
     
@@ -798,9 +846,10 @@ Function ShowMainDialog(app As Inventor.Application, _
     txtAsmPath.Text = assemblyPath
     txtAsmPath.Left = 330
     txtAsmPath.Top = currentY
-    txtAsmPath.Width = 265
+    txtAsmPath.Width = 590
     txtAsmPath.ReadOnly = True
     txtAsmPath.Enabled = (assemblyAction = "CREATE" OrElse assemblyAction = "UPDATE")
+    txtAsmPath.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
     frm.Controls.Add(txtAsmPath)
     
     AddHandler btnBrowseAsm.Click, Sub(s, e)
@@ -963,12 +1012,38 @@ Function ShowMainDialog(app As Inventor.Application, _
     Dim colMat As New DataGridViewComboBoxColumn()
     colMat.Name = "colMat"
     colMat.HeaderText = "Materjal"
-    colMat.Width = 180
+    colMat.Width = 150
     colMat.Items.Add("")
     For Each mat As String In materials
         colMat.Items.Add(mat)
     Next
     dgv.Columns.Add(colMat)
+
+    ' Column: Output route (Auto / Karkass / Poroloon / Custom)
+    Dim colOut As New DataGridViewComboBoxColumn()
+    colOut.Name = "colOut"
+    colOut.HeaderText = "Väljund"
+    colOut.Width = 95
+    colOut.Items.Add("Auto")
+    colOut.Items.Add("Karkass")
+    colOut.Items.Add("Poroloon")
+    colOut.Items.Add("Kohandatud")
+    dgv.Columns.Add(colOut)
+
+    ' Column: Auto route target (read-only info for Auto mode)
+    Dim colAuto As New DataGridViewTextBoxColumn()
+    colAuto.Name = "colAuto"
+    colAuto.HeaderText = "Auto kaust"
+    colAuto.Width = 220
+    colAuto.ReadOnly = True
+    dgv.Columns.Add(colAuto)
+
+    ' Column: Custom folder selector
+    Dim colOutFolder As New DataGridViewButtonColumn()
+    colOutFolder.Name = "colOutFolder"
+    colOutFolder.HeaderText = "Kaust"
+    colOutFolder.Width = 85
+    dgv.Columns.Add(colOutFolder)
     
     ' Column: Pick face button
     Dim colPick As New DataGridViewButtonColumn()
@@ -1002,6 +1077,10 @@ Function ShowMainDialog(app As Inventor.Application, _
         dgv.Rows(rowIndex).Cells("colL").Value = FormatNumber(bi.LengthValue * 10, 2)
         dgv.Rows(rowIndex).Cells("colSM").Value = bi.ConvertToSheetMetal
         dgv.Rows(rowIndex).Cells("colMat").Value = GetValidatedMaterial(bi.MaterialName, materials)
+        dgv.Rows(rowIndex).Cells("colOut").Value = RouteToDisplayName(bi.OutputRoute)
+        dgv.Rows(rowIndex).Cells("colAuto").Value = GetAutoRouteFolderByMaterial(bi.MaterialName, txtSubfolder.Text)
+        dgv.Rows(rowIndex).Cells("colOutFolder").Value = If(Not String.IsNullOrEmpty(bi.CustomOutputFolder), _
+                                                             System.IO.Path.GetFileName(bi.CustomOutputFolder), "Kaust...")
     Next
     
     ' Store pick index in form Tag (can't use ByRef in lambda)
@@ -1021,6 +1100,28 @@ Function ShowMainDialog(app As Inventor.Application, _
             frm.Tag = idx
             frm.DialogResult = DialogResult.Retry
             frm.Close()
+        End If
+
+        ' Handle custom output folder selection
+        If e.ColumnIndex = dgv.Columns("colOutFolder").Index Then
+            Dim bi As MakeComponentsLib.BodyInfo = bodies(idx)
+            Dim fbd As New FolderBrowserDialog()
+            fbd.Description = "Vali kohandatud väljundkaust"
+            fbd.ShowNewFolderButton = True
+            If Not String.IsNullOrEmpty(bi.CustomOutputFolder) AndAlso System.IO.Directory.Exists(bi.CustomOutputFolder) Then
+                fbd.SelectedPath = bi.CustomOutputFolder
+            ElseIf Not String.IsNullOrEmpty(txtSubfolder.Text) AndAlso System.IO.Directory.Exists(txtSubfolder.Text) Then
+                fbd.SelectedPath = txtSubfolder.Text
+            Else
+                fbd.SelectedPath = masterPath
+            End If
+            If fbd.ShowDialog() = DialogResult.OK Then
+                bi.CustomOutputFolder = fbd.SelectedPath
+                bi.OutputRoute = MaterialRoutingLib.ROUTE_CUSTOM
+                dgv.Rows(e.RowIndex).Cells("colOut").Value = RouteToDisplayName(MaterialRoutingLib.ROUTE_CUSTOM)
+                dgv.Rows(e.RowIndex).Cells("colOutFolder").Value = System.IO.Path.GetFileName(fbd.SelectedPath)
+                dgv.Rows(e.RowIndex).Cells("colAuto").Value = GetAutoRouteFolderByMaterial(bi.MaterialName, txtSubfolder.Text)
+            End If
         End If
         
         ' Handle "Seo fail..." / "Eemalda seos" (link/unlink) button
@@ -1068,6 +1169,7 @@ Function ShowMainDialog(app As Inventor.Application, _
                     dgv.Rows(e.RowIndex).Cells("colSelected").Value = False
                     dgv.Rows(e.RowIndex).Cells("colSM").Value = bi.ConvertToSheetMetal
                     dgv.Rows(e.RowIndex).Cells("colMat").Value = GetValidatedMaterial(bi.MaterialName, materials)
+                    dgv.Rows(e.RowIndex).Cells("colAuto").Value = GetAutoRouteFolderByMaterial(bi.MaterialName, txtSubfolder.Text)
                     dgv.Rows(e.RowIndex).Cells("colT").Value = FormatNumber(bi.ThicknessValue * 10, 2)
                     dgv.Rows(e.RowIndex).Cells("colW").Value = FormatNumber(bi.WidthValue * 10, 2)
                     dgv.Rows(e.RowIndex).Cells("colL").Value = FormatNumber(bi.LengthValue * 10, 2)
@@ -1115,6 +1217,38 @@ Function ShowMainDialog(app As Inventor.Application, _
             For Each row As DataGridViewRow In dgv.Rows
                 row.Cells("colMat").Value = matName
             Next
+            RefreshAutoRouteColumn(dgv, bodies, txtSubfolder.Text)
+        End If
+    End Sub
+
+    ' Commit combobox edits immediately and refresh auto-route info when material changes.
+    AddHandler dgv.CurrentCellDirtyStateChanged, Sub(s, e)
+        If dgv.IsCurrentCellDirty Then
+            dgv.CommitEdit(DataGridViewDataErrorContexts.Commit)
+        End If
+    End Sub
+
+    AddHandler dgv.CellValueChanged, Sub(s, e)
+        If e.RowIndex < 0 Then Exit Sub
+        If e.ColumnIndex = dgv.Columns("colMat").Index Then
+            UpdateAutoRouteForRow(dgv, bodies, e.RowIndex, txtSubfolder.Text)
+        End If
+    End Sub
+
+    ' Some iLogic hosts do not always fire CellValueChanged for combobox edits immediately.
+    ' Refresh again on end edit to ensure Auto kaust updates when material changes.
+    AddHandler dgv.CellEndEdit, Sub(s, e)
+        If e.RowIndex < 0 Then Exit Sub
+        If e.ColumnIndex = dgv.Columns("colMat").Index Then
+            UpdateAutoRouteForRow(dgv, bodies, e.RowIndex, txtSubfolder.Text)
+        End If
+    End Sub
+
+    ' Additional safety net for hosts where combobox commit timing is odd.
+    AddHandler dgv.CellValidated, Sub(s, e)
+        If e.RowIndex < 0 Then Exit Sub
+        If e.ColumnIndex = dgv.Columns("colMat").Index Then
+            UpdateAutoRouteForRow(dgv, bodies, e.RowIndex, txtSubfolder.Text)
         End If
     End Sub
     
@@ -1195,8 +1329,91 @@ Sub SyncGridToBodyInfo(dgv As DataGridView, bodies As List(Of MakeComponentsLib.
             bodies(idx).ConvertToSheetMetal = CBool(row.Cells("colSM").Value)
             Dim matVal As Object = row.Cells("colMat").Value
             bodies(idx).MaterialName = If(matVal IsNot Nothing, matVal.ToString(), "")
+            Dim routeVal As Object = row.Cells("colOut").Value
+            bodies(idx).OutputRoute = DisplayNameToRoute(If(routeVal IsNot Nothing, routeVal.ToString(), "Auto"))
+            If Not String.Equals(bodies(idx).OutputRoute, MaterialRoutingLib.ROUTE_CUSTOM, StringComparison.OrdinalIgnoreCase) Then
+                bodies(idx).CustomOutputFolder = ""
+            End If
         End If
     Next
+End Sub
+
+' Convert persisted route token to UI label.
+Function RouteToDisplayName(route As String) As String
+    Select Case UCase(route)
+        Case MaterialRoutingLib.ROUTE_FRAME
+            Return "Karkass"
+        Case MaterialRoutingLib.ROUTE_PADDING
+            Return "Poroloon"
+        Case MaterialRoutingLib.ROUTE_CUSTOM
+            Return "Kohandatud"
+        Case Else
+            Return "Auto"
+    End Select
+End Function
+
+' Convert UI label to persisted route token.
+Function DisplayNameToRoute(displayName As String) As String
+    Select Case displayName
+        Case "Karkass"
+            Return MaterialRoutingLib.ROUTE_FRAME
+        Case "Poroloon"
+            Return MaterialRoutingLib.ROUTE_PADDING
+        Case "Kohandatud"
+            Return MaterialRoutingLib.ROUTE_CUSTOM
+        Case Else
+            Return MaterialRoutingLib.ROUTE_AUTO
+    End Select
+End Function
+
+' Resolve output folder per body according to route/material.
+Function ResolveBodyOutputFolder(bi As MakeComponentsLib.BodyInfo, moduleRoot As String) As String
+    If String.IsNullOrEmpty(moduleRoot) Then Return ""
+
+    Dim route As String = UCase(If(bi.OutputRoute, MaterialRoutingLib.ROUTE_AUTO))
+    If route = MaterialRoutingLib.ROUTE_CUSTOM Then
+        If Not String.IsNullOrEmpty(bi.CustomOutputFolder) Then
+            Return bi.CustomOutputFolder
+        End If
+        route = MaterialRoutingLib.ROUTE_AUTO
+    End If
+
+    If route = MaterialRoutingLib.ROUTE_AUTO Then
+        Dim autoKind As String = MaterialRoutingLib.GetPartOutputKind(bi.MaterialName)
+        Return MaterialRoutingLib.GetDefaultDetailFolder(moduleRoot, autoKind)
+    End If
+
+    Return MaterialRoutingLib.GetDefaultDetailFolder(moduleRoot, route)
+End Function
+
+' Read-only informational target shown for Auto route.
+Function GetAutoRouteFolderByMaterial(materialName As String, moduleRoot As String) As String
+    Dim autoKind As String = MaterialRoutingLib.GetPartOutputKind(materialName)
+    If String.Equals(autoKind, MaterialRoutingLib.ROUTE_PADDING, StringComparison.OrdinalIgnoreCase) Then
+        Return BaseModuleLayoutLib.SEG_PADDING & "\" & BaseModuleLayoutLib.SEG_PARTS
+    End If
+    Return BaseModuleLayoutLib.SEG_FRAME & "\" & BaseModuleLayoutLib.SEG_PARTS
+End Function
+
+Sub RefreshAutoRouteColumn(dgv As DataGridView, bodies As List(Of MakeComponentsLib.BodyInfo), moduleRoot As String)
+    For Each row As DataGridViewRow In dgv.Rows
+        Dim idx As Integer = CInt(row.Tag)
+        If idx >= 0 AndAlso idx < bodies.Count Then
+            Dim matObj As Object = row.Cells("colMat").Value
+            Dim matName As String = If(matObj IsNot Nothing, matObj.ToString(), "")
+            row.Cells("colAuto").Value = GetAutoRouteFolderByMaterial(matName, moduleRoot)
+        End If
+    Next
+End Sub
+
+Sub UpdateAutoRouteForRow(dgv As DataGridView, bodies As List(Of MakeComponentsLib.BodyInfo), rowIndex As Integer, moduleRoot As String)
+    Dim idx As Integer = CInt(dgv.Rows(rowIndex).Tag)
+    If idx < 0 OrElse idx >= bodies.Count Then Exit Sub
+
+    Dim matObj As Object = dgv.Rows(rowIndex).Cells("colMat").Value
+    Dim matName As String = If(matObj IsNot Nothing, matObj.ToString(), "")
+    bodies(idx).MaterialName = matName
+    dgv.Rows(rowIndex).Cells("colAuto").Value = GetAutoRouteFolderByMaterial(matName, moduleRoot)
 End Sub
 
 ' Get validated material value for ComboBox (returns empty if not in items)

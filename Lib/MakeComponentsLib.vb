@@ -37,6 +37,8 @@ Public Module MakeComponentsLib
         Public LengthValue As Double
         Public ConvertToSheetMetal As Boolean
         Public MaterialName As String
+        Public OutputRoute As String
+        Public CustomOutputFolder As String
         Public Selected As Boolean
         
         ' Part reference - path to created part (if exists)
@@ -53,6 +55,8 @@ Public Module MakeComponentsLib
             Selected = True
             ConvertToSheetMetal = False
             MaterialName = ""
+            OutputRoute = "AUTO"
+            CustomOutputFolder = ""
             CreatedPartPath = ""
             PartExists = False
             Signature = ComputeBodySignature(b)
@@ -98,6 +102,8 @@ Public Module MakeComponentsLib
         Public LengthVector As String
         Public ConvertToSheetMetal As Boolean
         Public MaterialName As String
+        Public OutputRoute As String
+        Public CustomOutputFolder As String
         Public CreatedPartPath As String
     End Class
     
@@ -106,6 +112,7 @@ Public Module MakeComponentsLib
         Public ProjectName As String
         Public Template As String
         Public AssemblyTemplate As String
+        Public BaseModuleRelativePath As String
         Public Subfolder As String
         Public AssemblyAction As String  ' NONE, CREATE, UPDATE
         Public AssemblyPath As String
@@ -114,6 +121,7 @@ Public Module MakeComponentsLib
             ProjectName = ""
             Template = ""
             AssemblyTemplate = ""
+            BaseModuleRelativePath = ""
             Subfolder = "Detailid"
             AssemblyAction = "NONE"
             AssemblyPath = ""
@@ -131,6 +139,7 @@ Public Module MakeComponentsLib
             SetOrAddProperty(userProps, GENERAL_PREFIX & "Project", settings.ProjectName)
             SetOrAddProperty(userProps, GENERAL_PREFIX & "Template", settings.Template)
             SetOrAddProperty(userProps, GENERAL_PREFIX & "AsmTemplate", settings.AssemblyTemplate)
+            SetOrAddProperty(userProps, GENERAL_PREFIX & "BaseModule", settings.BaseModuleRelativePath)
             
             ' Convert paths to relative for storage
             Dim relativeSubfolder As String = ToRelativeProjectPath(settings.Subfolder, projectRoot)
@@ -158,6 +167,7 @@ Public Module MakeComponentsLib
             settings.ProjectName = GetPropertyValue(userProps, GENERAL_PREFIX & "Project", "")
             settings.Template = GetPropertyValue(userProps, GENERAL_PREFIX & "Template", "")
             settings.AssemblyTemplate = GetPropertyValue(userProps, GENERAL_PREFIX & "AsmTemplate", "")
+            settings.BaseModuleRelativePath = GetPropertyValue(userProps, GENERAL_PREFIX & "BaseModule", "")
             settings.AssemblyAction = GetPropertyValue(userProps, GENERAL_PREFIX & "AsmAction", "NONE")
             
             ' Load and convert paths from relative to absolute (handles legacy absolute paths too)
@@ -215,6 +225,8 @@ Public Module MakeComponentsLib
                 SetOrAddProperty(userProps, prefix & "LAxis", bi.LengthVector)
                 SetOrAddProperty(userProps, prefix & "SM", If(bi.ConvertToSheetMetal, "1", "0"))
                 SetOrAddProperty(userProps, prefix & "Mat", bi.MaterialName)
+                SetOrAddProperty(userProps, prefix & "OutRoute", bi.OutputRoute)
+                SetOrAddProperty(userProps, prefix & "OutCustom", ToRelativeProjectPath(bi.CustomOutputFolder, projectRoot))
                 
                 ' Convert absolute path to relative for storage
                 Dim relativePath As String = ToRelativeProjectPath(bi.CreatedPartPath, projectRoot)
@@ -249,6 +261,8 @@ Public Module MakeComponentsLib
                 data.LengthVector = GetPropertyValue(userProps, prefix & "LAxis", "")
                 data.ConvertToSheetMetal = GetPropertyValue(userProps, prefix & "SM", "0") = "1"
                 data.MaterialName = GetPropertyValue(userProps, prefix & "Mat", "")
+                data.OutputRoute = GetPropertyValue(userProps, prefix & "OutRoute", "AUTO")
+                data.CustomOutputFolder = GetPropertyValue(userProps, prefix & "OutCustom", "")
                 data.CreatedPartPath = GetPropertyValue(userProps, prefix & "Part", "")
                 
                 If Not String.IsNullOrEmpty(data.Name) Then
@@ -320,6 +334,8 @@ Public Module MakeComponentsLib
         
         bi.ConvertToSheetMetal = sd.ConvertToSheetMetal
         bi.MaterialName = sd.MaterialName
+        bi.OutputRoute = If(String.IsNullOrEmpty(sd.OutputRoute), "AUTO", sd.OutputRoute)
+        bi.CustomOutputFolder = ToAbsoluteProjectPath(sd.CustomOutputFolder, projectRoot)
         
         ' Convert stored path (relative or legacy absolute) to absolute path
         ' ToAbsoluteProjectPath handles both cases: returns legacy paths unchanged, converts relative paths

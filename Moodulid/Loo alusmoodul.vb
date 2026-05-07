@@ -22,6 +22,7 @@ AddReference "Connectivity.InventorAddin.EdmAddin"
 AddVbFile "Lib/RuntimeLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/VaultNumberingLib.vb"
+AddVbFile "Lib/BaseModuleLayoutLib.vb"
 
 Imports System.Windows.Forms
 Imports Inventor
@@ -103,49 +104,17 @@ Sub Main()
         workspaceRoot = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, projectPath)
     End If
     
-    ' Create the folder structure
-    Dim foldersToCreate As New System.Collections.Generic.List(Of String)
-    
-    Dim alusmoodulid As String = System.IO.Path.Combine(projectPath, "Alusmoodulid")
-    Dim moduleRoot As String = System.IO.Path.Combine(alusmoodulid, moduleName)
-    
-    foldersToCreate.Add(System.IO.Path.Combine(moduleRoot, "Eskiis"))
-    foldersToCreate.Add(System.IO.Path.Combine(moduleRoot, "Karkass", "Detailid"))
-    foldersToCreate.Add(System.IO.Path.Combine(moduleRoot, "Karkass", "Joonised"))
-    foldersToCreate.Add(System.IO.Path.Combine(moduleRoot, "Poroloon", "Detailid"))
-    foldersToCreate.Add(System.IO.Path.Combine(moduleRoot, "Poroloon", "Joonised"))
-    
+    ' Create the folder structure via shared library
+    Dim moduleRoot As String = BaseModuleLayoutLib.EnsureBaseModuleLayout(projectPath, moduleName, vaultConn, workspaceRoot)
+    Dim expectedFolders As System.Collections.Generic.List(Of String) = BaseModuleLayoutLib.EnumerateExpectedFolders(projectPath, moduleName)
     Dim successCount As Integer = 0
     Dim failCount As Integer = 0
-    
-    For Each folderPath As String In foldersToCreate
-        Try
-            ' Create local folder (CreateDirectory handles nested paths)
-            If Not System.IO.Directory.Exists(folderPath) Then
-                System.IO.Directory.CreateDirectory(folderPath)
-                UtilsLib.LogInfo("Loo alusmoodul: Created local folder: " & folderPath)
-            Else
-                UtilsLib.LogInfo("Loo alusmoodul: Folder already exists: " & folderPath)
-            End If
-            
-            ' Create in Vault if connected
-            If vaultConnected AndAlso Not String.IsNullOrEmpty(workspaceRoot) Then
-                Dim vaultPath As String = VaultNumberingLib.ConvertLocalPathToVaultPath(folderPath, workspaceRoot)
-                If Not String.IsNullOrEmpty(vaultPath) Then
-                    Dim vaultFolder As Object = VaultNumberingLib.EnsureVaultFolderRecursive(vaultConn, vaultPath)
-                    If vaultFolder IsNot Nothing Then
-                        UtilsLib.LogInfo("Loo alusmoodul: Vault folder ready: " & vaultPath)
-                    Else
-                        UtilsLib.LogWarn("Loo alusmoodul: Could not create Vault folder: " & vaultPath)
-                    End If
-                End If
-            End If
-            
+    For Each folderPath As String In expectedFolders
+        If System.IO.Directory.Exists(folderPath) Then
             successCount += 1
-        Catch ex As Exception
-            UtilsLib.LogError("Loo alusmoodul: Failed to create folder: " & folderPath & " - " & ex.Message)
+        Else
             failCount += 1
-        End Try
+        End If
     Next
     
     ' Summary

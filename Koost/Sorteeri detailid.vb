@@ -11,6 +11,8 @@
 AddVbFile "Lib/RuntimeLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/SortingLib.vb"
+AddVbFile "Lib/BaseModuleLayoutLib.vb"
+AddVbFile "Lib/MaterialRoutingLib.vb"
 
 Imports System.Collections.Generic
 Imports System.Windows.Forms
@@ -51,8 +53,8 @@ Sub Main()
     ' Papp - cardboard/HDF materials
     folderPatterns.Add("Papp", New List(Of String)({"HDF", "Kartong"}))
     
-    ' Poroloon - foam materials
-    folderPatterns.Add("Poroloon", New List(Of String)({"RG.*", "HR.*", "Dryfeel.*"}))
+    ' Poroloon - foam materials (shared central map)
+    folderPatterns.Add("Poroloon", MaterialRoutingLib.PaddingMaterialPatterns())
     
     ' Metall - metal materials
     folderPatterns.Add("Metall", New List(Of String)({".*alumiinium.*", ".*teras.*"}))
