@@ -204,6 +204,51 @@ Public Module CenterPatternLib
     ' ============================================================================
     
     ''' <summary>
+    ''' Sanitize a name for use as an Inventor parameter name.
+    ''' Inventor parameter names cannot contain parentheses, brackets, or other special characters
+    ''' that would be interpreted as operators or function calls in expressions.
+    ''' </summary>
+    Public Function SanitizeParameterName(name As String) As String
+        If String.IsNullOrEmpty(name) Then Return name
+        
+        Dim result As String = name
+        
+        ' Replace parentheses with underscores (common in part numbers like "(000133)")
+        result = result.Replace("(", "_")
+        result = result.Replace(")", "_")
+        
+        ' Replace other problematic characters
+        result = result.Replace("[", "_")
+        result = result.Replace("]", "_")
+        result = result.Replace("{", "_")
+        result = result.Replace("}", "_")
+        result = result.Replace("+", "_")
+        result = result.Replace("-", "_")
+        result = result.Replace("*", "_")
+        result = result.Replace("/", "_")
+        result = result.Replace("^", "_")
+        result = result.Replace("=", "_")
+        result = result.Replace("<", "_")
+        result = result.Replace(">", "_")
+        result = result.Replace(",", "_")
+        result = result.Replace(";", "_")
+        result = result.Replace(":", "_")
+        
+        ' Replace spaces with underscores
+        result = result.Replace(" ", "_")
+        
+        ' Remove consecutive underscores
+        While result.Contains("__")
+            result = result.Replace("__", "_")
+        End While
+        
+        ' Remove leading/trailing underscores
+        result = result.Trim("_"c)
+        
+        Return result
+    End Function
+    
+    ''' <summary>
     ''' Create or update a user parameter with a numeric value.
     ''' </summary>
     Public Function SetParameter(asmDoc As AssemblyDocument, paramName As String, _
@@ -1164,10 +1209,10 @@ Public Module CenterPatternLib
             Return False
         End If
         
-        ' Handle parameter names that start with digits
-        Dim paramPrefix As String = baseName
-        If baseName.Length > 0 AndAlso Char.IsDigit(baseName(0)) Then
-            paramPrefix = "M_" & baseName
+        ' Sanitize parameter prefix (remove parentheses, spaces, etc. that break expressions)
+        Dim paramPrefix As String = SanitizeParameterName(baseName)
+        If paramPrefix.Length > 0 AndAlso Char.IsDigit(paramPrefix(0)) Then
+            paramPrefix = "M_" & paramPrefix
         End If
         
         logs.Add("CenterPatternLib: Creating pattern '" & baseName & "'")
@@ -1390,10 +1435,10 @@ Public Module CenterPatternLib
             Return False
         End If
         
-        ' Handle parameter names that start with digits
-        Dim paramPrefix As String = baseName
-        If baseName.Length > 0 AndAlso Char.IsDigit(baseName(0)) Then
-            paramPrefix = "M_" & baseName
+        ' Sanitize parameter prefix (remove parentheses, spaces, etc. that break expressions)
+        Dim paramPrefix As String = SanitizeParameterName(baseName)
+        If paramPrefix.Length > 0 AndAlso Char.IsDigit(paramPrefix(0)) Then
+            paramPrefix = "M_" & paramPrefix
         End If
         
         logs.Add("CenterPatternLib: Creating extended pattern '" & baseName & "'")
@@ -1960,10 +2005,10 @@ Public Module CenterPatternLib
         
         logs.Add("CenterPatternLib: Updating pattern '" & baseName & "'")
         
-        ' Handle parameter names that start with digits
-        Dim paramPrefix As String = baseName
-        If baseName.Length > 0 AndAlso Char.IsDigit(baseName(0)) Then
-            paramPrefix = "M_" & baseName
+        ' Sanitize parameter prefix (remove parentheses, spaces, etc. that break expressions)
+        Dim paramPrefix As String = SanitizeParameterName(baseName)
+        If paramPrefix.Length > 0 AndAlso Char.IsDigit(paramPrefix(0)) Then
+            paramPrefix = "M_" & paramPrefix
         End If
         
         ' Find work features
@@ -2647,10 +2692,10 @@ Public Module CenterPatternLib
         
         logs.Add("CenterPatternLib: Deleting pattern '" & baseName & "'")
         
-        ' Handle parameter prefix (same as in creation)
-        Dim paramPrefix As String = baseName
-        If baseName.Length > 0 AndAlso Char.IsDigit(baseName(0)) Then
-            paramPrefix = "M_" & baseName
+        ' Sanitize parameter prefix (same as in creation)
+        Dim paramPrefix As String = SanitizeParameterName(baseName)
+        If paramPrefix.Length > 0 AndAlso Char.IsDigit(paramPrefix(0)) Then
+            paramPrefix = "M_" & paramPrefix
         End If
         
         Dim asmDef As AssemblyComponentDefinition = asmDoc.ComponentDefinition
