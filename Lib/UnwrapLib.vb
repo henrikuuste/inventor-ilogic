@@ -187,16 +187,96 @@ Public Module UnwrapLib
     End Function
     
     ''' <summary>
-    ''' Surface body used for Pinnalaotus extents (thickened solid if present, else unwrap surface).
+    ''' Surface body used for Pinnalaotus extents: <see cref="ResolveManufacturedSolidBody"/> if set, else unwrap surface.
     ''' </summary>
     Public Function GetPinnalaotusMeasurementBody(partDoc As PartDocument) As SurfaceBody
         Try
+            Dim resolved As SurfaceBody = ResolveManufacturedSolidBody(partDoc)
+            If resolved IsNot Nothing Then Return resolved
             Dim unwrap As UnwrapFeature = GetUnwrapFeature(partDoc)
             If unwrap Is Nothing Then Return Nothing
-            Dim thicken As ThickenFeature = GetThickenForUnwrap(partDoc, unwrap)
-            Dim solid As SurfaceBody = GetThickenedSolidBody(thicken)
-            If solid IsNot Nothing Then Return solid
             Return GetUnwrappedSurfaceBody(unwrap)
+        Catch
+            Return Nothing
+        End Try
+    End Function
+    
+    ''' <summary>
+    ''' Find a surface/solid body by display name (case-insensitive).
+    ''' </summary>
+    Public Function FindSurfaceBodyByName(compDef As PartComponentDefinition, bodyName As String) As SurfaceBody
+        If compDef Is Nothing OrElse String.IsNullOrWhiteSpace(bodyName) Then Return Nothing
+        Dim trimmed As String = bodyName.Trim()
+        For Each body As SurfaceBody In compDef.SurfaceBodies
+            Try
+                If String.Equals(body.Name, trimmed, StringComparison.OrdinalIgnoreCase) Then Return body
+            Catch
+            End Try
+        Next
+        Return Nothing
+    End Function
+    
+    ''' <summary>
+    ''' Stored manufactured-body hint (Thicken output, Extrude solid, etc.).
+    ''' </summary>
+    Public Function GetManufacturedSolidBodyNameProperty(partDoc As PartDocument) As String
+        Try
+            Dim propSet As PropertySet = partDoc.PropertySets.Item("Inventor User Defined Properties")
+            Dim v As Object = propSet.Item(PROP_PINNALAOTUS_BODY_NAME).Value
+            If v Is Nothing Then Return ""
+            Return CStr(v).Trim()
+        Catch
+            Return ""
+        End Try
+    End Function
+    
+    ''' <summary>
+    ''' Persist manufactured solid body name for DVR resolution, dimensions, and CAM.
+    ''' </summary>
+    Public Sub SetManufacturedSolidBodyNameProperty(partDoc As PartDocument, bodyName As String)
+        Try
+            Dim propSet As PropertySet = partDoc.PropertySets.Item("Inventor User Defined Properties")
+            If String.IsNullOrWhiteSpace(bodyName) Then
+                Try
+                    propSet.Item(PROP_PINNALAOTUS_BODY_NAME).Value = ""
+                Catch
+                End Try
+                Return
+            End If
+            Dim trimmed As String = bodyName.Trim()
+            Try
+                propSet.Item(PROP_PINNALAOTUS_BODY_NAME).Value = trimmed
+            Catch
+                propSet.Add(trimmed, PROP_PINNALAOTUS_BODY_NAME)
+            End Try
+        Catch ex As Exception
+            UtilsLib.LogWarn("UnwrapLib: Could not set " & PROP_PINNALAOTUS_BODY_NAME & ": " & ex.Message)
+        End Try
+    End Sub
+    
+    ''' <summary>
+    ''' Solid body from Unwrap+Thicken chain only (for UI default / autodetect).
+    ''' </summary>
+    Public Function TryGetThickenManufacturedSolidBody(partDoc As PartDocument) As SurfaceBody
+        Dim unwrap As UnwrapFeature = GetUnwrapFeature(partDoc)
+        If unwrap Is Nothing Then Return Nothing
+        Dim thicken As ThickenFeature = GetThickenForUnwrap(partDoc, unwrap)
+        If thicken Is Nothing Then Return Nothing
+        Return GetThickenedSolidBody(thicken)
+    End Function
+    
+    ''' <summary>
+    ''' Manufactured flat solid for Pinnalaotus / Komponent DVRs: named body from <see cref="PROP_PINNALAOTUS_BODY_NAME"/> if valid, else Thicken output.
+    ''' </summary>
+    Public Function ResolveManufacturedSolidBody(partDoc As PartDocument) As SurfaceBody
+        Try
+            Dim compDef As PartComponentDefinition = partDoc.ComponentDefinition
+            Dim propName As String = GetManufacturedSolidBodyNameProperty(partDoc)
+            If Not String.IsNullOrWhiteSpace(propName) Then
+                Dim fromProp As SurfaceBody = FindSurfaceBodyByName(compDef, propName)
+                If fromProp IsNot Nothing Then Return fromProp
+            End If
+            Return TryGetThickenManufacturedSolidBody(partDoc)
         Catch
             Return Nothing
         End Try
@@ -599,11 +679,11 @@ Public Module UnwrapLib
     End Sub
     
     ''' <summary>
-    ''' Get or create <c>Pinnalaotus</c> DVR: **thickened unwrap solid only** (actual manufactured flat part).
+    ''' Get or create <c>Pinnalaotus</c> DVR: **manufactured flat solid only** (Thicken or user-picked solid via <see cref="PROP_PINNALAOTUS_BODY_NAME"/>).
     ''' Recognizes legacy <c>BB_Pinnalaotus</c>. Refreshes body visibility when DVR already exists (fixes older wrong states).
-    ''' Requires Unwrap + Thicken.
+    ''' Requires Unwrap and a resolved manufactured body unless <paramref name="manufacturedBody"/> is supplied.
     ''' </summary>
-    Public Function GetOrCreatePinnalaotusDVR(partDoc As PartDocument) As DesignViewRepresentation
+    Public Function GetOrCreatePinnalaotusDVR(partDoc As PartDocument, Optional manufacturedBody As SurfaceBody = Nothing) As DesignViewRepresentation
         Try
             Dim compDef As PartComponentDefinition = partDoc.ComponentDefinition
             Dim dvrs As DesignViewRepresentations = compDef.RepresentationsManager.DesignViewRepresentations
@@ -614,19 +694,18 @@ Public Module UnwrapLib
                 Return Nothing
             End If
             
-            Dim thicken As ThickenFeature = GetThickenForUnwrap(partDoc, unwrap)
-            If thicken Is Nothing Then
-                UtilsLib.LogWarn("UnwrapLib: Cannot create """ & DVR_NAME_PINNALAOTUS & """ DVR — no ThickenFeature")
+            Dim solidBody As SurfaceBody = manufacturedBody
+            If solidBody Is Nothing Then solidBody = ResolveManufacturedSolidBody(partDoc)
+            If solidBody Is Nothing Then
+                UtilsLib.LogWarn("UnwrapLib: Cannot create """ & DVR_NAME_PINNALAOTUS & """ DVR — no manufactured solid (Thicken or property " & PROP_PINNALAOTUS_BODY_NAME & ")")
                 Return Nothing
             End If
-            
-            Dim thickenedBody As SurfaceBody = GetThickenedSolidBody(thicken)
             
             Dim target As DesignViewRepresentation = FindManufacturedPinnalaotusDvr(dvrs)
             Dim createdNew As Boolean = False
             
             If target Is Nothing Then
-                UtilsLib.LogInfo("UnwrapLib: Creating DVR """ & DVR_NAME_PINNALAOTUS & """ (thickened manufactured solid)")
+                UtilsLib.LogInfo("UnwrapLib: Creating DVR """ & DVR_NAME_PINNALAOTUS & """ (manufactured solid)")
                 target = dvrs.Add(DVR_NAME_PINNALAOTUS)
                 createdNew = True
             Else
@@ -634,7 +713,7 @@ Public Module UnwrapLib
             End If
             
             UnlockAndActivateDvr(target)
-            ApplyManufacturedPinnalaotusVisibility(compDef, thickenedBody)
+            ApplyManufacturedPinnalaotusVisibility(compDef, solidBody)
             target.Locked = True
             ActivateDefaultOrMasterDesignView(partDoc)
             
@@ -649,11 +728,11 @@ Public Module UnwrapLib
     End Function
     
     ''' <summary>
-    ''' Get or create <c>Komponent</c> DVR: bent/original bodies visible; unwrap surface and thickened flat solid hidden.
+    ''' Get or create <c>Komponent</c> DVR: bent/original bodies visible; unwrap surface and manufactured flat solid hidden.
     ''' If the part has no Unwrap, all bodies are shown (single-state component).
     ''' Refreshes visibility when DVR already exists.
     ''' </summary>
-    Public Function GetOrCreateKomponentDVR(partDoc As PartDocument) As DesignViewRepresentation
+    Public Function GetOrCreateKomponentDVR(partDoc As PartDocument, Optional manufacturedBody As SurfaceBody = Nothing) As DesignViewRepresentation
         Try
             Dim compDef As PartComponentDefinition = partDoc.ComponentDefinition
             Dim dvrs As DesignViewRepresentations = compDef.RepresentationsManager.DesignViewRepresentations
@@ -663,10 +742,8 @@ Public Module UnwrapLib
             Dim thickenedBody As SurfaceBody = Nothing
             If unwrap IsNot Nothing Then
                 unwrapSurface = GetUnwrappedSurfaceBody(unwrap)
-                Dim thicken As ThickenFeature = GetThickenForUnwrap(partDoc, unwrap)
-                If thicken IsNot Nothing Then
-                    thickenedBody = GetThickenedSolidBody(thicken)
-                End If
+                thickenedBody = manufacturedBody
+                If thickenedBody Is Nothing Then thickenedBody = ResolveManufacturedSolidBody(partDoc)
             End If
             
             Dim target As DesignViewRepresentation = FindDesignViewByName(dvrs, DVR_NAME_KOMPONENT)
@@ -703,14 +780,11 @@ Public Module UnwrapLib
     End Function
     
     ''' <summary>
-    ''' Check if part has a complete Pinnalaotus setup (Unwrap + Thicken)
+    ''' True when Unwrap exists and a manufactured solid is available (Thicken and/or <see cref="PROP_PINNALAOTUS_BODY_NAME"/>).
     ''' </summary>
     Public Function HasCompletePinnalaotus(partDoc As PartDocument) As Boolean
-        Dim unwrap As UnwrapFeature = GetUnwrapFeature(partDoc)
-        If unwrap Is Nothing Then Return False
-        
-        Dim thicken As ThickenFeature = GetThickenForUnwrap(partDoc, unwrap)
-        Return thicken IsNot Nothing
+        If GetUnwrapFeature(partDoc) Is Nothing Then Return False
+        Return ResolveManufacturedSolidBody(partDoc) IsNot Nothing
     End Function
     
     ''' <summary>
@@ -758,7 +832,7 @@ Public Module UnwrapLib
     ''' <summary>
     ''' True when 1:1 CAM drawings should use the <c>Pinnalaotus</c> DVR (thickened manufactured solid).
     ''' False when user chose Normal or Lehtmetall dimensioning (full model / flat pattern semantics).
-    ''' When <paramref name="force"/> is True, uses Pinnalaotus DVR whenever Unwrap+Thicken exists (e.g. Komponendid/Pinnalaotuse vaated.vb).
+    ''' When <paramref name="force"/> is True, uses Pinnalaotus DVR whenever Unwrap and a manufactured solid exist (e.g. Komponendid/Pinnalaotuse vaated.vb).
     ''' </summary>
     Public Function ShouldUsePinnalaotusDvrInDrawing(partDoc As PartDocument, Optional force As Boolean = False) As Boolean
         If Not HasCompletePinnalaotus(partDoc) Then Return False

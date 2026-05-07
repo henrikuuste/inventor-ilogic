@@ -21,6 +21,7 @@
 '   In calling script:
 '     AddVbFile "Lib/UtilsLib.vb"
 '     AddVbFile "Lib/FileSearchLib.vb"
+'     AddVbFile "Lib/UnwrapLib.vb"
 '     AddVbFile "Lib/CAMDrawingLib.vb"
 ' ============================================================================
 
