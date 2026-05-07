@@ -83,6 +83,12 @@ Public Module MakeComponentsLib
     Private Const PROP_PREFIX As String = "LK_Body_"
     Private Const GENERAL_PREFIX As String = "LK_General_"
     
+    ' Vault / Explorer backup folders — never offer as template sources
+    Private Function IsExcludedTemplatesSubfolder(folderName As String) As Boolean
+        If String.IsNullOrEmpty(folderName) Then Return False
+        Return String.Equals(folderName, "OldVersions", StringComparison.OrdinalIgnoreCase)
+    End Function
+    
     ' Stored body data class (what we save to master document)
     Public Class StoredBodyData
         Public Name As String
@@ -99,13 +105,15 @@ Public Module MakeComponentsLib
     Public Class GeneralSettings
         Public ProjectName As String
         Public Template As String
+        Public AssemblyTemplate As String
         Public Subfolder As String
         Public AssemblyAction As String  ' NONE, CREATE, UPDATE
         Public AssemblyPath As String
         
         Public Sub New()
             ProjectName = ""
-            Template = "Part.ipt"
+            Template = ""
+            AssemblyTemplate = ""
             Subfolder = "Detailid"
             AssemblyAction = "NONE"
             AssemblyPath = ""
@@ -122,6 +130,7 @@ Public Module MakeComponentsLib
             
             SetOrAddProperty(userProps, GENERAL_PREFIX & "Project", settings.ProjectName)
             SetOrAddProperty(userProps, GENERAL_PREFIX & "Template", settings.Template)
+            SetOrAddProperty(userProps, GENERAL_PREFIX & "AsmTemplate", settings.AssemblyTemplate)
             
             ' Convert paths to relative for storage
             Dim relativeSubfolder As String = ToRelativeProjectPath(settings.Subfolder, projectRoot)
@@ -147,7 +156,8 @@ Public Module MakeComponentsLib
             Dim userProps As PropertySet = masterDoc.PropertySets.Item("Inventor User Defined Properties")
             
             settings.ProjectName = GetPropertyValue(userProps, GENERAL_PREFIX & "Project", "")
-            settings.Template = GetPropertyValue(userProps, GENERAL_PREFIX & "Template", "Part.ipt")
+            settings.Template = GetPropertyValue(userProps, GENERAL_PREFIX & "Template", "")
+            settings.AssemblyTemplate = GetPropertyValue(userProps, GENERAL_PREFIX & "AsmTemplate", "")
             settings.AssemblyAction = GetPropertyValue(userProps, GENERAL_PREFIX & "AsmAction", "NONE")
             
             ' Load and convert paths from relative to absolute (handles legacy absolute paths too)
@@ -844,34 +854,225 @@ Public Module MakeComponentsLib
         End Try
     End Function
     
-    ' Find template in templates folder
-    Public Function FindTemplate(app As Inventor.Application, templateName As String) As String
+    ' Lists part templates (.ipt) under the active project's TemplatesPath (root and one subdirectory level).
+    ' Returns display names relative to TemplatesPath (e.g. "Standard.ipt", "Metric\Standard.ipt").
+    Public Function GetAvailablePartTemplates(app As Inventor.Application) As System.Collections.Generic.List(Of String)
+        Dim templates As New System.Collections.Generic.List(Of String)
+        
         Try
             Dim templatesPath As String = app.DesignProjectManager.ActiveDesignProject.TemplatesPath
-            UtilsLib.LogInfo("MakeComponentsLib: Templates folder: " & templatesPath)
+            UtilsLib.LogInfo("MakeComponentsLib: Enumerating part templates in: " & templatesPath)
             
-            Dim candidates() As String = { _
-                templateName, _
-                templateName & ".ipt", _
-                "Part.ipt", _
-                "Sheet Metal.ipt", _
-                "SheetMetal Part.ipt" _
-            }
+            If Not String.IsNullOrEmpty(templatesPath) AndAlso System.IO.Directory.Exists(templatesPath) Then
+                Dim iptFiles() As String = System.IO.Directory.GetFiles(templatesPath, "*.ipt")
+                For Each iptPath As String In iptFiles
+                    Dim name As String = System.IO.Path.GetFileName(iptPath)
+                    If Not templates.Contains(name) Then templates.Add(name)
+                Next
+                
+                For Each subDir As String In System.IO.Directory.GetDirectories(templatesPath)
+                    Dim subFolderName As String = System.IO.Path.GetFileName(subDir.TrimEnd("\"c))
+                    If IsExcludedTemplatesSubfolder(subFolderName) Then Continue For
+                    Dim subIptFiles() As String = System.IO.Directory.GetFiles(subDir, "*.ipt")
+                    For Each iptPath As String In subIptFiles
+                        Dim relativeName As String = subFolderName & "\" & _
+                                                     System.IO.Path.GetFileName(iptPath)
+                        If Not templates.Contains(relativeName) Then templates.Add(relativeName)
+                    Next
+                Next
+                
+                templates.Sort(StringComparer.OrdinalIgnoreCase)
+            End If
             
-            For Each candidate As String In candidates
-                Dim fullPath As String = System.IO.Path.Combine(templatesPath, candidate)
-                If System.IO.File.Exists(fullPath) Then
-                    UtilsLib.LogInfo("MakeComponentsLib: Found template: " & fullPath)
-                    Return fullPath
-                End If
-            Next
-            
-            UtilsLib.LogWarn("MakeComponentsLib: No template found matching '" & templateName & "'")
-            Return ""
+            UtilsLib.LogInfo("MakeComponentsLib: Found " & templates.Count & " part template(s)")
         Catch ex As Exception
-            UtilsLib.LogWarn("MakeComponentsLib: Error finding template: " & ex.Message)
-            Return ""
+            UtilsLib.LogWarn("MakeComponentsLib: Error enumerating templates: " & ex.Message)
         End Try
+        
+        Return templates
+    End Function
+    
+    ' Returns the file name of Inventor's default part template (e.g. Standard.ipt).
+    Public Function GetDefaultPartTemplate(app As Inventor.Application) As String
+        Try
+            Dim templatePath As String = app.FileManager.GetTemplateFile(DocumentTypeEnum.kPartDocumentObject)
+            If Not String.IsNullOrEmpty(templatePath) AndAlso System.IO.File.Exists(templatePath) Then
+                Return System.IO.Path.GetFileName(templatePath)
+            End If
+        Catch ex As Exception
+            UtilsLib.LogWarn("MakeComponentsLib: GetDefaultPartTemplate FileManager error: " & ex.Message)
+        End Try
+        Return "Standard.ipt"
+    End Function
+    
+    ' Resolves a template display name to a full path. Uses FileManager default folder, then project TemplatesPath.
+    Public Function FindTemplate(app As Inventor.Application, templateName As String) As String
+        Dim templatesPath As String = ""
+        Try
+            templatesPath = app.DesignProjectManager.ActiveDesignProject.TemplatesPath
+            UtilsLib.LogInfo("MakeComponentsLib: Templates folder: " & templatesPath)
+        Catch ex As Exception
+            UtilsLib.LogWarn("MakeComponentsLib: Could not read TemplatesPath: " & ex.Message)
+        End Try
+        
+        Dim defaultPath As String = ""
+        Dim templateFolder As String = ""
+        Try
+            defaultPath = app.FileManager.GetTemplateFile(DocumentTypeEnum.kPartDocumentObject)
+            If Not String.IsNullOrEmpty(defaultPath) Then
+                templateFolder = System.IO.Path.GetDirectoryName(defaultPath)
+            End If
+        Catch ex As Exception
+            UtilsLib.LogWarn("MakeComponentsLib: Error accessing FileManager: " & ex.Message)
+        End Try
+        
+        If Not String.IsNullOrEmpty(templateName) Then
+            If Not String.IsNullOrEmpty(templateFolder) Then
+                Dim specificPath As String = System.IO.Path.Combine(templateFolder, templateName)
+                If System.IO.File.Exists(specificPath) Then
+                    UtilsLib.LogInfo("MakeComponentsLib: Found template: " & specificPath)
+                    Return specificPath
+                End If
+            End If
+            
+            If Not String.IsNullOrEmpty(templatesPath) Then
+                Dim projectPath As String = System.IO.Path.Combine(templatesPath, templateName)
+                If System.IO.File.Exists(projectPath) Then
+                    UtilsLib.LogInfo("MakeComponentsLib: Found template in project: " & projectPath)
+                    Return projectPath
+                End If
+            End If
+        End If
+        
+        If Not String.IsNullOrEmpty(defaultPath) AndAlso System.IO.File.Exists(defaultPath) Then
+            UtilsLib.LogInfo("MakeComponentsLib: Using default template: " & defaultPath)
+            Return defaultPath
+        End If
+        
+        Try
+            If Not String.IsNullOrEmpty(templatesPath) AndAlso System.IO.Directory.Exists(templatesPath) Then
+                Dim iptFiles() As String = System.IO.Directory.GetFiles(templatesPath, "*.ipt")
+                If iptFiles.Length > 0 Then
+                    UtilsLib.LogInfo("MakeComponentsLib: Using first available template in project folder: " & iptFiles(0))
+                    Return iptFiles(0)
+                End If
+            End If
+        Catch ex As Exception
+            UtilsLib.LogWarn("MakeComponentsLib: Error scanning project templates: " & ex.Message)
+        End Try
+        
+        UtilsLib.LogWarn("MakeComponentsLib: No template found matching '" & templateName & "'")
+        Return ""
+    End Function
+    
+    ' Lists assembly templates (.iam) under TemplatesPath (root + one subdirectory level). Skips OldVersions.
+    Public Function GetAvailableAssemblyTemplates(app As Inventor.Application) As System.Collections.Generic.List(Of String)
+        Dim templates As New System.Collections.Generic.List(Of String)
+        
+        Try
+            Dim templatesPath As String = app.DesignProjectManager.ActiveDesignProject.TemplatesPath
+            UtilsLib.LogInfo("MakeComponentsLib: Enumerating assembly templates in: " & templatesPath)
+            
+            If Not String.IsNullOrEmpty(templatesPath) AndAlso System.IO.Directory.Exists(templatesPath) Then
+                Dim iamFiles() As String = System.IO.Directory.GetFiles(templatesPath, "*.iam")
+                For Each iamPath As String In iamFiles
+                    Dim name As String = System.IO.Path.GetFileName(iamPath)
+                    If Not templates.Contains(name) Then templates.Add(name)
+                Next
+                
+                For Each subDir As String In System.IO.Directory.GetDirectories(templatesPath)
+                    Dim subFolderName As String = System.IO.Path.GetFileName(subDir.TrimEnd("\"c))
+                    If IsExcludedTemplatesSubfolder(subFolderName) Then Continue For
+                    Dim subIamFiles() As String = System.IO.Directory.GetFiles(subDir, "*.iam")
+                    For Each iamPath As String In subIamFiles
+                        Dim relativeName As String = subFolderName & "\" & _
+                                                     System.IO.Path.GetFileName(iamPath)
+                        If Not templates.Contains(relativeName) Then templates.Add(relativeName)
+                    Next
+                Next
+                
+                templates.Sort(StringComparer.OrdinalIgnoreCase)
+            End If
+            
+            UtilsLib.LogInfo("MakeComponentsLib: Found " & templates.Count & " assembly template(s)")
+        Catch ex As Exception
+            UtilsLib.LogWarn("MakeComponentsLib: Error enumerating assembly templates: " & ex.Message)
+        End Try
+        
+        Return templates
+    End Function
+    
+    ' File name of Inventor default assembly template (e.g. Standard.iam).
+    Public Function GetDefaultAssemblyTemplate(app As Inventor.Application) As String
+        Try
+            Dim templatePath As String = app.FileManager.GetTemplateFile(DocumentTypeEnum.kAssemblyDocumentObject)
+            If Not String.IsNullOrEmpty(templatePath) AndAlso System.IO.File.Exists(templatePath) Then
+                Return System.IO.Path.GetFileName(templatePath)
+            End If
+        Catch ex As Exception
+            UtilsLib.LogWarn("MakeComponentsLib: GetDefaultAssemblyTemplate FileManager error: " & ex.Message)
+        End Try
+        Return "Standard.iam"
+    End Function
+    
+    ' Resolves assembly template display name to full path (same strategy as FindTemplate).
+    Public Function FindAssemblyTemplate(app As Inventor.Application, templateName As String) As String
+        Dim templatesPath As String = ""
+        Try
+            templatesPath = app.DesignProjectManager.ActiveDesignProject.TemplatesPath
+            UtilsLib.LogInfo("MakeComponentsLib: Assembly templates folder: " & templatesPath)
+        Catch ex As Exception
+            UtilsLib.LogWarn("MakeComponentsLib: Could not read TemplatesPath: " & ex.Message)
+        End Try
+        
+        Dim defaultPath As String = ""
+        Dim templateFolder As String = ""
+        Try
+            defaultPath = app.FileManager.GetTemplateFile(DocumentTypeEnum.kAssemblyDocumentObject)
+            If Not String.IsNullOrEmpty(defaultPath) Then
+                templateFolder = System.IO.Path.GetDirectoryName(defaultPath)
+            End If
+        Catch ex As Exception
+            UtilsLib.LogWarn("MakeComponentsLib: Error accessing FileManager (assembly): " & ex.Message)
+        End Try
+        
+        If Not String.IsNullOrEmpty(templateName) Then
+            If Not String.IsNullOrEmpty(templateFolder) Then
+                Dim specificPath As String = System.IO.Path.Combine(templateFolder, templateName)
+                If System.IO.File.Exists(specificPath) Then
+                    UtilsLib.LogInfo("MakeComponentsLib: Found assembly template: " & specificPath)
+                    Return specificPath
+                End If
+            End If
+            
+            If Not String.IsNullOrEmpty(templatesPath) Then
+                Dim projectPath As String = System.IO.Path.Combine(templatesPath, templateName)
+                If System.IO.File.Exists(projectPath) Then
+                    UtilsLib.LogInfo("MakeComponentsLib: Found assembly template in project: " & projectPath)
+                    Return projectPath
+                End If
+            End If
+        End If
+        
+        If Not String.IsNullOrEmpty(defaultPath) AndAlso System.IO.File.Exists(defaultPath) Then
+            UtilsLib.LogInfo("MakeComponentsLib: Using default assembly template: " & defaultPath)
+            Return defaultPath
+        End If
+        
+        Try
+            If Not String.IsNullOrEmpty(templatesPath) AndAlso System.IO.Directory.Exists(templatesPath) Then
+                Dim iamFiles() As String = System.IO.Directory.GetFiles(templatesPath, "*.iam")
+                If iamFiles.Length > 0 Then
+                    UtilsLib.LogInfo("MakeComponentsLib: Using first available assembly template: " & iamFiles(0))
+                    Return iamFiles(0)
+                End If
+            End If
+        Catch ex As Exception
+            UtilsLib.LogWarn("MakeComponentsLib: Error scanning project assembly templates: " & ex.Message)
+        End Try
+        
+        UtilsLib.LogWarn("MakeComponentsLib: No assembly template found matching '" & templateName & "'")
+        Return ""
     End Function
     
     ' Helper to exclude all entities from a derived part entity collection

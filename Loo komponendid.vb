@@ -161,11 +161,42 @@ Sub Main()
     
     ' Note: Vault numbering scheme fetching removed - Vault handles numbering on save
     
-    ' Get templates
-    Dim templates As New List(Of String)
-    templates.Add("Part.ipt")
-    templates.Add("Sheet Metal.ipt")
-    templates.Add("SheetMetal Part.ipt")
+    ' Part templates from project TemplatesPath (standard Inventor layout)
+    Dim templates As List(Of String) = MakeComponentsLib.GetAvailablePartTemplates(app)
+    Dim defaultTemplate As String = MakeComponentsLib.GetDefaultPartTemplate(app)
+    Dim hasDefaultInList As Boolean = False
+    For Each t As String In templates
+        If String.Equals(t, defaultTemplate, StringComparison.OrdinalIgnoreCase) Then
+            hasDefaultInList = True
+            Exit For
+        End If
+    Next
+    If Not hasDefaultInList Then
+        templates.Add(defaultTemplate)
+        templates.Sort(StringComparer.OrdinalIgnoreCase)
+    End If
+    If templates.Count = 0 Then
+        ' Should not occur (defaultTemplate is always non-empty)
+        templates.Add(defaultTemplate)
+    End If
+    
+    ' Assembly templates (for new assembly only); skip OldVersions via library filter
+    Dim asmTemplates As List(Of String) = MakeComponentsLib.GetAvailableAssemblyTemplates(app)
+    Dim defaultAsmTemplate As String = MakeComponentsLib.GetDefaultAssemblyTemplate(app)
+    Dim hasDefaultAsmInList As Boolean = False
+    For Each at As String In asmTemplates
+        If String.Equals(at, defaultAsmTemplate, StringComparison.OrdinalIgnoreCase) Then
+            hasDefaultAsmInList = True
+            Exit For
+        End If
+    Next
+    If Not hasDefaultAsmInList Then
+        asmTemplates.Add(defaultAsmTemplate)
+        asmTemplates.Sort(StringComparer.OrdinalIgnoreCase)
+    End If
+    If asmTemplates.Count = 0 Then
+        asmTemplates.Add(defaultAsmTemplate)
+    End If
     
     ' Extract default project name and master path
     Dim masterPath As String = System.IO.Path.GetDirectoryName(masterDoc.FullDocumentName)
@@ -177,9 +208,40 @@ Sub Main()
     ' Dialog loop for face picking
     Dim dialogResult As DialogResult
     
-    ' Apply loaded settings as defaults, or use computed defaults
-    Dim selectedTemplate As String = If(Not String.IsNullOrEmpty(generalSettings.Template), _
-                                        generalSettings.Template, "Part.ipt")
+    ' Apply loaded settings as defaults, or use Inventor standard default (e.g. Standard.ipt)
+    Dim selectedTemplate As String = defaultTemplate
+    If Not String.IsNullOrEmpty(generalSettings.Template) Then
+        Dim stored As String = generalSettings.Template
+        Dim matched As String = Nothing
+        For Each t As String In templates
+            If String.Equals(t, stored, StringComparison.OrdinalIgnoreCase) Then
+                matched = t
+                Exit For
+            End If
+        Next
+        If matched IsNot Nothing Then
+            selectedTemplate = matched
+        Else
+            UtilsLib.LogWarn("Loo komponendid: Stored template not found in list ('" & stored & "'); using default: " & defaultTemplate)
+        End If
+    End If
+    
+    Dim selectedAssemblyTemplate As String = defaultAsmTemplate
+    If Not String.IsNullOrEmpty(generalSettings.AssemblyTemplate) Then
+        Dim storedAsm As String = generalSettings.AssemblyTemplate
+        Dim matchedAsm As String = Nothing
+        For Each at As String In asmTemplates
+            If String.Equals(at, storedAsm, StringComparison.OrdinalIgnoreCase) Then
+                matchedAsm = at
+                Exit For
+            End If
+        Next
+        If matchedAsm IsNot Nothing Then
+            selectedAssemblyTemplate = matchedAsm
+        Else
+            UtilsLib.LogWarn("Loo komponendid: Stored assembly template not in list ('" & storedAsm & "'); using default: " & defaultAsmTemplate)
+        End If
+    End If
     
     ' Handle subfolder - LoadGeneralSettings already converts relative paths to absolute
     Dim selectedSubfolder As String
@@ -207,9 +269,10 @@ Sub Main()
     Dim pickBodyIndex As Integer = -1
     
     Do
-        dialogResult = ShowMainDialog(app, masterDoc, bodies, materials, vaultConnected, templates, masterPath, _
-                                      workspaceRoot, selectedTemplate, selectedSubfolder, _
-                                      projectName, assemblyAction, assemblyPath, pickBodyIndex)
+        dialogResult = ShowMainDialog(app, masterDoc, bodies, materials, vaultConnected, templates, defaultTemplate, _
+                                      asmTemplates, defaultAsmTemplate, masterPath, workspaceRoot, selectedTemplate, _
+                                      selectedAssemblyTemplate, selectedSubfolder, projectName, assemblyAction, _
+                                      assemblyPath, pickBodyIndex)
         
         If dialogResult = DialogResult.Retry AndAlso pickBodyIndex >= 0 AndAlso pickBodyIndex < bodies.Count Then
             ' User clicked "Vali pind" - do face pick
@@ -261,6 +324,7 @@ Sub Main()
             MakeComponentsLib.SaveGeneralSettings(masterDoc, New MakeComponentsLib.GeneralSettings() With {
                 .ProjectName = projectName,
                 .Template = selectedTemplate,
+                .AssemblyTemplate = selectedAssemblyTemplate,
                 .Subfolder = selectedSubfolder,
                 .AssemblyAction = assemblyAction,
                 .AssemblyPath = assemblyPath
@@ -310,7 +374,8 @@ Sub Main()
     ' Create assembly if needed
     Dim asmDoc As AssemblyDocument = Nothing
     If assemblyAction = "CREATE" Then
-        asmDoc = MakeComponentsLib.CreateAssembly(app, "")
+        Dim assemblyTemplatePath As String = MakeComponentsLib.FindAssemblyTemplate(app, selectedAssemblyTemplate)
+        asmDoc = MakeComponentsLib.CreateAssembly(app, assemblyTemplatePath)
     ElseIf assemblyAction = "UPDATE" AndAlso Not String.IsNullOrEmpty(assemblyPath) Then
         Try
             asmDoc = CType(app.Documents.Open(assemblyPath, True), AssemblyDocument)
@@ -481,6 +546,7 @@ Sub Main()
     Dim settingsToSave As New MakeComponentsLib.GeneralSettings()
     settingsToSave.ProjectName = projectName
     settingsToSave.Template = selectedTemplate
+    settingsToSave.AssemblyTemplate = selectedAssemblyTemplate
     settingsToSave.Subfolder = selectedSubfolder
     settingsToSave.AssemblyAction = assemblyAction
     settingsToSave.AssemblyPath = If(Not String.IsNullOrEmpty(actualAssemblyPath), actualAssemblyPath, assemblyPath)
@@ -579,9 +645,13 @@ Function ShowMainDialog(app As Inventor.Application, _
                         materials As List(Of String), _
                         vaultConnected As Boolean, _
                         templates As List(Of String), _
+                        defaultTemplateName As String, _
+                        asmTemplates As List(Of String), _
+                        defaultAsmTemplateName As String, _
                         masterPath As String, _
                         workspaceRoot As String, _
                         ByRef selectedTemplate As String, _
+                        ByRef selectedAssemblyTemplate As String, _
                         ByRef selectedSubfolder As String, _
                         ByRef projectName As String, _
                         ByRef assemblyAction As String, _
@@ -593,7 +663,7 @@ Function ShowMainDialog(app As Inventor.Application, _
     Dim frm As New System.Windows.Forms.Form()
     frm.Text = "Loo komponendid"
     frm.Width = 950
-    frm.Height = 650
+    frm.Height = 680
     frm.StartPosition = FormStartPosition.CenterScreen
     frm.FormBorderStyle = FormBorderStyle.Sizable
     frm.MinimizeBox = True
@@ -636,7 +706,14 @@ Function ShowMainDialog(app As Inventor.Application, _
     For Each t As String In templates
         cboTemplate.Items.Add(t)
     Next
-    cboTemplate.SelectedIndex = 0
+    Dim templateSelIdx As Integer = 0
+    For ti As Integer = 0 To cboTemplate.Items.Count - 1
+        If String.Equals(cboTemplate.Items(ti).ToString(), selectedTemplate, StringComparison.OrdinalIgnoreCase) Then
+            templateSelIdx = ti
+            Exit For
+        End If
+    Next
+    cboTemplate.SelectedIndex = templateSelIdx
     frm.Controls.Add(cboTemplate)
     
     ' Subfolder (output folder)
@@ -726,12 +803,6 @@ Function ShowMainDialog(app As Inventor.Application, _
     txtAsmPath.Enabled = (assemblyAction = "CREATE" OrElse assemblyAction = "UPDATE")
     frm.Controls.Add(txtAsmPath)
     
-    AddHandler cboAssembly.SelectedIndexChanged, Sub(s, e)
-        Dim enableBrowse As Boolean = (cboAssembly.SelectedIndex = 1 OrElse cboAssembly.SelectedIndex = 2)
-        btnBrowseAsm.Enabled = enableBrowse
-        txtAsmPath.Enabled = enableBrowse
-    End Sub
-    
     AddHandler btnBrowseAsm.Click, Sub(s, e)
         If cboAssembly.SelectedIndex = 1 Then
             ' CREATE - use FolderBrowserDialog
@@ -761,6 +832,43 @@ Function ShowMainDialog(app As Inventor.Application, _
                 txtAsmPath.Text = ofd.FileName
             End If
         End If
+    End Sub
+    
+    currentY += 30
+    
+    ' Assembly template (only used when creating a new assembly)
+    Dim lblAsmTemplate As New System.Windows.Forms.Label()
+    lblAsmTemplate.Text = "Koostu šabloon:"
+    lblAsmTemplate.Left = 10
+    lblAsmTemplate.Top = currentY + 3
+    lblAsmTemplate.Width = 95
+    frm.Controls.Add(lblAsmTemplate)
+    
+    Dim cboAsmTemplate As New System.Windows.Forms.ComboBox()
+    cboAsmTemplate.Name = "cboAsmTemplate"
+    cboAsmTemplate.Left = 110
+    cboAsmTemplate.Top = currentY
+    cboAsmTemplate.Width = 280
+    cboAsmTemplate.DropDownStyle = ComboBoxStyle.DropDownList
+    For Each at As String In asmTemplates
+        cboAsmTemplate.Items.Add(at)
+    Next
+    Dim asmTplSelIdx As Integer = 0
+    For ai As Integer = 0 To cboAsmTemplate.Items.Count - 1
+        If String.Equals(cboAsmTemplate.Items(ai).ToString(), selectedAssemblyTemplate, StringComparison.OrdinalIgnoreCase) Then
+            asmTplSelIdx = ai
+            Exit For
+        End If
+    Next
+    cboAsmTemplate.SelectedIndex = asmTplSelIdx
+    cboAsmTemplate.Enabled = (assemblyAction = "CREATE")
+    frm.Controls.Add(cboAsmTemplate)
+    
+    AddHandler cboAssembly.SelectedIndexChanged, Sub(s, e)
+        Dim enableBrowse As Boolean = (cboAssembly.SelectedIndex = 1 OrElse cboAssembly.SelectedIndex = 2)
+        btnBrowseAsm.Enabled = enableBrowse
+        txtAsmPath.Enabled = enableBrowse
+        cboAsmTemplate.Enabled = (cboAssembly.SelectedIndex = 1)
     End Sub
     
     currentY += 35
@@ -1056,7 +1164,8 @@ Function ShowMainDialog(app As Inventor.Application, _
     If result = DialogResult.OK OrElse result = DialogResult.Retry Then
         projectName = txtProject.Text
         ' selectedScheme not used - Vault handles numbering on save
-        selectedTemplate = If(cboTemplate.SelectedItem IsNot Nothing, cboTemplate.SelectedItem.ToString(), "Part.ipt")
+        selectedTemplate = If(cboTemplate.SelectedItem IsNot Nothing, cboTemplate.SelectedItem.ToString(), defaultTemplateName)
+        selectedAssemblyTemplate = If(cboAsmTemplate.SelectedItem IsNot Nothing, cboAsmTemplate.SelectedItem.ToString(), defaultAsmTemplateName)
         selectedSubfolder = txtSubfolder.Text
         
         Select Case cboAssembly.SelectedIndex
