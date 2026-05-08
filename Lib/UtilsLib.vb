@@ -861,5 +861,61 @@ Public Module UtilsLib
         Return ""
     End Function
 
+    ' ============================================================================
+    ' SECTION 9: Name Sanitization
+    ' ============================================================================
+    
+    ''' <summary>
+    ''' Sanitize a name for use as an Inventor parameter name.
+    ''' Inventor parameter names cannot contain parentheses, brackets, or other special characters
+    ''' that would be interpreted as operators or function calls in expressions.
+    ''' Also ensures the name starts with a letter (not a digit).
+    ''' </summary>
+    Public Function SanitizeParameterName(name As String) As String
+        If String.IsNullOrEmpty(name) Then Return name
+        
+        Dim result As String = name
+        
+        ' Replace parentheses with underscores (common in part numbers like "(000133)")
+        result = result.Replace("(", "_")
+        result = result.Replace(")", "_")
+        
+        ' Replace other problematic characters
+        result = result.Replace("[", "_")
+        result = result.Replace("]", "_")
+        result = result.Replace("{", "_")
+        result = result.Replace("}", "_")
+        result = result.Replace("+", "_")
+        result = result.Replace("-", "_")
+        result = result.Replace("*", "_")
+        result = result.Replace("/", "_")
+        result = result.Replace("^", "_")
+        result = result.Replace("=", "_")
+        result = result.Replace("<", "_")
+        result = result.Replace(">", "_")
+        result = result.Replace(",", "_")
+        result = result.Replace(";", "_")
+        result = result.Replace(":", "_")
+        result = result.Replace(".", "_")
+        
+        ' Replace spaces with underscores
+        result = result.Replace(" ", "_")
+        
+        ' Remove consecutive underscores
+        While result.Contains("__")
+            result = result.Replace("__", "_")
+        End While
+        
+        ' Remove leading/trailing underscores
+        result = result.Trim("_"c)
+        
+        ' Ensure it starts with a letter (parameter names can't start with digits)
+        If result.Length > 0 AndAlso Char.IsDigit(result(0)) Then
+            result = "P_" & result
+        End If
+        
+        Return result
+    End Function
+
 End Module
 

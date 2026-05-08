@@ -900,24 +900,35 @@ Sub CreatePattern(app As Inventor.Application, _
         End If
     End If
     
-    ' Create pattern using library
-    Dim logs As New System.Collections.Generic.List(Of String)
-    Dim success As Boolean = CenterPatternLib.CreateCenterPattern( _
-        app, asmDoc, iLogicAuto, seedOcc, _
-        startGeometry, endGeometry, _
-        maxSpacingMm, mode, includeEnds, baseName, logs)
+    ' Start transaction for atomic undo
+    Dim trans As Transaction = app.TransactionManager.StartTransaction(asmDoc, "Loo muster: " & baseName)
     
-    ' Output logs
-    For Each logMsg As String In logs
-        Logger.Info(logMsg)
-    Next
-    
-    If success Then
-        Logger.Info("Kordused keskelt: Muster '" & baseName & "' loodud edukalt")
-    Else
-        Logger.Error("Kordused keskelt: Mustri loomine ebaõnnestus")
-        MessageBox.Show("Mustri loomine ebaõnnestus. Vaata logi akent.", "Kordused keskelt")
-    End If
+    Try
+        ' Create pattern using library
+        Dim logs As New System.Collections.Generic.List(Of String)
+        Dim success As Boolean = CenterPatternLib.CreateCenterPattern( _
+            app, asmDoc, iLogicAuto, seedOcc, _
+            startGeometry, endGeometry, _
+            maxSpacingMm, mode, includeEnds, baseName, logs)
+        
+        ' Output logs
+        For Each logMsg As String In logs
+            Logger.Info(logMsg)
+        Next
+        
+        If success Then
+            trans.End()
+            Logger.Info("Kordused keskelt: Muster '" & baseName & "' loodud edukalt")
+        Else
+            trans.Abort()
+            Logger.Error("Kordused keskelt: Mustri loomine ebaõnnestus")
+            MessageBox.Show("Mustri loomine ebaõnnestus. Vaata logi akent.", "Kordused keskelt")
+        End If
+    Catch ex As Exception
+        trans.Abort()
+        Logger.Error("Kordused keskelt: Viga mustri loomisel - " & ex.Message)
+        MessageBox.Show("Viga mustri loomisel: " & ex.Message, "Kordused keskelt")
+    End Try
 End Sub
 
 Sub CreatePatternEx(app As Inventor.Application, _
@@ -937,28 +948,39 @@ Sub CreatePatternEx(app As Inventor.Application, _
                     endAlignment As String, _
                     allowZeroInstances As Boolean)
     
-    ' Create extended pattern using library
-    ' maxSpacingInput can be a number, parameter name, or formula - library handles parsing
-    Dim logs As New System.Collections.Generic.List(Of String)
-    Dim success As Boolean = CenterPatternLib.CreateCenterPatternEx( _
-        app, asmDoc, iLogicAuto, seedOcc, _
-        startGeometry, endGeometry, explicitAxis, _
-        maxSpacingInput, mode, includeEnds, baseName, _
-        startOffsetMm, endOffsetMm, _
-        startAlignment, endAlignment, _
-        allowZeroInstances, logs)
+    ' Start transaction for atomic undo
+    Dim trans As Transaction = app.TransactionManager.StartTransaction(asmDoc, "Loo muster: " & baseName)
     
-    ' Output logs
-    For Each logMsg As String In logs
-        Logger.Info(logMsg)
-    Next
-    
-    If success Then
-        Logger.Info("Kordused keskelt: Muster '" & baseName & "' loodud edukalt")
-    Else
-        Logger.Error("Kordused keskelt: Mustri loomine ebaõnnestus")
-        MessageBox.Show("Mustri loomine ebaõnnestus. Vaata logi akent.", "Kordused keskelt")
-    End If
+    Try
+        ' Create extended pattern using library
+        ' maxSpacingInput can be a number, parameter name, or formula - library handles parsing
+        Dim logs As New System.Collections.Generic.List(Of String)
+        Dim success As Boolean = CenterPatternLib.CreateCenterPatternEx( _
+            app, asmDoc, iLogicAuto, seedOcc, _
+            startGeometry, endGeometry, explicitAxis, _
+            maxSpacingInput, mode, includeEnds, baseName, _
+            startOffsetMm, endOffsetMm, _
+            startAlignment, endAlignment, _
+            allowZeroInstances, logs)
+        
+        ' Output logs
+        For Each logMsg As String In logs
+            Logger.Info(logMsg)
+        Next
+        
+        If success Then
+            trans.End()
+            Logger.Info("Kordused keskelt: Muster '" & baseName & "' loodud edukalt")
+        Else
+            trans.Abort()
+            Logger.Error("Kordused keskelt: Mustri loomine ebaõnnestus")
+            MessageBox.Show("Mustri loomine ebaõnnestus. Vaata logi akent.", "Kordused keskelt")
+        End If
+    Catch ex As Exception
+        trans.Abort()
+        Logger.Error("Kordused keskelt: Viga mustri loomisel - " & ex.Message)
+        MessageBox.Show("Viga mustri loomisel: " & ex.Message, "Kordused keskelt")
+    End Try
 End Sub
 
 Sub RebuildPattern(app As Inventor.Application, _
@@ -978,45 +1000,71 @@ Sub RebuildPattern(app As Inventor.Application, _
                    endAlignment As String, _
                    allowZeroInstances As Boolean)
     
-    Dim logs As New System.Collections.Generic.List(Of String)
-    Dim success As Boolean = CenterPatternLib.RebuildCenterPattern( _
-        app, asmDoc, iLogicAuto, seedOcc, _
-        startGeometry, endGeometry, explicitAxis, _
-        maxSpacingInput, mode, includeEnds, baseName, _
-        startOffsetMm, endOffsetMm, _
-        startAlignment, endAlignment, _
-        allowZeroInstances, logs)
+    ' Start transaction for atomic undo
+    Dim trans As Transaction = app.TransactionManager.StartTransaction(asmDoc, "Uuenda mustrit: " & baseName)
     
-    ' Output logs
-    For Each logMsg As String In logs
-        Logger.Info(logMsg)
-    Next
-    
-    If success Then
-        Logger.Info("Kordused keskelt: Muster '" & baseName & "' uuendatud edukalt")
-    Else
-        Logger.Error("Kordused keskelt: Mustri uuendamine ebaõnnestus")
-        MessageBox.Show("Mustri uuendamine ebaõnnestus. Vaata logi akent.", "Kordused keskelt")
-    End If
+    Try
+        Dim logs As New System.Collections.Generic.List(Of String)
+        Dim success As Boolean = CenterPatternLib.RebuildCenterPattern( _
+            app, asmDoc, iLogicAuto, seedOcc, _
+            startGeometry, endGeometry, explicitAxis, _
+            maxSpacingInput, mode, includeEnds, baseName, _
+            startOffsetMm, endOffsetMm, _
+            startAlignment, endAlignment, _
+            allowZeroInstances, logs)
+        
+        ' Output logs
+        For Each logMsg As String In logs
+            Logger.Info(logMsg)
+        Next
+        
+        If success Then
+            trans.End()
+            Logger.Info("Kordused keskelt: Muster '" & baseName & "' uuendatud edukalt")
+        Else
+            trans.Abort()
+            Logger.Error("Kordused keskelt: Mustri uuendamine ebaõnnestus")
+            MessageBox.Show("Mustri uuendamine ebaõnnestus. Vaata logi akent.", "Kordused keskelt")
+        End If
+    Catch ex As Exception
+        trans.Abort()
+        Logger.Error("Kordused keskelt: Viga mustri uuendamisel - " & ex.Message)
+        MessageBox.Show("Viga mustri uuendamisel: " & ex.Message, "Kordused keskelt")
+    End Try
 End Sub
 
 Sub DeletePattern(app As Inventor.Application, asmDoc As AssemblyDocument, _
                   iLogicAuto As Object, seedOcc As ComponentOccurrence)
-    Dim logs As New System.Collections.Generic.List(Of String)
-    Dim success As Boolean = CenterPatternLib.DeleteCenterPattern(asmDoc, iLogicAuto, seedOcc, keepWorkFeatures:=False, logs:=logs)
     
-    ' Output logs
-    For Each logMsg As String In logs
-        Logger.Info(logMsg)
-    Next
+    ' Get base name for transaction description
+    Dim baseName As String = ExtractBaseName(seedOcc.Name)
     
-    If success Then
-        Logger.Info("Kordused keskelt: Muster kustutatud edukalt")
-        MessageBox.Show("Muster kustutatud edukalt.", "Kordused keskelt")
-    Else
-        Logger.Error("Kordused keskelt: Mustri kustutamine ebaõnnestus")
-        MessageBox.Show("Mustri kustutamine ebaõnnestus. Vaata logi akent.", "Kordused keskelt")
-    End If
+    ' Start transaction for atomic undo
+    Dim trans As Transaction = app.TransactionManager.StartTransaction(asmDoc, "Kustuta muster: " & baseName)
+    
+    Try
+        Dim logs As New System.Collections.Generic.List(Of String)
+        Dim success As Boolean = CenterPatternLib.DeleteCenterPattern(asmDoc, iLogicAuto, seedOcc, keepWorkFeatures:=False, logs:=logs)
+        
+        ' Output logs
+        For Each logMsg As String In logs
+            Logger.Info(logMsg)
+        Next
+        
+        If success Then
+            trans.End()
+            Logger.Info("Kordused keskelt: Muster kustutatud edukalt")
+            MessageBox.Show("Muster kustutatud edukalt.", "Kordused keskelt")
+        Else
+            trans.Abort()
+            Logger.Error("Kordused keskelt: Mustri kustutamine ebaõnnestus")
+            MessageBox.Show("Mustri kustutamine ebaõnnestus. Vaata logi akent.", "Kordused keskelt")
+        End If
+    Catch ex As Exception
+        trans.Abort()
+        Logger.Error("Kordused keskelt: Viga mustri kustutamisel - " & ex.Message)
+        MessageBox.Show("Viga mustri kustutamisel: " & ex.Message, "Kordused keskelt")
+    End Try
 End Sub
 
 ' ============================================================================
