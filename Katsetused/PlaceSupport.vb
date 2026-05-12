@@ -18,6 +18,7 @@
 ' Ref: https://help.autodesk.com/view/INVNTOR/2026/ENU/?guid=110f3019-404c-4fc4-8b5d-7a3143f129da
 ' ============================================================================
 
+AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/SupportPlacementLib.vb"
 

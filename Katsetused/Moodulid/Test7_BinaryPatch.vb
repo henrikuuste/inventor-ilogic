@@ -14,6 +14,7 @@
 ' RUN: Open a drawing file (.idw), then run this rule
 ' NOTE: The drawing will be CLOSED, patched, and reopened
 
+AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/BinaryReferenceUpdateLib.vb"
 

@@ -12,6 +12,7 @@
 '
 ' RUN: Open any document (or none), then run this rule
 
+AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 
 Sub Main()

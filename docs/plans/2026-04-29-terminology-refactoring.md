@@ -1,5 +1,7 @@
 # Terminology Refactoring Plan
 
+**Last updated**: 2026-05-12
+
 ## Overview
 
 Refactor the codebase to use the correct domain terminology established in `docs/UBIQUITOUS_LANGUAGE.md`. The key change is that what we previously called "Alusmoodul" (parametric design) is now "Aluselement", and "Alusmoodul" now refers to module assembly definitions.
@@ -12,27 +14,51 @@ The codebase currently uses terminology that conflates two distinct concepts:
 
 This causes confusion because the true **Alusmoodul** (module assembly) and **Moodul** (final assembly product) concepts have no representation in the current code.
 
-### Key Discoveries
+### Good News: Centralized Constants
 
-1. **`Lib/ModuleReleaseLib.vb`** - Main library using old terminology throughout (2145 lines)
-2. **`Lib/ExcelReaderLib.vb`** - Uses "MooduliNimi", "ReleaseConfig" for element releases
-3. **`Moodulid/` folder** - Contains element release scripts, should be `Elemendid/`
-4. **`Moodulid/README.md`** - Documentation using old terminology
-5. **`AGENTS.md`** - Project conventions with old folder structure
+The codebase has been improved with centralized constants that make refactoring easier:
+
+1. **`Lib/BaseModuleLayoutLib.vb`** - Folder path constants centralized here
+   - Note in file header: "when terminology/folder naming is refactored (module -> element), update the constants in this file"
+   - Changing `SEG_BASE_MODULES` propagates to all callers
+
+2. **`Lib/StringsLib.vb`** - Estonian UI strings centralized here
+   - All user-facing module/element text in one place
 
 ### Files Requiring Changes
 
-| File | Change Type | Priority |
-|------|-------------|----------|
-| `Lib/ModuleReleaseLib.vb` | Rename classes, variables, comments | HIGH |
-| `Lib/ExcelReaderLib.vb` | Rename ReleaseConfig, column names | HIGH |
-| `Moodulid/Loo moodulid.vb` | Rename to element release, update calls | HIGH |
-| `Moodulid/Loo alusmoodul.vb` | Rename to base element creation | HIGH |
-| `Moodulid/README.md` | Update all terminology | HIGH |
-| `AGENTS.md` | Update folder structure documentation | HIGH |
-| `Katsetused/Moodulid/*.vb` | Update test file terminology | MEDIUM |
-| `docs/plans/2026-04-26-module-release-cycle.md` | Update plan terminology | LOW |
-| `docs/research/*.md` | Update research docs | LOW |
+| File | Change Type | Priority | Notes |
+|------|-------------|----------|-------|
+| **Lib/BaseModuleLayoutLib.vb** | Update constants, rename functions | HIGH | Central location - changes propagate |
+| **Lib/StringsLib.vb** | Update UI string constants | HIGH | Central location - changes propagate |
+| `Lib/ModuleReleaseLib.vb` | Rename module, classes, variables | HIGH | 2145 lines |
+| `Lib/ExcelReaderLib.vb` | Rename ReleaseConfig, column names | HIGH | |
+| `Moodulid/Loo moodulid.vb` | Rename to element release, update calls | HIGH | |
+| `Moodulid/Loo alusmoodul.vb` | Rename to base element creation | HIGH | |
+| `Loo komponendid.vb` | Update AddVbFile paths | MEDIUM | Uses BaseModuleLayoutLib |
+| `Koost/Sorteeri detailid.vb` | Update AddVbFile paths | MEDIUM | Uses BaseModuleLayoutLib |
+| `Lib/MaterialRoutingLib.vb` | Verify uses BaseModuleLayoutLib | LOW | Should auto-update via constants |
+| `Moodulid/README.md` | Update all terminology | HIGH | |
+| `AGENTS.md` | Update folder structure documentation | HIGH | |
+| `Katsetused/Moodulid/*.vb` | Update 16 test files | MEDIUM | |
+| `docs/plans/2026-04-26-module-release-cycle.md` | Add deprecation note | LOW | |
+| `docs/research/*.md` | Add terminology note to 8 files | LOW | |
+
+### New Files Since Original Plan
+
+| File | Status | Notes |
+|------|--------|-------|
+| `Lib/BaseModuleLayoutLib.vb` | NEW | Centralizes folder constants - key refactoring target |
+| `Lib/StringsLib.vb` | NEW | Centralizes UI strings - key refactoring target |
+| `Lib/UILib.vb` | NEW | No terminology issues |
+| `Lib/MaterialRoutingLib.vb` | NEW | Uses BaseModuleLayoutLib constants |
+| `Komponendid/Pinnalaotuse vaated.vb` | NEW | New script folder |
+| `Test11_DrawingTitleBlockUpdate.vb` | NEW | Test file |
+| `Test11_UserInfo.vb` | NEW | Test file |
+| `Test12_VaultLoginLogout.vb` | NEW | Test file |
+| `Test12_VerifyPartNumber.vb` | NEW | Test file |
+| `Test13_DiagnoseTitleBlock.vb` | NEW | Test file |
+| `Test14_CheckDrawingViewPN.vb` | NEW | Test file |
 
 ## Desired End State
 
@@ -47,11 +73,31 @@ Moodulid/                        → Elemendid/  (scripts for element release)
 Katsetused/Moodulid/             → Katsetused/Elemendid/
 ```
 
+### Constant Changes in BaseModuleLayoutLib.vb
+
+```vb
+' CURRENT
+Public Const SEG_BASE_MODULES As String = "Alusmoodulid"
+
+' NEW
+Public Const SEG_BASE_ELEMENTS As String = "Aluselemendid"
+```
+
+### String Changes in StringsLib.vb
+
+| Current Constant | Current Value | New Value |
+|------------------|---------------|-----------|
+| `TITLE_MODULE_RELEASE` | "Moodulite väljastamine" | "Elementide väljastamine" |
+| `BTN_ALL_MODULES` | "Kõik moodulid" | "Kõik elemendid" |
+| `BTN_FIRST_MODULE` | "Esimene moodul" | "Esimene element" |
+| `TITLE_CREATE_BASE_MODULE` | "Loo alusmoodul" | "Loo aluselement" |
+
 ### Class/Type Renaming
 
 | Current Name | New Name | Location |
 |--------------|----------|----------|
 | `ModuleReleaseLib` | `ElementReleaseLib` | `Lib/ModuleReleaseLib.vb` → `Lib/ElementReleaseLib.vb` |
+| `BaseModuleLayoutLib` | `BaseElementLayoutLib` | `Lib/BaseModuleLayoutLib.vb` → `Lib/BaseElementLayoutLib.vb` |
 | `ReleaseContext` | `ElementReleaseContext` | `Lib/ElementReleaseLib.vb` |
 | `VariantMatrix` | `ElementMatrix` | `Lib/ElementReleaseLib.vb` |
 | `ReleaseConfig` | `ElementConfig` | `Lib/ExcelReaderLib.vb` |
@@ -70,6 +116,7 @@ Katsetused/Moodulid/             → Katsetused/Elemendid/
 | `moduleName` | `elementName` |
 | `moduleFolder` | `elementFolder` |
 | `ModuleName` | `ElementName` |
+| `moduleRoot` | `elementRoot` |
 | `variantName` | `releasedElementName` |
 | `variant` (when meaning released element) | `releasedElement` |
 
@@ -81,43 +128,60 @@ Katsetused/Moodulid/             → Katsetused/Elemendid/
 
 ## Implementation Approach
 
-Refactor in phases, starting with documentation and libraries, then scripts. Each phase is independently testable.
+Refactor in phases, starting with centralized constants, then libraries, then scripts. Each phase is independently testable.
 
 ---
 
-## Phase 1: Update Documentation
+## Phase 1: Update Centralized Constants
 
 ### Overview
-Update all documentation files to use correct terminology. This establishes the reference for code changes.
+Update the centralized constant libraries first. This propagates changes to all callers automatically.
 
 ### Changes Required
 
-#### 1. AGENTS.md
-**File**: `AGENTS.md`
+#### 1. BaseModuleLayoutLib.vb
+**File**: `Lib/BaseModuleLayoutLib.vb`
 **Changes**:
-- Update folder structure diagram (lines 18-32)
-- Replace "Alusmoodulid" → "Aluselemendid" for parametric designs
-- Add note about terminology transition
-- Keep both old and new folder names documented during transition
+- Rename file to `Lib/BaseElementLayoutLib.vb`
+- Rename module: `BaseModuleLayoutLib` → `BaseElementLayoutLib`
+- Update constant: `SEG_BASE_MODULES` → `SEG_BASE_ELEMENTS` = "Aluselemendid"
+- Update function names:
+  - `DetectModuleRootFromMasterPath` → `DetectElementRootFromMasterPath`
+  - `GetModuleName` → `GetElementName`
+  - `EnumerateExpectedFolders` (keep name, update comments)
+- Update variable names: `moduleRoot` → `elementRoot`, `moduleName` → `elementName`
+- Update comments throughout
 
-#### 2. Moodulid/README.md
-**File**: `Moodulid/README.md`
+#### 2. StringsLib.vb
+**File**: `Lib/StringsLib.vb`
 **Changes**:
-- Rename to describe element release (will be moved with folder)
-- Replace all "moodul" → "element" references
-- Update Excel format documentation
-- Update folder structure diagram
+- Update section comment: "MODULE RELEASE" → "ELEMENT RELEASE"
+- Update constants:
+  ```vb
+  ' CURRENT
+  Public Const TITLE_MODULE_RELEASE As String = "Moodulite väljastamine"
+  Public Const BTN_ALL_MODULES As String = "Kõik moodulid"
+  Public Const BTN_FIRST_MODULE As String = "Esimene moodul"
+  Public Const TITLE_CREATE_BASE_MODULE As String = "Loo alusmoodul"
+  
+  ' NEW
+  Public Const TITLE_ELEMENT_RELEASE As String = "Elementide väljastamine"
+  Public Const BTN_ALL_ELEMENTS As String = "Kõik elemendid"
+  Public Const BTN_FIRST_ELEMENT As String = "Esimene element"
+  Public Const TITLE_CREATE_BASE_ELEMENT As String = "Loo aluselement"
+  ```
 
 ### Success Criteria
 
 #### Verification:
-- [ ] AGENTS.md terminology matches UBIQUITOUS_LANGUAGE.md
-- [ ] README.md uses correct element terminology
-- [ ] No references to "moodul" when meaning "element" in docs
+- [ ] `Lib/BaseElementLayoutLib.vb` exists with renamed module and constants
+- [ ] `Lib/StringsLib.vb` has updated element terminology
+- [ ] No compile errors in libraries
+- [ ] All callers of old constants identified and updated
 
 ---
 
-## Phase 2: Rename Library Module
+## Phase 2: Update Main Release Library
 
 ### Overview
 Rename `ModuleReleaseLib` to `ElementReleaseLib` and update all internal terminology.
@@ -150,10 +214,21 @@ Public Class ElementReleaseContext
     Public ElementMatrix As ElementMatrix
 ```
 
-#### 4. Update comments throughout
+#### 4. Update enum values
+```vb
+' CURRENT
+Public Enum ReleaseMode
+    FullModule = 1
+
+' NEW
+Public Enum ReleaseMode
+    FullElement = 1
+```
+
+#### 5. Update comments throughout
 Replace all comments referencing "module" (when meaning element) with "element".
 
-#### 5. Update ExcelReaderLib.vb
+#### 6. Update ExcelReaderLib.vb
 **File**: `Lib/ExcelReaderLib.vb`
 **Changes**:
 - Rename `ReleaseConfig` → `ElementConfig`
@@ -171,7 +246,41 @@ Replace all comments referencing "module" (when meaning element) with "element".
 
 ---
 
-## Phase 3: Rename Script Folder and Files
+## Phase 3: Update Caller Scripts
+
+### Overview
+Update all scripts that use the renamed libraries.
+
+### Changes Required
+
+#### 1. Scripts using BaseModuleLayoutLib → BaseElementLayoutLib
+
+| Script | AddVbFile Change |
+|--------|------------------|
+| `Moodulid/Loo alusmoodul.vb` | `Lib/BaseModuleLayoutLib.vb` → `Lib/BaseElementLayoutLib.vb` |
+| `Loo komponendid.vb` | Same |
+| `Koost/Sorteeri detailid.vb` | Same |
+
+#### 2. Scripts using ModuleReleaseLib → ElementReleaseLib
+
+| Script | AddVbFile Change |
+|--------|------------------|
+| `Moodulid/Loo moodulid.vb` | `Lib/ModuleReleaseLib.vb` → `Lib/ElementReleaseLib.vb` |
+
+#### 3. Update MaterialRoutingLib.vb
+**File**: `Lib/MaterialRoutingLib.vb`
+**Changes**:
+- Update references: `BaseModuleLayoutLib.SEG_*` → `BaseElementLayoutLib.SEG_*`
+
+### Success Criteria
+
+#### Verification:
+- [ ] All scripts compile without errors
+- [ ] All AddVbFile paths updated
+
+---
+
+## Phase 4: Rename Script Folder and Files
 
 ### Overview
 Rename the `Moodulid/` script folder to `Elemendid/` and update script names.
@@ -190,10 +299,8 @@ Rename the `Moodulid/` script folder to `Elemendid/` and update script names.
 
 #### 3. Update script contents
 Each script needs:
-- Update `AddVbFile` paths (`Lib/ModuleReleaseLib.vb` → `Lib/ElementReleaseLib.vb`)
-- Update class references
 - Update log messages
-- Update user-facing Estonian text
+- Update user-facing Estonian text (now via StringsLib constants)
 
 ### Success Criteria
 
@@ -204,7 +311,7 @@ Each script needs:
 
 ---
 
-## Phase 4: Update Test Scripts
+## Phase 5: Update Test Scripts
 
 ### Overview
 Rename test folder and update test scripts to use new terminology.
@@ -215,7 +322,7 @@ Rename test folder and update test scripts to use new terminology.
 **From**: `Katsetused/Moodulid/`
 **To**: `Katsetused/Elemendid/`
 
-#### 2. Update test scripts
+#### 2. Update test scripts (16 files)
 Update all `AddVbFile` references and terminology in:
 - `Test1_Fingerprint.vb`
 - `Test2_BreakLink.vb`
@@ -227,38 +334,55 @@ Update all `AddVbFile` references and terminology in:
 - `Test8_FileDescriptorReplaceReference.vb`
 - `Test9_VaultSaveLocation.vb`
 - `Test10_DisconnectSaveCheckin.vb`
-- `Test11_*.vb` through `Test14_*.vb`
+- `Test11_DrawingTitleBlockUpdate.vb`
+- `Test11_UserInfo.vb`
+- `Test12_VaultLoginLogout.vb`
+- `Test12_VerifyPartNumber.vb`
+- `Test13_DiagnoseTitleBlock.vb`
+- `Test14_CheckDrawingViewPN.vb`
 
 ### Success Criteria
 
 #### Verification:
-- [ ] All test scripts compile
+- [ ] All 16 test scripts compile
 - [ ] Test scripts reference correct library paths
 
 ---
 
-## Phase 5: Update Historical Documentation
+## Phase 6: Update Documentation
 
 ### Overview
-Update research documents and old plans for terminology consistency.
+Update all documentation files to use correct terminology.
 
 ### Changes Required
 
-#### 1. Research documents
-**Files**: `docs/research/*.md`
-- Add note at top indicating historical terminology
-- Optionally update inline references
+#### 1. AGENTS.md
+**File**: `AGENTS.md`
+**Changes**:
+- Update folder structure diagram (lines 18-32)
+- Replace "Alusmoodulid" → "Aluselemendid" for parametric designs
+- Add note about terminology transition
+- Keep both old and new folder names documented during transition
 
-#### 2. Old plan
-**File**: `docs/plans/2026-04-26-module-release-cycle.md`
-- Add deprecation note at top
+#### 2. Moodulid/README.md → Elemendid/README.md
+**File**: `Elemendid/README.md` (after folder rename)
+**Changes**:
+- Update title and description
+- Replace all "moodul" → "element" references
+- Update Excel format documentation
+- Update folder structure diagram
+
+#### 3. Historical Documentation
+**Files**: `docs/research/*.md` (8 files), `docs/plans/2026-04-26-module-release-cycle.md`
+- Add deprecation/terminology note at top
 - Reference new terminology document
 
 ### Success Criteria
 
 #### Verification:
+- [ ] AGENTS.md terminology matches UBIQUITOUS_LANGUAGE.md
+- [ ] README.md uses correct element terminology
 - [ ] Historical docs marked with terminology note
-- [ ] New plans reference UBIQUITOUS_LANGUAGE.md
 
 ---
 
@@ -266,6 +390,7 @@ Update research documents and old plans for terminology consistency.
 
 ### Unit Tests
 - Verify ElementReleaseLib compiles without errors
+- Verify BaseElementLayoutLib compiles without errors
 - Verify ExcelReaderLib reads both old and new column names
 
 ### Integration Tests
@@ -276,7 +401,7 @@ Update research documents and old plans for terminology consistency.
 ### Manual Testing Steps
 1. Open existing base element assembly
 2. Run "Loo elemendid" script
-3. Verify dialog shows correct Estonian text
+3. Verify dialog shows correct Estonian text ("Elementide väljastamine")
 4. Verify released elements created in correct folders
 5. Verify manifest JSON uses new terminology
 
@@ -301,14 +426,16 @@ During transition, the code should:
 ## Migration Sequence
 
 ```
-1. Update UBIQUITOUS_LANGUAGE.md    ✓ (completed)
-2. Update AGENTS.md                  
-3. Rename Lib/ModuleReleaseLib.vb → Lib/ElementReleaseLib.vb
-4. Update ExcelReaderLib.vb
-5. Rename Moodulid/ → Elemendid/
-6. Update all scripts with new AddVbFile paths
-7. Rename Katsetused/Moodulid/ → Katsetused/Elemendid/
-8. Update historical docs
+1. Update UBIQUITOUS_LANGUAGE.md              ✓ (completed 2026-04-29)
+2. Update BaseModuleLayoutLib.vb constants    
+3. Update StringsLib.vb UI strings            
+4. Rename Lib/ModuleReleaseLib.vb → Lib/ElementReleaseLib.vb
+5. Update ExcelReaderLib.vb
+6. Update caller scripts (AddVbFile paths)
+7. Rename Moodulid/ → Elemendid/
+8. Rename Katsetused/Moodulid/ → Katsetused/Elemendid/
+9. Update AGENTS.md
+10. Update historical docs
 ```
 
 ## References
@@ -316,3 +443,4 @@ During transition, the code should:
 - Domain terminology: `docs/UBIQUITOUS_LANGUAGE.md`
 - Project conventions: `AGENTS.md`
 - Current element release plan: `docs/plans/2026-04-26-module-release-cycle.md`
+- UI library plan: `docs/plans/2026-05-08-unified-ui-library.md`

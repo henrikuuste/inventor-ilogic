@@ -17,6 +17,7 @@
 '
 ' RUN: Open a drawing file (.idw) that references a part, then run this rule
 
+AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 
 Sub Main()

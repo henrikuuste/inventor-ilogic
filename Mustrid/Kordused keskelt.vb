@@ -28,6 +28,7 @@
 ' ============================================================================
 
 AddVbFile "Lib/RuntimeLib.vb"
+AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/GeoLib.vb"
 AddVbFile "Lib/WorkFeatureLib.vb"

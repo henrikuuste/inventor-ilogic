@@ -13,6 +13,7 @@
 ' Note: Creates temporary files in the same folder as the part.
 ' ============================================================================
 
+AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/FileSearchLib.vb"
 AddVbFile "Lib/UnwrapLib.vb"

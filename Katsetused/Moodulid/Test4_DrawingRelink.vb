@@ -14,6 +14,7 @@
 ' RUN: Open a drawing file (.idw), then run this rule
 ' PREP: Have a copy of the referenced model ready to test relinking
 
+AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 
 Sub Main()

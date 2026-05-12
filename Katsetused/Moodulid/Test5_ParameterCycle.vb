@@ -19,6 +19,7 @@
 '
 ' RUN: Open an ASSEMBLY with master parts and derived parts
 
+AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 
 Sub Main()

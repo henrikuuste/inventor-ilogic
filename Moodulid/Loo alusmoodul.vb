@@ -20,6 +20,7 @@ AddReference "Connectivity.InventorAddin.EdmAddin"
 
 ' Libraries
 AddVbFile "Lib/RuntimeLib.vb"
+AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/VaultNumberingLib.vb"
 AddVbFile "Lib/BaseModuleLayoutLib.vb"

@@ -11,6 +11,7 @@
 '
 ' RUN: Open any part file, then run this rule
 
+AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 
 Sub Main()

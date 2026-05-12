@@ -18,6 +18,7 @@ AddReference "Autodesk.Connectivity.WebServices"
 AddReference "Autodesk.DataManagement.Client.Framework.Vault"
 AddReference "Connectivity.Application.VaultBase"
 AddReference "Connectivity.InventorAddin.EdmAddin"
+AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/VaultNumberingLib.vb"
 

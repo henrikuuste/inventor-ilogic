@@ -23,6 +23,7 @@ AddReference "Connectivity.InventorAddin.EdmAddin"
 
 ' Libraries come after references (UtilsLib before VaultNumberingLib for Vault logging)
 AddVbFile "Lib/RuntimeLib.vb"
+AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/DocumentUpdateLib.vb"
 AddVbFile "Lib/DimensionUpdateLib.vb"

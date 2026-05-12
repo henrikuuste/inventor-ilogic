@@ -16,6 +16,7 @@
 '
 ' RUN: Open a DERIVED part file, then run this rule
 
+AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 
 Sub Main()

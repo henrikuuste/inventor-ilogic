@@ -11,6 +11,7 @@
 ' ============================================================================
 
 AddVbFile "Lib/RuntimeLib.vb"
+AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 
 Imports System.Collections.Generic
