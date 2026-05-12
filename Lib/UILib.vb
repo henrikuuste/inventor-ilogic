@@ -497,6 +497,46 @@ Public Module UILib
         Return dgv
     End Function
     
+    Public Function CreateTreeView() As System.Windows.Forms.TreeView
+        Dim tv As New System.Windows.Forms.TreeView()
+        tv.FullRowSelect = True
+        tv.HideSelection = False
+        tv.ShowLines = True
+        tv.ShowPlusMinus = True
+        tv.ShowRootLines = True
+        Return tv
+    End Function
+    
+    Public Function CreateCheckedListBox() As System.Windows.Forms.CheckedListBox
+        Dim clb As New System.Windows.Forms.CheckedListBox()
+        clb.CheckOnClick = True
+        clb.IntegralHeight = False
+        Return clb
+    End Function
+    
+    Public Function CreateProgressBar() As System.Windows.Forms.ProgressBar
+        Dim pb As New System.Windows.Forms.ProgressBar()
+        pb.Minimum = 0
+        pb.Maximum = 100
+        pb.Value = 0
+        pb.Height = 20
+        Return pb
+    End Function
+    
+    Public Function CreateRichTextBox() As System.Windows.Forms.RichTextBox
+        Dim rtb As New System.Windows.Forms.RichTextBox()
+        rtb.ReadOnly = True
+        Return rtb
+    End Function
+    
+    Public Function CreateSplitContainer(Optional vertical As Boolean = True) As System.Windows.Forms.SplitContainer
+        Dim sc As New System.Windows.Forms.SplitContainer()
+        sc.Orientation = If(vertical, System.Windows.Forms.Orientation.Vertical, System.Windows.Forms.Orientation.Horizontal)
+        sc.Dock = System.Windows.Forms.DockStyle.Fill
+        sc.SplitterWidth = 6
+        Return sc
+    End Function
+    
     ' ============================================================
     ' PICKER INTEGRATION (Non-Modal Compatible)
     ' ============================================================

@@ -158,7 +158,11 @@ Public Module MakeComponentsLib
     ' Load general settings from master document
     ' Paths (Subfolder, AssemblyPath) are converted from relative to absolute using projectRoot
     ' Supports both new relative paths and legacy absolute paths
-    Public Function LoadGeneralSettings(masterDoc As PartDocument, projectRoot As String) As GeneralSettings
+    ' Optional searchStartPath/searchBoundary: used to search for assembly by filename if stored path not found
+    Public Function LoadGeneralSettings(masterDoc As PartDocument, _
+                                       projectRoot As String, _
+                                       Optional searchStartPath As String = "", _
+                                       Optional searchBoundary As String = "") As GeneralSettings
         Dim settings As New GeneralSettings()
         
         Try
@@ -183,9 +187,21 @@ Public Module MakeComponentsLib
                     UtilsLib.LogInfo("MakeComponentsLib: Found existing assembly: " & _
                              System.IO.Path.GetFileName(settings.AssemblyPath))
                 Else
-                    UtilsLib.LogWarn("MakeComponentsLib: Stored assembly not found, resetting")
-                    settings.AssemblyPath = ""
-                    settings.AssemblyAction = "NONE"
+                    ' Fallback: search by filename if search paths provided
+                    Dim foundPath As String = ""
+                    If Not String.IsNullOrEmpty(searchStartPath) Then
+                        Dim fileName As String = System.IO.Path.GetFileName(settings.AssemblyPath)
+                        foundPath = FindAssemblyByFileName(fileName, searchStartPath, searchBoundary)
+                    End If
+                    
+                    If Not String.IsNullOrEmpty(foundPath) Then
+                        settings.AssemblyPath = foundPath
+                        UtilsLib.LogWarn("MakeComponentsLib: Assembly relocated, found at: " & foundPath)
+                    Else
+                        UtilsLib.LogWarn("MakeComponentsLib: Stored assembly not found, resetting")
+                        settings.AssemblyPath = ""
+                        settings.AssemblyAction = "NONE"
+                    End If
                 End If
             End If
             
@@ -197,6 +213,28 @@ Public Module MakeComponentsLib
         End Try
         
         Return settings
+    End Function
+    
+    ' Search for an assembly file by name using depth-first folder traversal
+    ' Same pattern as FindPartByFileName but for .iam files
+    Public Function FindAssemblyByFileName(fileName As String, _
+                                          startPath As String, _
+                                          vaultRoot As String) As String
+        If String.IsNullOrEmpty(fileName) OrElse String.IsNullOrEmpty(startPath) Then
+            Return ""
+        End If
+        
+        Try
+            Dim foundPath As String = FileSearchLib.FindFileByName(fileName, startPath, vaultRoot)
+            If Not String.IsNullOrEmpty(foundPath) Then
+                UtilsLib.LogInfo("MakeComponentsLib: Found assembly '" & fileName & "' at: " & foundPath)
+                Return foundPath
+            End If
+        Catch ex As Exception
+            UtilsLib.LogWarn("MakeComponentsLib: Error searching for assembly '" & fileName & "': " & ex.Message)
+        End Try
+        
+        Return ""
     End Function
     
     ' Save body data to master document properties

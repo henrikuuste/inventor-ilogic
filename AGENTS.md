@@ -935,7 +935,14 @@ ctrlDef.Execute()  ' Shows checkout dialog
 | AddVbFile before AddReference | Put AddReference BEFORE AddVbFile |
 | Type from referenced assembly in library | Use `Object` type with late binding |
 | TextBox ambiguous | Use `System.Windows.Forms.TextBox` |
-| Size/Point/Font not defined | Use Left/Top/Width/Height; use text decoration for emphasis |
+| ProgressBar ambiguous | Use `System.Windows.Forms.ProgressBar` (conflicts with Inventor.ProgressBar) |
+| View ambiguous | Use `System.Windows.Forms.View` (conflicts with Inventor.View) |
+| Application ambiguous | Use `System.Windows.Forms.Application` (conflicts with Inventor.Application) |
+| Size/Point/Font not defined | Use Left/Top/Width/Height; use UILib.SetMinimumSize(); use UPPERCASE text for emphasis |
+| ClientSize returns Size struct | Use `frm.Width`/`frm.Height` instead of `frm.ClientSize.Width`/`frm.ClientSize.Height` |
+| Color/Bitmap/Graphics not available | System.Drawing types unavailable in iLogic. Use text prefixes instead of colored icons |
+| SystemColors not declared | Remove BackColor styling or use default colors |
+| Environment.NewLine not available | Use `vbCrLf` instead |
 | ContextMenuStrip/ToolStripMenuItem | Use Buttons or ComboBox instead |
 | Lambda closure errors | Use `AddressOf` with separate Sub, or use Tag property |
 | Modal blocks Inventor picks | Close form before pick, reopen after |
@@ -961,4 +968,5 @@ ctrlDef.Execute()  ' Shows checkout dialog
 | Parameter formula `max(a, b)` fails | Use semicolon: `max(a; b)` - Inventor uses `;` as argument separator |
 | Parameter name starts with digit | Prefix with letter: `M_00011_Name` instead of `00011_Name` |
 | CommandManager.Pick with no cancel hint | Always include `" - ESC tühistamiseks"` in prompt; wrap in Try/Catch |
+| `SurfaceBody.Volume` missing parameter | Use `body.Volume(0.01)` - requires `PrecisionPercent` parameter |
 

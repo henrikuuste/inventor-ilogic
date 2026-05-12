@@ -272,9 +272,15 @@ Public Module UnwrapLib
         Try
             Dim compDef As PartComponentDefinition = partDoc.ComponentDefinition
             Dim propName As String = GetManufacturedSolidBodyNameProperty(partDoc)
+            UtilsLib.LogInfo("UnwrapLib: BB_PinnalaotusSolidBodyName = '" & propName & "'")
             If Not String.IsNullOrWhiteSpace(propName) Then
                 Dim fromProp As SurfaceBody = FindSurfaceBodyByName(compDef, propName)
-                If fromProp IsNot Nothing Then Return fromProp
+                If fromProp IsNot Nothing Then
+                    UtilsLib.LogInfo("UnwrapLib: Found body by property name: '" & fromProp.Name & "'")
+                    Return fromProp
+                Else
+                    UtilsLib.LogWarn("UnwrapLib: Body '" & propName & "' not found in part")
+                End If
             End If
             Return TryGetThickenManufacturedSolidBody(partDoc)
         Catch
@@ -513,7 +519,24 @@ Public Module UnwrapLib
             
             Dim thicknessCm As Double = GetThickenValue(thicken)
             
-            Dim measBody As SurfaceBody = GetThickenedSolidBody(thicken)
+            ' Use stored body name property first, then fall back to thicken output
+            Dim measBody As SurfaceBody = ResolveManufacturedSolidBody(partDoc)
+            If measBody IsNot Nothing Then
+                UtilsLib.LogInfo("UnwrapLib: Using resolved body '" & measBody.Name & "' for measurement")
+                Try
+                    Dim rb As Box = measBody.RangeBox
+                    Dim rbX As Double = Math.Abs(rb.MaxPoint.X - rb.MinPoint.X) * 10
+                    Dim rbY As Double = Math.Abs(rb.MaxPoint.Y - rb.MinPoint.Y) * 10
+                    Dim rbZ As Double = Math.Abs(rb.MaxPoint.Z - rb.MinPoint.Z) * 10
+                    UtilsLib.LogInfo("UnwrapLib: Body RangeBox - X:" & rbX.ToString("0.00") & " Y:" & rbY.ToString("0.00") & " Z:" & rbZ.ToString("0.00") & " mm")
+                Catch
+                End Try
+            Else
+                measBody = GetThickenedSolidBody(thicken)
+                If measBody IsNot Nothing Then
+                    UtilsLib.LogInfo("UnwrapLib: Using thicken output body '" & measBody.Name & "' for measurement")
+                End If
+            End If
             If measBody Is Nothing Then measBody = GetUnwrappedSurfaceBody(unwrap)
             If measBody Is Nothing Then Return False
             
@@ -540,19 +563,72 @@ Public Module UnwrapLib
                 length = GetOrientedExtentForBody(measBody, lx, ly, lz)
                 If thicknessCm > 0.00001 Then thickness = thicknessCm
             Else
-                Dim box As Box = measBody.RangeBox
-                Dim sx As Double = Math.Abs(box.MaxPoint.X - box.MinPoint.X)
-                Dim sy As Double = Math.Abs(box.MaxPoint.Y - box.MinPoint.Y)
-                Dim sz As Double = Math.Abs(box.MaxPoint.Z - box.MinPoint.Z)
-                Dim a As Double = 0, b As Double = 0, c As Double = 0
-                SortThreeExtents(sx, sy, sz, a, b, c)
-                If thicknessCm > 0.00001 Then
-                    thickness = thicknessCm
+                ' Use unwrap surface normal as thickness direction for correct oriented measurement
+                Dim nx As Double = 0, ny As Double = 0, nz As Double = 0
+                If TryGetUnwrapFlatSurfaceNormal(unwrap, nx, ny, nz) Then
+                    ' Compute perpendicular vectors for width/length
+                    Dim perpWx As Double = 0, perpWy As Double = 0, perpWz As Double = 0
+                    Dim perpLx As Double = 0, perpLy As Double = 0, perpLz As Double = 0
+                    
+                    ' Find a perpendicular vector (use cross product with a non-parallel vector)
+                    If Math.Abs(nx) < 0.9 Then
+                        perpWx = 0 : perpWy = -nz : perpWz = ny
+                    Else
+                        perpWx = -ny : perpWy = nx : perpWz = 0
+                    End If
+                    Dim wLen As Double = Math.Sqrt(perpWx * perpWx + perpWy * perpWy + perpWz * perpWz)
+                    If wLen > 0.0001 Then
+                        perpWx /= wLen : perpWy /= wLen : perpWz /= wLen
+                    End If
+                    
+                    ' Third axis is cross product of thickness and width
+                    perpLx = ny * perpWz - nz * perpWy
+                    perpLy = nz * perpWx - nx * perpWz
+                    perpLz = nx * perpWy - ny * perpWx
+                    
+                    ' Get oriented extents
+                    Dim tExt As Double = GetOrientedExtentForBody(measBody, nx, ny, nz)
+                    Dim wExt As Double = GetOrientedExtentForBody(measBody, perpWx, perpWy, perpWz)
+                    Dim lExt As Double = GetOrientedExtentForBody(measBody, perpLx, perpLy, perpLz)
+                    
+                    UtilsLib.LogInfo("UnwrapLib: Normal=(" & nx.ToString("0.00") & "," & ny.ToString("0.00") & "," & nz.ToString("0.00") & ")" & _
+                                     " perpW=(" & perpWx.ToString("0.00") & "," & perpWy.ToString("0.00") & "," & perpWz.ToString("0.00") & ")" & _
+                                     " perpL=(" & perpLx.ToString("0.00") & "," & perpLy.ToString("0.00") & "," & perpLz.ToString("0.00") & ")")
+                    UtilsLib.LogInfo("UnwrapLib: Raw extents - T:" & (tExt*10).ToString("0.00") & " W:" & (wExt*10).ToString("0.00") & " L:" & (lExt*10).ToString("0.00") & " mm")
+                    
+                    ' Use thicken value for thickness if available, otherwise use extent
+                    If thicknessCm > 0.00001 Then
+                        thickness = thicknessCm
+                    Else
+                        thickness = tExt
+                    End If
+                    
+                    ' Assign width as smaller, length as larger
+                    If wExt <= lExt Then
+                        width = wExt
+                        length = lExt
+                    Else
+                        width = lExt
+                        length = wExt
+                    End If
+                    
+                    UtilsLib.LogInfo("UnwrapLib: Using unwrap normal for orientation")
                 Else
-                    thickness = a
+                    ' Fallback to axis-aligned bounding box if no unwrap normal found
+                    Dim box As Box = measBody.RangeBox
+                    Dim sx As Double = Math.Abs(box.MaxPoint.X - box.MinPoint.X)
+                    Dim sy As Double = Math.Abs(box.MaxPoint.Y - box.MinPoint.Y)
+                    Dim sz As Double = Math.Abs(box.MaxPoint.Z - box.MinPoint.Z)
+                    Dim a As Double = 0, b As Double = 0, c As Double = 0
+                    SortThreeExtents(sx, sy, sz, a, b, c)
+                    If thicknessCm > 0.00001 Then
+                        thickness = thicknessCm
+                    Else
+                        thickness = a
+                    End If
+                    width = b
+                    length = c
                 End If
-                width = b
-                length = c
             End If
             
             UtilsLib.LogInfo("UnwrapLib: Pinnalaotus dimensions - T:" & FormatNumber(thickness * 10, 2) & _

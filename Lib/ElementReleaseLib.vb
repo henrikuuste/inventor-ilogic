@@ -139,13 +139,21 @@ Public Module ElementReleaseLib
         Public SourcePath As String
         Public TargetVaultPath As String
         Public TargetLocalPath As String
-        Public VaultNumber As String
+        Public VaultNumber As String              ' Placeholder during preview, real number after allocation
         Public FileType As FileType
         Public IsShared As Boolean
         Public IsExisting As Boolean
         Public ForVariants As New List(Of String)
         Public ForModules As New List(Of String)
         Public Fingerprint As String
+        ' iProperties from source file
+        Public SourceDescription As String
+        Public SourceProject As String
+        Public SourcePartNumber As String
+        ' Projected properties (what they WILL BE after release)
+        Public ProjectedDescription As String     ' What Description will be set to
+        Public ProjectedProject As String         ' What Project will be set to  
+        Public IsPlaceholder As Boolean = True    ' True until real number is assigned
     End Class
     
     ' ============================================================================
@@ -420,6 +428,14 @@ Public Module ElementReleaseLib
                 .RelativePath = GetRelativePath(sourceRoot, rootAsmPath)
             })
             
+            ' Force update to ensure all references are resolved
+            Try
+                asmDoc.Update2(True) ' True = full update including suppressed
+            Catch
+                ' Update may fail for various reasons, continue anyway
+            End Try
+            
+            ' First pass: AllReferencedDocuments (catches most files)
             For Each refDoc As Document In asmDoc.AllReferencedDocuments
                 Dim refPath As String = refDoc.FullFileName
                 
@@ -451,6 +467,38 @@ Public Module ElementReleaseLib
                 End If
             Next
             
+            ' Second pass: Iterate through ReferencedFileDescriptors
+            ' This includes ALL referenced files regardless of suppression state
+            For i As Integer = 1 To asmDoc.File.ReferencedFileDescriptors.Count
+                Try
+                    Dim fd As FileDescriptor = asmDoc.File.ReferencedFileDescriptors.Item(i)
+                    Dim refPath As String = fd.FullFileName
+                    
+                    If Not IsInsideSourceRoot(refPath, sourceRoot) Then Continue For
+                    If IsOldVersionsPath(refPath) Then Continue For
+                    
+                    Dim ext As String = System.IO.Path.GetExtension(refPath).ToLower()
+                    
+                    If ext = ".ipt" AndAlso Not tree.Parts.ContainsKey(refPath) Then
+                        Dim partDoc As PartDocument = CType(app.Documents.Open(refPath, False), PartDocument)
+                        UtilsLib.LogInfo("DiscoverAssemblyTree: Found via FileDescriptor: " & System.IO.Path.GetFileName(refPath))
+                        Dim info As PartInfo = ClassifyPart(partDoc, sourceRoot)
+                        tree.Parts.Add(refPath, info)
+                    ElseIf ext = ".iam" AndAlso Not tree.Assemblies.ContainsKey(refPath) Then
+                        UtilsLib.LogInfo("DiscoverAssemblyTree: Found subassembly via FileDescriptor: " & System.IO.Path.GetFileName(refPath))
+                        tree.Assemblies.Add(refPath, New AssemblyInfo With {
+                            .FilePath = refPath,
+                            .RelativePath = GetRelativePath(sourceRoot, refPath)
+                        })
+                    End If
+                Catch
+                End Try
+            Next
+            
+            ' Third pass: Iterate through component occurrences to catch any remaining parts
+            ' This handles lazy-loaded parts and parts in nested subassemblies
+            DiscoverFromOccurrences(app, asmDoc.ComponentDefinition.Occurrences, tree, sourceRoot)
+            
             UtilsLib.LogInfo("DiscoverAssemblyTree: Found " & tree.Parts.Count & " parts, " & tree.Assemblies.Count & " assemblies")
             
         Catch ex As Exception
@@ -459,6 +507,97 @@ Public Module ElementReleaseLib
         
         Return tree
     End Function
+    
+    ''' <summary>
+    ''' Recursively discover parts from component occurrences.
+    ''' This catches lazy-loaded parts that may not appear in AllReferencedDocuments.
+    ''' IMPORTANT: We discover ALL referenced files regardless of suppression, visibility,
+    ''' or model state - the release must include everything the assembly references.
+    ''' </summary>
+    Private Sub DiscoverFromOccurrences(app As Inventor.Application, _
+                                         occurrences As ComponentOccurrences, _
+                                         tree As AssemblyTree, _
+                                         sourceRoot As String)
+        For Each occ As ComponentOccurrence In occurrences
+            Try
+                ' DO NOT skip suppressed, invisible, or any other state
+                ' We need to discover ALL referenced files for a complete release
+                
+                ' Get the definition document - this works even for suppressed occurrences
+                Dim defDoc As Document = Nothing
+                Try
+                    defDoc = occ.Definition.Document
+                Catch
+                    ' For suppressed occurrences, try ReferencedFileDescriptor
+                    Try
+                        If occ.ReferencedFileDescriptor IsNot Nothing Then
+                            Dim refPath2 As String = occ.ReferencedFileDescriptor.FullFileName
+                            If IsInsideSourceRoot(refPath2, sourceRoot) AndAlso Not IsOldVersionsPath(refPath2) Then
+                                Dim ext2 As String = System.IO.Path.GetExtension(refPath2).ToLower()
+                                If ext2 = ".ipt" AndAlso Not tree.Parts.ContainsKey(refPath2) Then
+                                    ' Open the document to classify it
+                                    Dim partDoc As PartDocument = CType(app.Documents.Open(refPath2, False), PartDocument)
+                                    UtilsLib.LogInfo("DiscoverAssemblyTree: Found suppressed part: " & System.IO.Path.GetFileName(refPath2))
+                                    Dim info As PartInfo = ClassifyPart(partDoc, sourceRoot)
+                                    tree.Parts.Add(refPath2, info)
+                                ElseIf ext2 = ".iam" AndAlso Not tree.Assemblies.ContainsKey(refPath2) Then
+                                    UtilsLib.LogInfo("DiscoverAssemblyTree: Found suppressed subassembly: " & System.IO.Path.GetFileName(refPath2))
+                                    tree.Assemblies.Add(refPath2, New AssemblyInfo With {
+                                        .FilePath = refPath2,
+                                        .RelativePath = GetRelativePath(sourceRoot, refPath2)
+                                    })
+                                    ' Also discover its contents
+                                    Dim subAsmDoc As AssemblyDocument = CType(app.Documents.Open(refPath2, False), AssemblyDocument)
+                                    DiscoverFromOccurrences(app, subAsmDoc.ComponentDefinition.Occurrences, tree, sourceRoot)
+                                End If
+                            End If
+                        End If
+                    Catch
+                    End Try
+                    Continue For
+                End Try
+                
+                If defDoc Is Nothing Then Continue For
+                
+                Dim refPath As String = defDoc.FullFileName
+                
+                ' Skip files outside source root
+                If Not IsInsideSourceRoot(refPath, sourceRoot) Then
+                    Continue For
+                End If
+                
+                ' Skip OldVersions folder
+                If IsOldVersionsPath(refPath) Then
+                    Continue For
+                End If
+                
+                Dim ext As String = System.IO.Path.GetExtension(refPath).ToLower()
+                
+                If ext = ".ipt" Then
+                    If Not tree.Parts.ContainsKey(refPath) Then
+                        UtilsLib.LogInfo("DiscoverAssemblyTree: Found via occurrence: " & System.IO.Path.GetFileName(refPath))
+                        Dim info As PartInfo = ClassifyPart(CType(defDoc, PartDocument), sourceRoot)
+                        tree.Parts.Add(refPath, info)
+                    End If
+                ElseIf ext = ".iam" Then
+                    If Not tree.Assemblies.ContainsKey(refPath) Then
+                        UtilsLib.LogInfo("DiscoverAssemblyTree: Found subassembly via occurrence: " & System.IO.Path.GetFileName(refPath))
+                        tree.Assemblies.Add(refPath, New AssemblyInfo With {
+                            .FilePath = refPath,
+                            .RelativePath = GetRelativePath(sourceRoot, refPath)
+                        })
+                    End If
+                    
+                    ' Recursively discover from subassembly's occurrences
+                    Dim subAsmDoc As AssemblyDocument = CType(defDoc, AssemblyDocument)
+                    DiscoverFromOccurrences(app, subAsmDoc.ComponentDefinition.Occurrences, tree, sourceRoot)
+                End If
+            Catch ex As Exception
+                ' Log but don't skip - try to continue with other occurrences
+                UtilsLib.LogWarn("DiscoverAssemblyTree: Error processing occurrence - " & ex.Message)
+            End Try
+        Next
+    End Sub
     
     ''' <summary>
     ''' Classify a part as derived or manual.
@@ -768,6 +907,8 @@ Public Module ElementReleaseLib
     
     ''' <summary>
     ''' Build variant matrix with fingerprints for all parts across all variants.
+    ''' This actually applies parameters and measures geometry changes to determine
+    ''' which parts are shared (same geometry) vs element-specific (geometry changes).
     ''' </summary>
     Public Function BuildElementMatrix(app As Inventor.Application, _
                                         tree As AssemblyTree, _
@@ -780,63 +921,161 @@ Public Module ElementReleaseLib
             matrix.ElementNames.Add(vc.ElementName)
         Next
         
+        UtilsLib.LogInfo("BuildElementMatrix: Starting fingerprint analysis")
+        UtilsLib.LogInfo("  Parts to analyze: " & matrix.PartPaths.Count)
+        UtilsLib.LogInfo("  Elements to test: " & variants.Count)
+        UtilsLib.LogInfo("  Master documents: " & masterPaths.Count)
+        For Each mp In masterPaths
+            UtilsLib.LogInfo("    - " & System.IO.Path.GetFileName(mp))
+        Next
+        
+        ' Step 1: Ensure all parts are loaded (open if not)
+        UtilsLib.LogInfo("  Step 1: Ensuring all parts are loaded...")
+        Dim loadedParts As New Dictionary(Of String, PartDocument)(StringComparer.OrdinalIgnoreCase)
+        Dim partsWeOpened As New List(Of String)
+        
+        For Each partPath In matrix.PartPaths
+            Dim partDoc As PartDocument = Nothing
+            
+            ' Check if already open
+            For Each d As Document In app.Documents
+                If d.FullFileName.Equals(partPath, StringComparison.OrdinalIgnoreCase) Then
+                    If d.DocumentType = DocumentTypeEnum.kPartDocumentObject Then
+                        partDoc = CType(d, PartDocument)
+                    End If
+                    Exit For
+                End If
+            Next
+            
+            ' Open if not loaded
+            If partDoc Is Nothing Then
+                Try
+                    UtilsLib.LogInfo("    Opening: " & System.IO.Path.GetFileName(partPath))
+                    partDoc = CType(app.Documents.Open(partPath, True), PartDocument)
+                    partsWeOpened.Add(partPath)
+                Catch ex As Exception
+                    UtilsLib.LogWarn("    Failed to open: " & System.IO.Path.GetFileName(partPath) & " - " & ex.Message)
+                End Try
+            End If
+            
+            If partDoc IsNot Nothing Then
+                loadedParts(partPath) = partDoc
+            End If
+        Next
+        UtilsLib.LogInfo("  Loaded " & loadedParts.Count & " of " & matrix.PartPaths.Count & " parts")
+        
+        ' Step 2: Snapshot current master parameters
+        UtilsLib.LogInfo("  Step 2: Snapshotting master parameters...")
         Dim snapshot = SnapshotMasterParameters(app, masterPaths)
         
         Try
+            ' Step 3: For each element, apply parameters and compute fingerprints
             For Each variantCfg As ExcelReaderLib.ElementConfig In variants
-                UtilsLib.LogInfo("BuildElementMatrix: Analyzing element " & variantCfg.ElementName)
+                UtilsLib.LogInfo("  Step 3: Analyzing element '" & variantCfg.ElementName & "'")
                 
+                ' Log the parameters being applied
+                For Each kvp In variantCfg.Parameters
+                    UtilsLib.LogInfo("    Parameter: " & kvp.Key & " = " & kvp.Value)
+                Next
+                
+                ' Apply parameters to all masters
                 For Each masterPath In masterPaths
                     Dim doc As Document = Nothing
-                    Try
-                        For Each d As Document In app.Documents
-                            If d.FullFileName.Equals(masterPath, StringComparison.OrdinalIgnoreCase) Then
-                                doc = d
-                                Exit For
-                            End If
-                        Next
-                    Catch
-                    End Try
+                    For Each d As Document In app.Documents
+                        If d.FullFileName.Equals(masterPath, StringComparison.OrdinalIgnoreCase) Then
+                            doc = d
+                            Exit For
+                        End If
+                    Next
                     
                     If doc IsNot Nothing Then
+                        UtilsLib.LogInfo("    Applying parameters to: " & System.IO.Path.GetFileName(masterPath))
                         ApplyParameters(doc, variantCfg.Parameters)
+                    Else
+                        UtilsLib.LogWarn("    Master not loaded: " & System.IO.Path.GetFileName(masterPath))
                     End If
                 Next
                 
+                ' Update the entire assembly tree to propagate changes
+                UtilsLib.LogInfo("    Updating assembly to propagate parameter changes...")
                 Try
+                    ' Update the active document (main assembly)
                     app.ActiveDocument.Update()
-                Catch
+                    
+                    ' Also update each part individually to ensure derived geometry updates
+                    For Each kvp In loadedParts
+                        Try
+                            kvp.Value.Update()
+                        Catch
+                        End Try
+                    Next
+                Catch ex As Exception
+                    UtilsLib.LogWarn("    Update warning: " & ex.Message)
                 End Try
                 
+                ' Compute fingerprints for all parts with this parameter configuration
                 Dim variantFps As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
+                UtilsLib.LogInfo("    Computing fingerprints...")
+                
                 For Each partPath In matrix.PartPaths
-                    Dim partDoc As PartDocument = Nothing
-                    Try
-                        For Each d As Document In app.Documents
-                            If d.FullFileName.Equals(partPath, StringComparison.OrdinalIgnoreCase) Then
-                                partDoc = CType(d, PartDocument)
-                                Exit For
-                            End If
-                        Next
-                    Catch
-                    End Try
+                    Dim fp As String
                     
-                    If partDoc IsNot Nothing Then
-                        variantFps.Add(partPath, ComputeGeometryFingerprint(partDoc))
+                    If loadedParts.ContainsKey(partPath) Then
+                        Dim partDoc As PartDocument = loadedParts(partPath)
+                        fp = ComputeGeometryFingerprint(partDoc)
+                        UtilsLib.LogInfo("      " & System.IO.Path.GetFileName(partPath) & ": " & fp)
                     Else
-                        variantFps.Add(partPath, "NOT_LOADED")
+                        fp = "NOT_LOADED"
+                        UtilsLib.LogWarn("      " & System.IO.Path.GetFileName(partPath) & ": NOT_LOADED")
                     End If
+                    
+                    variantFps(partPath) = fp
                 Next
                 
                 matrix.Fingerprints.Add(variantCfg.ElementName, variantFps)
             Next
         Finally
+            ' Step 4: Restore original master parameters
+            UtilsLib.LogInfo("  Step 4: Restoring original master parameters...")
             RestoreMasterParameters(app, snapshot)
             Try
                 app.ActiveDocument.Update()
+                For Each kvp In loadedParts
+                    Try
+                        kvp.Value.Update()
+                    Catch
+                    End Try
+                Next
             Catch
             End Try
+            
+            ' Close parts we opened (only those we opened, not pre-existing)
+            UtilsLib.LogInfo("  Step 5: Closing parts we opened...")
+            For Each partPath In partsWeOpened
+                Try
+                    If loadedParts.ContainsKey(partPath) Then
+                        loadedParts(partPath).Close(True) ' Close without saving
+                    End If
+                Catch
+                End Try
+            Next
         End Try
+        
+        ' Step 5: Log fingerprint comparison summary
+        UtilsLib.LogInfo("BuildElementMatrix: Fingerprint comparison summary:")
+        For Each partPath In matrix.PartPaths
+            Dim fps As New HashSet(Of String)
+            For Each variantName In matrix.ElementNames
+                fps.Add(matrix.Fingerprints(variantName)(partPath))
+            Next
+            Dim shareStatus As String = If(fps.Count = 1, "SHARED", "DIFFERS (" & fps.Count & " variants)")
+            UtilsLib.LogInfo("  " & System.IO.Path.GetFileName(partPath) & ": " & shareStatus)
+            If fps.Count > 1 Then
+                For Each variantName In matrix.ElementNames
+                    UtilsLib.LogInfo("    " & variantName & ": " & matrix.Fingerprints(variantName)(partPath))
+                Next
+            End If
+        Next
         
         UtilsLib.LogInfo("BuildElementMatrix: Complete - " & matrix.PartPaths.Count & " parts x " & matrix.ElementNames.Count & " elements")
         Return matrix
@@ -907,11 +1146,15 @@ Public Module ElementReleaseLib
     
     ''' <summary>
     ''' Generate local sequential numbers for development mode.
+    ''' In dev mode, we start from 1000 to avoid conflicts with existing files
+    ''' (which are typically numbered below 1000 in test projects).
+    ''' Vault would never give duplicate numbers, so this is only for local testing.
     ''' </summary>
     Public Function GenerateLocalNumbers(count As Integer, outputRoot As String) As List(Of String)
         UtilsLib.LogInfo("GenerateLocalNumbers: Generating " & count & " local numbers (development mode)")
         
-        Dim startNum As Integer = 1
+        ' Start from 1000 to avoid conflicts with existing source files (typically < 1000)
+        Dim startNum As Integer = 1000
         Dim manifestPath = outputRoot & "\_manifest.json"
         If System.IO.File.Exists(manifestPath) Then
             Try
@@ -955,9 +1198,196 @@ Public Module ElementReleaseLib
     End Function
     
     ''' <summary>
+    ''' Cached file properties for release plan computation
+    ''' </summary>
+    Private m_FilePropertiesCache As New Dictionary(Of String, FileProperties)(StringComparer.OrdinalIgnoreCase)
+    
+    ''' <summary>
+    ''' File properties structure
+    ''' </summary>
+    Private Class FileProperties
+        Public Description As String
+        Public Project As String
+        Public PartNumber As String
+    End Class
+    
+    ''' <summary>
+    ''' Gets iProperties from a source file (cached)
+    ''' </summary>
+    Private Function GetFileProperties(app As Inventor.Application, filePath As String) As FileProperties
+        If m_FilePropertiesCache.ContainsKey(filePath) Then
+            Return m_FilePropertiesCache(filePath)
+        End If
+        
+        Dim props As New FileProperties()
+        props.Description = System.IO.Path.GetFileNameWithoutExtension(filePath)
+        props.Project = ""
+        props.PartNumber = System.IO.Path.GetFileNameWithoutExtension(filePath)
+        
+        Try
+            ' Check if file is already open
+            Dim doc As Document = Nothing
+            For Each openDoc As Document In app.Documents
+                If String.Equals(openDoc.FullFileName, filePath, StringComparison.OrdinalIgnoreCase) Then
+                    doc = openDoc
+                    Exit For
+                End If
+            Next
+            
+            If doc IsNot Nothing Then
+                ' File is open - read properties directly
+                Try
+                    Dim propSet As PropertySet = doc.PropertySets.Item("Design Tracking Properties")
+                    Dim descProp As Inventor.Property = propSet.Item("Description")
+                    If descProp.Value IsNot Nothing AndAlso Not String.IsNullOrEmpty(descProp.Value.ToString()) Then
+                        props.Description = descProp.Value.ToString()
+                    End If
+                    Dim pnProp As Inventor.Property = propSet.Item("Part Number")
+                    If pnProp.Value IsNot Nothing Then
+                        props.PartNumber = pnProp.Value.ToString()
+                    End If
+                Catch : End Try
+                Try
+                    Dim summarySet As PropertySet = doc.PropertySets.Item("Inventor Summary Information")
+                    Dim projProp As Inventor.Property = summarySet.Item("Project")
+                    If projProp.Value IsNot Nothing Then
+                        props.Project = projProp.Value.ToString()
+                    End If
+                Catch : End Try
+            Else
+                ' File not open - try to open briefly to read properties
+                Try
+                    If System.IO.File.Exists(filePath) Then
+                        doc = app.Documents.Open(filePath, True) ' Open silently
+                        Try
+                            Dim propSet As PropertySet = doc.PropertySets.Item("Design Tracking Properties")
+                            Dim descProp As Inventor.Property = propSet.Item("Description")
+                            If descProp.Value IsNot Nothing AndAlso Not String.IsNullOrEmpty(descProp.Value.ToString()) Then
+                                props.Description = descProp.Value.ToString()
+                            End If
+                            Dim pnProp As Inventor.Property = propSet.Item("Part Number")
+                            If pnProp.Value IsNot Nothing Then
+                                props.PartNumber = pnProp.Value.ToString()
+                            End If
+                        Catch : End Try
+                        Try
+                            Dim summarySet As PropertySet = doc.PropertySets.Item("Inventor Summary Information")
+                            Dim projProp As Inventor.Property = summarySet.Item("Project")
+                            If projProp.Value IsNot Nothing Then
+                                props.Project = projProp.Value.ToString()
+                            End If
+                        Catch : End Try
+                        doc.Close(True) ' Close without saving
+                    End If
+                Catch : End Try
+            End If
+        Catch : End Try
+        
+        m_FilePropertiesCache(filePath) = props
+        Return props
+    End Function
+    
+    ''' <summary>
+    ''' Clears the file properties cache
+    ''' </summary>
+    Public Sub ClearFilePropertiesCache()
+        m_FilePropertiesCache.Clear()
+    End Sub
+    
+    ''' <summary>
+    ''' Generates placeholder numbers for preview (not real Vault numbers)
+    ''' Format: "UUS-001", "UUS-002", etc.
+    ''' </summary>
+    Public Function GeneratePlaceholderNumbers(count As Integer) As List(Of String)
+        Dim placeholders As New List(Of String)
+        For i As Integer = 1 To count
+            placeholders.Add("UUS-" & i.ToString("D3"))
+        Next
+        Return placeholders
+    End Function
+    
+    ''' <summary>
+    ''' Allocates real file numbers and updates the release plan.
+    ''' Call this AFTER user confirms release, not before UI.
+    ''' </summary>
+    Public Function AllocateRealNumbers(plan As ReleasePlan, targetRoot As String) As Boolean
+        ' Count how many real numbers we need
+        Dim count As Integer = 0
+        For Each f As PlannedFile In plan.Files
+            If f.IsPlaceholder AndAlso Not f.IsExisting Then
+                count += 1
+            End If
+        Next
+        
+        If count = 0 Then Return True
+        
+        ' Get real numbers
+        Dim realNumbers As List(Of String) = GetFileNumbers(targetRoot, count)
+        If realNumbers Is Nothing OrElse realNumbers.Count < count Then
+            UtilsLib.LogError("AllocateRealNumbers: Failed to get " & count & " numbers")
+            Return False
+        End If
+        
+        ' Replace placeholders with real numbers
+        Dim numberIndex As Integer = 0
+        For Each f As PlannedFile In plan.Files
+            If f.IsPlaceholder AndAlso Not f.IsExisting Then
+                Dim oldNumber As String = f.VaultNumber
+                Dim newNumber As String = realNumbers(numberIndex)
+                
+                ' Update VaultNumber
+                f.VaultNumber = newNumber
+                f.IsPlaceholder = False
+                
+                ' Update target path (replace placeholder in filename)
+                If f.TargetLocalPath.Contains(oldNumber) Then
+                    f.TargetLocalPath = f.TargetLocalPath.Replace(oldNumber, newNumber)
+                End If
+                
+                UtilsLib.LogInfo("  Allocated: " & oldNumber & " -> " & newNumber)
+                numberIndex += 1
+            End If
+        Next
+        
+        UtilsLib.LogInfo("AllocateRealNumbers: Allocated " & numberIndex & " numbers")
+        Return True
+    End Function
+    
+    ''' <summary>
+    ''' Computes projected description for a file based on what it will be after release.
+    ''' </summary>
+    Private Function ComputeProjectedDescription(f As PlannedFile, elementName As String) As String
+        Select Case f.FileType
+            Case FileType.Assembly
+                ' Assemblies get element name as their description
+                Return elementName
+            Case FileType.Part
+                ' Parts keep their source description
+                Return f.SourceDescription
+            Case FileType.Drawing
+                ' Drawings keep their source description (or derive from model)
+                Return f.SourceDescription
+            Case Else
+                Return f.SourceDescription
+        End Select
+    End Function
+    
+    ''' <summary>
+    ''' Computes projected project name for a file.
+    ''' </summary>
+    Private Function ComputeProjectedProject(f As PlannedFile, elementName As String, productFamily As String) As String
+        ' Project could be the product family or element name
+        If Not String.IsNullOrEmpty(productFamily) Then
+            Return productFamily
+        End If
+        Return elementName
+    End Function
+    
+    ''' <summary>
     ''' Compute the complete release plan.
     ''' </summary>
-    Public Function ComputeReleasePlan(tree As AssemblyTree, _
+    Public Function ComputeReleasePlan(app As Inventor.Application, _
+                                        tree As AssemblyTree, _
                                         partGroups As List(Of PartGroup), _
                                         variants As List(Of ExcelReaderLib.ElementConfig), _
                                         targetRoot As String, _
@@ -965,12 +1395,15 @@ Public Module ElementReleaseLib
         Dim plan As New ReleasePlan()
         plan.SharedFolder = System.IO.Path.Combine(targetRoot, "Ühine")
         
+        ' Clear properties cache for fresh computation
+        ClearFilePropertiesCache()
+
         Dim numberIndex As Integer = 0
-        
+
         For Each variantCfg As ExcelReaderLib.ElementConfig In variants
             plan.VariantFolders.Add(variantCfg.ElementName, System.IO.Path.Combine(targetRoot, variantCfg.ElementName))
         Next
-        
+
         ' Sharing only makes sense with 2+ moodulid
         Dim canShare As Boolean = (variants.Count >= 2)
         
@@ -995,7 +1428,8 @@ Public Module ElementReleaseLib
                 For Each vc As ExcelReaderLib.ElementConfig In variants
                     allVariantNames.Add(vc.ElementName)
                 Next
-                plan.Files.Add(New PlannedFile With {
+                Dim partProps As FileProperties = GetFileProperties(app, group.PartPath)
+                Dim pf As New PlannedFile With {
                     .SourcePath = group.PartPath,
                     .TargetLocalPath = System.IO.Path.Combine(plan.SharedFolder, group.RelativePath),
                     .VaultNumber = fileNumbers(numberIndex),
@@ -1003,16 +1437,25 @@ Public Module ElementReleaseLib
                     .IsShared = True,
                     .IsExisting = False,
                     .ForVariants = allVariantNames,
-                    .Fingerprint = fp
-                })
+                    .Fingerprint = fp,
+                    .SourceDescription = partProps.Description,
+                    .SourceProject = partProps.Project,
+                    .SourcePartNumber = partProps.PartNumber,
+                    .IsPlaceholder = True
+                }
+                ' Parts keep their source description
+                pf.ProjectedDescription = partProps.Description
+                pf.ProjectedProject = partProps.Project
+                plan.Files.Add(pf)
                 numberIndex += 1
             Else
+                Dim partPropsNonShared As FileProperties = GetFileProperties(app, group.PartPath)
                 For Each fpKvp In group.UniqueFingerprints
                     Dim firstVariant = fpKvp.Value(0)
                     Dim newFileName As String = fileNumbers(numberIndex) & System.IO.Path.GetExtension(group.PartPath)
                     Dim relDir As String = System.IO.Path.GetDirectoryName(group.RelativePath)
                     
-                    plan.Files.Add(New PlannedFile With {
+                    Dim pf As New PlannedFile With {
                         .SourcePath = group.PartPath,
                         .TargetLocalPath = System.IO.Path.Combine(plan.VariantFolders(firstVariant), relDir, newFileName),
                         .VaultNumber = fileNumbers(numberIndex),
@@ -1020,8 +1463,16 @@ Public Module ElementReleaseLib
                         .IsShared = False,
                         .IsExisting = False,
                         .ForVariants = fpKvp.Value,
-                        .Fingerprint = fpKvp.Key
-                    })
+                        .Fingerprint = fpKvp.Key,
+                        .SourceDescription = partPropsNonShared.Description,
+                        .SourceProject = partPropsNonShared.Project,
+                        .SourcePartNumber = partPropsNonShared.PartNumber,
+                        .IsPlaceholder = True
+                    }
+                    ' Parts keep their source description
+                    pf.ProjectedDescription = partPropsNonShared.Description
+                    pf.ProjectedProject = partPropsNonShared.Project
+                    plan.Files.Add(pf)
                     numberIndex += 1
                 Next
             End If
@@ -1032,15 +1483,34 @@ Public Module ElementReleaseLib
                 Dim relativePath = asmKvp.Value.RelativePath
                 Dim newFileName As String = fileNumbers(numberIndex) & ".iam"
                 Dim relDir As String = System.IO.Path.GetDirectoryName(relativePath)
+                Dim asmProps As FileProperties = GetFileProperties(app, asmKvp.Key)
                 
-                plan.Files.Add(New PlannedFile With {
+                ' Build projected description from element name and parameters
+                Dim projDesc As String = variantCfg.ElementName
+                If variantCfg.Parameters.Count > 0 Then
+                    Dim paramParts As New List(Of String)
+                    For Each kvp In variantCfg.Parameters
+                        paramParts.Add(kvp.Key & "=" & kvp.Value)
+                    Next
+                    projDesc &= " (" & String.Join(", ", paramParts.ToArray()) & ")"
+                End If
+                
+                Dim pf As New PlannedFile With {
                     .SourcePath = asmKvp.Key,
                     .TargetLocalPath = System.IO.Path.Combine(plan.VariantFolders(variantCfg.ElementName), relDir, newFileName),
                     .VaultNumber = fileNumbers(numberIndex),
                     .FileType = FileType.Assembly,
                     .IsShared = False,
-                    .ForVariants = New List(Of String) From {variantCfg.ElementName}
-                })
+                    .ForVariants = New List(Of String) From {variantCfg.ElementName},
+                    .SourceDescription = asmProps.Description,
+                    .SourceProject = asmProps.Project,
+                    .SourcePartNumber = asmProps.PartNumber,
+                    .IsPlaceholder = True
+                }
+                ' Assemblies get element name as their projected description
+                pf.ProjectedDescription = projDesc
+                pf.ProjectedProject = asmProps.Project ' Keep source project or could use family name
+                plan.Files.Add(pf)
                 numberIndex += 1
             Next
         Next
@@ -1098,15 +1568,24 @@ Public Module ElementReleaseLib
                 For Each vc2 As ExcelReaderLib.ElementConfig In variants
                     allVariantNames2.Add(vc2.ElementName)
                 Next
+                Dim dwgPropsShared As FileProperties = GetFileProperties(app, dwgInfo.DrawingPath)
                 
-                plan.Files.Add(New PlannedFile With {
+                Dim pf As New PlannedFile With {
                     .SourcePath = dwgInfo.DrawingPath,
                     .TargetLocalPath = System.IO.Path.Combine(plan.SharedFolder, relDir, newFileName),
                     .VaultNumber = vaultNum,
                     .FileType = FileType.Drawing,
                     .IsShared = True,
-                    .ForVariants = allVariantNames2
-                })
+                    .ForVariants = allVariantNames2,
+                    .SourceDescription = dwgPropsShared.Description,
+                    .SourceProject = dwgPropsShared.Project,
+                    .SourcePartNumber = dwgPropsShared.PartNumber,
+                    .IsPlaceholder = True
+                }
+                ' Drawings keep their source description
+                pf.ProjectedDescription = dwgPropsShared.Description
+                pf.ProjectedProject = dwgPropsShared.Project
+                plan.Files.Add(pf)
             Else
                 For Each variantCfg2 As ExcelReaderLib.ElementConfig In variants
                     ' Find the released model's number for this variant if drawing shares number
@@ -1128,15 +1607,24 @@ Public Module ElementReleaseLib
                     ' Preserve any suffix from the original drawing filename
                     Dim newFileName As String = vaultNum & dwgSuffix & ".idw"
                     Dim relDir As String = System.IO.Path.GetDirectoryName(dwgInfo.RelativePath)
+                    Dim dwgPropsNonShared As FileProperties = GetFileProperties(app, dwgInfo.DrawingPath)
                     
-                    plan.Files.Add(New PlannedFile With {
+                    Dim pf As New PlannedFile With {
                         .SourcePath = dwgInfo.DrawingPath,
                         .TargetLocalPath = System.IO.Path.Combine(plan.VariantFolders(variantCfg2.ElementName), relDir, newFileName),
                         .VaultNumber = vaultNum,
                         .FileType = FileType.Drawing,
                         .IsShared = False,
-                        .ForVariants = New List(Of String) From {variantCfg2.ElementName}
-                    })
+                        .ForVariants = New List(Of String) From {variantCfg2.ElementName},
+                        .SourceDescription = dwgPropsNonShared.Description,
+                        .SourceProject = dwgPropsNonShared.Project,
+                        .SourcePartNumber = dwgPropsNonShared.PartNumber,
+                        .IsPlaceholder = True
+                    }
+                    ' Drawings keep their source description
+                    pf.ProjectedDescription = dwgPropsNonShared.Description
+                    pf.ProjectedProject = dwgPropsNonShared.Project
+                    plan.Files.Add(pf)
                 Next
             End If
         Next
@@ -1228,6 +1716,49 @@ Public Module ElementReleaseLib
     End Function
     
     ''' <summary>
+    ''' Filters a release plan to only include files for selected elements.
+    ''' Shared files are included if ANY selected element needs them.
+    ''' </summary>
+    Public Function FilterReleasePlan(plan As ReleasePlan, _
+                                       selectedElements As List(Of ExcelReaderLib.ElementConfig)) As ReleasePlan
+        Dim filteredPlan As New ReleasePlan()
+        filteredPlan.SharedFolder = plan.SharedFolder
+        For Each kvp In plan.VariantFolders
+            filteredPlan.VariantFolders(kvp.Key) = kvp.Value
+        Next
+        
+        ' Build set of selected element names
+        Dim selectedNames As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        For Each elem As ExcelReaderLib.ElementConfig In selectedElements
+            selectedNames.Add(elem.ElementName)
+        Next
+        
+        ' Filter files
+        For Each f As PlannedFile In plan.Files
+            Dim includeFile As Boolean = False
+            
+            If f.IsShared Then
+                ' Shared files are always included if any element is selected
+                includeFile = (selectedNames.Count > 0)
+            Else
+                ' Element-specific files - check if any ForVariants match selected
+                For Each variantName In f.ForVariants
+                    If selectedNames.Contains(variantName) Then
+                        includeFile = True
+                        Exit For
+                    End If
+                Next
+            End If
+            
+            If includeFile Then
+                filteredPlan.Files.Add(f)
+            End If
+        Next
+        
+        Return filteredPlan
+    End Function
+    
+    ''' <summary>
     ''' Show plan confirmation dialog.
     ''' </summary>
     Public Function ShowPlanConfirmationDialog(plan As ReleasePlan) As Boolean
@@ -1270,14 +1801,15 @@ Public Module ElementReleaseLib
     Public Function CreateStandalonePart(app As Inventor.Application, _
                                           sourcePartPath As String, _
                                           targetPath As String, _
-                                          newPartNumber As String) As Boolean
+                                          newPartNumber As String, _
+                                          Optional projectedDescription As String = Nothing) As Boolean
         Try
             System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(targetPath))
-            
+
             ' Open source part (might already be open as part of the assembly)
             Dim partDoc As PartDocument = Nothing
             Dim wasAlreadyOpen As Boolean = False
-            
+
             For Each doc As Document In app.Documents
                 If doc.FullFileName.Equals(sourcePartPath, StringComparison.OrdinalIgnoreCase) Then
                     partDoc = CType(doc, PartDocument)
@@ -1285,49 +1817,45 @@ Public Module ElementReleaseLib
                     Exit For
                 End If
             Next
-            
+
             If partDoc Is Nothing Then
                 partDoc = CType(app.Documents.Open(sourcePartPath, True), PartDocument)
             End If
-            
+
             Try
                 ' Use SaveAs FIRST to create new file with NEW GUID
                 ' This avoids GUID conflicts when both source and target are open
                 partDoc.SaveAs(targetPath, False)
                 UtilsLib.LogInfo("  SaveAs with new GUID: " & System.IO.Path.GetFileName(targetPath))
-                
-                ' Document is now the target file - break derivation links
-                Dim dpcs = partDoc.ComponentDefinition.ReferenceComponents.DerivedPartComponents
-                Dim dpcList As New List(Of DerivedPartComponent)
-                For Each dpc As DerivedPartComponent In dpcs
-                    dpcList.Add(dpc)
-                Next
-                
-                For Each dpc As DerivedPartComponent In dpcList
-                    Try
-                        dpc.BreakLinkToFile()
-                        UtilsLib.LogInfo("  Broke link: " & dpc.Name)
-                    Catch ex As Exception
-                        UtilsLib.LogWarn("  WARNING: Could not break link - " & ex.Message)
-                    End Try
-                Next
-                
-                ' Set Part Number in Design Tracking Properties
+
+                ' Document is now the target file - break ALL external references
+                ' This is critical to ensure released parts don't depend on source/master files
+                BreakAllExternalLinks(partDoc)
+
+                ' Set Part Number and Description in Design Tracking Properties
                 Try
                     Dim designProps = partDoc.PropertySets.Item("Design Tracking Properties")
                     designProps.Item("Part Number").Value = newPartNumber
                     UtilsLib.LogInfo("  Set Part Number: " & newPartNumber)
+                    
+                    ' Set Description if projected description provided
+                    If Not String.IsNullOrEmpty(projectedDescription) Then
+                        designProps.Item("Description").Value = projectedDescription
+                        UtilsLib.LogInfo("  Set Description: " & projectedDescription)
+                    End If
                 Catch ex As Exception
                     UtilsLib.LogWarn("  WARNING: Failed to set Part Number: " & ex.Message)
                 End Try
-                
+
                 ' Also set Title in Summary Information (title blocks often use this)
+                ' Title should be the description, not the part number
                 Try
                     Dim summaryProps = partDoc.PropertySets.Item("Inventor Summary Information")
-                    summaryProps.Item("Title").Value = newPartNumber
+                    Dim newTitle As String = If(Not String.IsNullOrEmpty(projectedDescription), projectedDescription, newPartNumber)
+                    summaryProps.Item("Title").Value = newTitle
                 Catch ex As Exception
                 End Try
-                
+
                 partDoc.Save()
                 UtilsLib.LogInfo("Created standalone: " & System.IO.Path.GetFileName(targetPath))
                 
@@ -1347,6 +1875,117 @@ Public Module ElementReleaseLib
     End Function
     
     ''' <summary>
+    ''' Break ALL external links in a part document.
+    ''' This is critical to ensure released parts are completely standalone and
+    ''' don't depend on source/master/skeleton files.
+    ''' </summary>
+    Private Sub BreakAllExternalLinks(partDoc As PartDocument)
+        Dim compDef As PartComponentDefinition = partDoc.ComponentDefinition
+        Dim refComps = compDef.ReferenceComponents
+        
+        ' 1. Break DerivedPartComponents (parts derived from multibody masters)
+        Dim dpcList As New List(Of DerivedPartComponent)
+        For Each dpc As DerivedPartComponent In refComps.DerivedPartComponents
+            dpcList.Add(dpc)
+        Next
+        For Each dpc As DerivedPartComponent In dpcList
+            Try
+                Dim masterPath As String = ""
+                Try : masterPath = dpc.ReferencedFile.FullFileName : Catch : End Try
+                dpc.BreakLinkToFile()
+                UtilsLib.LogInfo("  Broke DerivedPartComponent link: " & If(masterPath <> "", System.IO.Path.GetFileName(masterPath), dpc.Name))
+            Catch ex As Exception
+                UtilsLib.LogWarn("  WARNING: Could not break DerivedPartComponent - " & ex.Message)
+            End Try
+        Next
+        
+        ' 2. Break DerivedAssemblyComponents (parts derived from assemblies)
+        Dim dacList As New List(Of DerivedAssemblyComponent)
+        For Each dac As DerivedAssemblyComponent In refComps.DerivedAssemblyComponents
+            dacList.Add(dac)
+        Next
+        For Each dac As DerivedAssemblyComponent In dacList
+            Try
+                Dim masterPath As String = ""
+                Try : masterPath = dac.ReferencedFile.FullFileName : Catch : End Try
+                dac.BreakLinkToFile()
+                UtilsLib.LogInfo("  Broke DerivedAssemblyComponent link: " & If(masterPath <> "", System.IO.Path.GetFileName(masterPath), dac.Name))
+            Catch ex As Exception
+                UtilsLib.LogWarn("  WARNING: Could not break DerivedAssemblyComponent - " & ex.Message)
+            End Try
+        Next
+        
+        ' 3. Break ImportedComponents
+        Dim icList As New List(Of ImportedComponent)
+        For Each ic As ImportedComponent In refComps.ImportedComponents
+            icList.Add(ic)
+        Next
+        For Each ic As ImportedComponent In icList
+            Try
+                ic.BreakLink()
+                UtilsLib.LogInfo("  Broke ImportedComponent link")
+            Catch ex As Exception
+                UtilsLib.LogWarn("  WARNING: Could not break ImportedComponent - " & ex.Message)
+            End Try
+        Next
+        
+        ' 4. Check for embedded ReferenceFeatures that might link to external files
+        ' These are features that reference geometry from other documents
+        Try
+            For Each feature As Object In compDef.Features
+                Try
+                    ' Try to access as ReferenceFeature
+                    Dim refFeature As ReferenceFeature = TryCast(feature, ReferenceFeature)
+                    If refFeature IsNot Nothing Then
+                        Try
+                            refFeature.BreakLink()
+                            UtilsLib.LogInfo("  Broke ReferenceFeature link")
+                        Catch
+                        End Try
+                    End If
+                Catch
+                End Try
+            Next
+        Catch
+        End Try
+        
+        ' 5. Check for sketches with projected geometry from external documents
+        ' This is particularly important for sheet metal parts
+        For Each sketch As PlanarSketch In compDef.Sketches
+            Try
+                ' Projected cuts are often linked to external geometry
+                ' Delete projected geometry that references external files
+                Dim projectedGeoToDelete As New List(Of Object)
+                For Each projCut As ProjectedCut In sketch.ProjectedCuts
+                    Try
+                        projectedGeoToDelete.Add(projCut)
+                    Catch
+                    End Try
+                Next
+                For Each pg In projectedGeoToDelete
+                    Try
+                        CType(pg, ProjectedCut).Delete()
+                        UtilsLib.LogInfo("  Deleted external ProjectedCut in sketch: " & sketch.Name)
+                    Catch
+                    End Try
+                Next
+            Catch
+            End Try
+        Next
+        
+        ' 6. Verify all external references are broken
+        Dim remainingRefs As Integer = partDoc.ReferencedDocuments.Count
+        If remainingRefs > 0 Then
+            UtilsLib.LogWarn("  WARNING: " & remainingRefs & " external references remain after link breaking:")
+            For Each refDoc As Document In partDoc.ReferencedDocuments
+                UtilsLib.LogWarn("    -> " & System.IO.Path.GetFileName(refDoc.FullFileName))
+            Next
+        Else
+            UtilsLib.LogInfo("  All external links broken successfully")
+        End If
+    End Sub
+    
+    ''' <summary>
     ''' Create assembly snapshot with updated references using SaveAs for new GUID.
     ''' </summary>
     Public Function CreateAssemblySnapshot(app As Inventor.Application, _
@@ -1354,7 +1993,8 @@ Public Module ElementReleaseLib
                                             targetPath As String, _
                                             referenceMap As Dictionary(Of String, String), _
                                             variantParams As Dictionary(Of String, String), _
-                                            newPartNumber As String) As Boolean
+                                            newPartNumber As String, _
+                                            Optional projectedDescription As String = Nothing) As Boolean
         Try
             System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(targetPath))
             
@@ -1413,6 +2053,15 @@ Public Module ElementReleaseLib
                     designProps.Item("Part Number").Value = newPartNumber
                     UtilsLib.LogInfo("  Set Part Number: " & newPartNumber)
                     
+                    ' Set Description if projected description provided
+                    If Not String.IsNullOrEmpty(projectedDescription) Then
+                        Dim oldDesc As String = ""
+                        Try : oldDesc = designProps.Item("Description").Value.ToString() : Catch : End Try
+                        UtilsLib.LogInfo("  DEBUG: Old Description=" & oldDesc)
+                        designProps.Item("Description").Value = projectedDescription
+                        UtilsLib.LogInfo("  Set Description: " & projectedDescription)
+                    End If
+                    
                     ' Verify immediately
                     Dim verifyPN As String = designProps.Item("Part Number").Value.ToString()
                     UtilsLib.LogInfo("  DEBUG: Verify Part Number=" & verifyPN)
@@ -1421,12 +2070,14 @@ Public Module ElementReleaseLib
                 End Try
                 
                 ' Also set Title in Summary Information (title blocks often use this)
+                ' Title should be the description, not the part number
                 Try
                     Dim summaryProps = asmDoc.PropertySets.Item("Inventor Summary Information")
                     Dim oldTitle As String = summaryProps.Item("Title").Value.ToString()
                     UtilsLib.LogInfo("  DEBUG: Old Title=" & oldTitle)
-                    summaryProps.Item("Title").Value = newPartNumber
-                    UtilsLib.LogInfo("  Set Title: " & newPartNumber)
+                    Dim newTitle As String = If(Not String.IsNullOrEmpty(projectedDescription), projectedDescription, newPartNumber)
+                    summaryProps.Item("Title").Value = newTitle
+                    UtilsLib.LogInfo("  Set Title: " & newTitle)
                     
                     ' Verify immediately
                     Dim verifyTitle As String = summaryProps.Item("Title").Value.ToString()
@@ -1463,8 +2114,20 @@ Public Module ElementReleaseLib
                 Catch
                 End Try
                 
+                ' Rename occurrences with descriptive names: "Description (PartNumber):instance"
+                ' This removes old part numbers from occurrence names after reference replacement
+                Try
+                    Dim renamedCount As Integer = OccurrenceNamingLib.RenameAllOccurrences(asmDoc)
+                    If renamedCount > 0 Then
+                        UtilsLib.LogInfo("  Renamed " & renamedCount & " occurrences with descriptive names")
+                        asmDoc.Save()
+                    End If
+                Catch ex As Exception
+                    UtilsLib.LogWarn("  WARNING: Could not rename occurrences - " & ex.Message)
+                End Try
+
                 UtilsLib.LogInfo("Created assembly: " & System.IO.Path.GetFileName(targetPath))
-                
+
                 ' Close the target document (source will be closed at end of ExecuteRelease)
                 asmDoc.Close(True)
                 
@@ -1513,7 +2176,8 @@ Public Module ElementReleaseLib
                                        sourceDrawingPath As String, _
                                        targetPath As String, _
                                        referenceMap As Dictionary(Of String, String), _
-                                       newPartNumber As String) As Boolean
+                                       newPartNumber As String, _
+                                       Optional projectedDescription As String = Nothing) As Boolean
         Try
             System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(targetPath))
             
@@ -1529,11 +2193,17 @@ Public Module ElementReleaseLib
             ' Open source drawing
             Dim drawDoc As DrawingDocument = CType(app.Documents.Open(sourceDrawingPath, True), DrawingDocument)
             
+            ' Log reference map contents for debugging
+            UtilsLib.LogInfo("  Reference map entries (" & referenceMap.Count & " total):")
+            For Each kvp In referenceMap
+                UtilsLib.LogInfo("    " & System.IO.Path.GetFileName(kvp.Key) & " -> " & System.IO.Path.GetFileName(kvp.Value))
+            Next
+            
             ' Log current drawing references before replacement
             UtilsLib.LogInfo("  Drawing refs before replacement:")
             For i As Integer = 1 To drawDoc.File.ReferencedFileDescriptors.Count
                 Dim fd As FileDescriptor = drawDoc.File.ReferencedFileDescriptors.Item(i)
-                Dim inMap As String = If(referenceMap.ContainsKey(fd.FullFileName), "-> " & System.IO.Path.GetFileName(referenceMap(fd.FullFileName)), "(not in map)")
+                Dim inMap As String = If(referenceMap.ContainsKey(fd.FullFileName), "-> " & System.IO.Path.GetFileName(referenceMap(fd.FullFileName)), "(NOT IN MAP - this is a problem!)")
                 UtilsLib.LogInfo("    " & System.IO.Path.GetFileName(fd.FullFileName) & " " & inMap)
             Next
             
@@ -1542,13 +2212,21 @@ Public Module ElementReleaseLib
                 Dim fd As FileDescriptor = drawDoc.File.ReferencedFileDescriptors.Item(i)
                 Dim oldPath As String = fd.FullFileName
                 If referenceMap.ContainsKey(oldPath) Then
+                    Dim newPath As String = referenceMap(oldPath)
                     Try
-                        fd.ReplaceReference(referenceMap(oldPath))
-                        UtilsLib.LogInfo("  Replaced: " & System.IO.Path.GetFileName(oldPath))
+                        fd.ReplaceReference(newPath)
+                        UtilsLib.LogInfo("  Replaced: " & System.IO.Path.GetFileName(oldPath) & " -> " & System.IO.Path.GetFileName(newPath))
                     Catch ex As Exception
-                        UtilsLib.LogWarn("  WARNING: ReplaceReference failed - " & ex.Message)
+                        UtilsLib.LogWarn("  WARNING: ReplaceReference failed for " & System.IO.Path.GetFileName(oldPath) & " -> " & System.IO.Path.GetFileName(newPath) & ": " & ex.Message)
                     End Try
                 End If
+            Next
+            
+            ' Verify references after replacement
+            UtilsLib.LogInfo("  Drawing refs AFTER replacement:")
+            For i As Integer = 1 To drawDoc.File.ReferencedFileDescriptors.Count
+                Dim fd As FileDescriptor = drawDoc.File.ReferencedFileDescriptors.Item(i)
+                UtilsLib.LogInfo("    " & System.IO.Path.GetFileName(fd.FullFileName))
             Next
             
             ' Save to temp file (this commits the reference changes)
@@ -1606,20 +2284,27 @@ Public Module ElementReleaseLib
             
             UtilsLib.LogInfo("  Using known Part Number from release plan: " & newPartNumber)
             
-            ' Set drawing's own Part Number (for title blocks that use "Drawing Properties")
+            ' Set drawing's own Part Number and Description (for title blocks)
             Try
                 Dim designProps = drawDoc.PropertySets.Item("Design Tracking Properties")
                 designProps.Item("Part Number").Value = newPartNumber
                 UtilsLib.LogInfo("  Set Drawing Part Number: " & newPartNumber)
+                
+                ' Set Description if projected description provided
+                If Not String.IsNullOrEmpty(projectedDescription) Then
+                    designProps.Item("Description").Value = projectedDescription
+                    UtilsLib.LogInfo("  Set Drawing Description: " & projectedDescription)
+                End If
             Catch ex As Exception
                 UtilsLib.LogWarn("  WARNING: Failed to set Drawing Part Number: " & ex.Message)
             End Try
             
-            ' Also set Title in Summary Information
+            ' Also set Title in Summary Information (use description, not part number)
             Try
                 Dim summaryProps = drawDoc.PropertySets.Item("Inventor Summary Information")
-                summaryProps.Item("Title").Value = newPartNumber
-                UtilsLib.LogInfo("  Set Drawing Title: " & newPartNumber)
+                Dim newTitle As String = If(Not String.IsNullOrEmpty(projectedDescription), projectedDescription, newPartNumber)
+                summaryProps.Item("Title").Value = newTitle
+                UtilsLib.LogInfo("  Set Drawing Title: " & newTitle)
             Catch ex As Exception
                 UtilsLib.LogWarn("  WARNING: Failed to set Drawing Title: " & ex.Message)
             End Try
@@ -1718,7 +2403,21 @@ Public Module ElementReleaseLib
                 
                 ' Note: Parameters are applied during assembly creation, not part creation
                 ' Parts get their geometry from derivation, not from assembly parameters
-                CreateStandalonePart(app, file.SourcePath, file.TargetLocalPath, file.VaultNumber)
+                Try
+                    ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.InProgress, _
+                        "Creating: " & System.IO.Path.GetFileName(file.TargetLocalPath))
+                Catch : End Try
+                
+                Dim partSuccess As Boolean = CreateStandalonePart(app, file.SourcePath, file.TargetLocalPath, file.VaultNumber, file.ProjectedDescription)
+                
+                Try
+                    If partSuccess Then
+                        ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Completed)
+                    Else
+                        ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Failed, _
+                            "FAILED: " & System.IO.Path.GetFileName(file.TargetLocalPath))
+                    End If
+                Catch : End Try
             Next
             
             UtilsLib.LogInfo("ExecuteRelease: Creating assemblies...")
@@ -1732,7 +2431,21 @@ Public Module ElementReleaseLib
                             UtilsLib.LogWarn("  Skipping OldVersions file: " & System.IO.Path.GetFileName(file.SourcePath))
                             Continue For
                         End If
-                        CreateAssemblySnapshot(app, file.SourcePath, file.TargetLocalPath, refMap, variantCfg.Parameters, file.VaultNumber)
+                        Try
+                            ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.InProgress, _
+                                "Creating: " & System.IO.Path.GetFileName(file.TargetLocalPath))
+                        Catch : End Try
+                        
+                        Dim asmSuccess As Boolean = CreateAssemblySnapshot(app, file.SourcePath, file.TargetLocalPath, refMap, variantCfg.Parameters, file.VaultNumber, file.ProjectedDescription)
+                        
+                        Try
+                            If asmSuccess Then
+                                ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Completed)
+                            Else
+                                ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Failed, _
+                                    "FAILED: " & System.IO.Path.GetFileName(file.TargetLocalPath))
+                            End If
+                        Catch : End Try
                     End If
                 Next
             Next
@@ -1747,7 +2460,22 @@ Public Module ElementReleaseLib
                     End If
                     Dim variantName = file.ForVariants(0)
                     Dim refMap = BuildReferenceMapForVariant(context, variantName)
-                    CreateDrawingCopy(app, file.SourcePath, file.TargetLocalPath, refMap, file.VaultNumber)
+                    
+                    Try
+                        ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.InProgress, _
+                            "Creating: " & System.IO.Path.GetFileName(file.TargetLocalPath))
+                    Catch : End Try
+                    
+                    Dim dwgSuccess As Boolean = CreateDrawingCopy(app, file.SourcePath, file.TargetLocalPath, refMap, file.VaultNumber, file.ProjectedDescription)
+                    
+                    Try
+                        If dwgSuccess Then
+                            ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Completed)
+                        Else
+                            ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Failed, _
+                                "FAILED: " & System.IO.Path.GetFileName(file.TargetLocalPath))
+                        End If
+                    Catch : End Try
                 End If
             Next
             
@@ -1785,6 +2513,10 @@ Public Module ElementReleaseLib
             ' 3. Update and save the drawing
             
             UtilsLib.LogInfo("ExecuteRelease: Fix-up pass...")
+            Try
+                ElementReleaseUILib.LogMessage("")
+                ElementReleaseUILib.LogMessage("Fix-up pass: Verifying drawing references...")
+            Catch : End Try
             
             ' Step 1: Open ALL models first (so they're in memory with correct properties)
             UtilsLib.LogInfo("  Opening models fresh from disk...")
@@ -1881,6 +2613,10 @@ Public Module ElementReleaseLib
             
             ' Verify created files
             UtilsLib.LogInfo("ExecuteRelease: Verifying created files...")
+            Try
+                ElementReleaseUILib.LogMessage("")
+                ElementReleaseUILib.LogMessage("Verifying created files...")
+            Catch : End Try
             Dim verificationPassed As Boolean = VerifyReleasedFiles(app, context)
             
             ' Reopen the original source assembly so user is back where they started

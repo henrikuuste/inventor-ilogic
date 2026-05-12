@@ -157,8 +157,9 @@ Sub Main()
     
     ' Load general settings (template, subfolder, project, assembly)
     ' Paths are stored relative to project root and converted to absolute on load
+    ' Pass search paths so assembly can be found if it was moved
     Dim generalSettings As MakeComponentsLib.GeneralSettings = _
-        MakeComponentsLib.LoadGeneralSettings(masterDoc, projectRoot)
+        MakeComponentsLib.LoadGeneralSettings(masterDoc, projectRoot, masterFolder, vaultRoot)
     
     ' Get available materials from document's Materials collection
     Dim materials As List(Of String) = MakeComponentsLib.GetAvailableMaterials(masterDoc)
@@ -447,14 +448,14 @@ Sub Main()
         Dim effectiveTemplatePath As String = templatePath
         If Not bi.ConvertToSheetMetal Then
             If MakeComponentsLib.IsSheetMetalTemplate(app, templatePath) Then
-                Dim defaultTemplate As String = MakeComponentsLib.GetDefaultPartTemplate(app)
-                Dim defaultTemplatePath As String = MakeComponentsLib.FindTemplate(app, defaultTemplate)
+                Dim fallbackTemplate As String = MakeComponentsLib.GetDefaultPartTemplate(app)
+                Dim fallbackTemplatePath As String = MakeComponentsLib.FindTemplate(app, fallbackTemplate)
                 
                 ' Verify the default template is not sheet metal either
-                If Not String.IsNullOrEmpty(defaultTemplatePath) AndAlso _
-                   Not MakeComponentsLib.IsSheetMetalTemplate(app, defaultTemplatePath) Then
-                    effectiveTemplatePath = defaultTemplatePath
-                    UtilsLib.LogInfo("Loo detailid: Selected template is sheet metal but part is normal - using default template: " & defaultTemplate)
+                If Not String.IsNullOrEmpty(fallbackTemplatePath) AndAlso _
+                   Not MakeComponentsLib.IsSheetMetalTemplate(app, fallbackTemplatePath) Then
+                    effectiveTemplatePath = fallbackTemplatePath
+                    UtilsLib.LogInfo("Loo detailid: Selected template is sheet metal but part is normal - using default template: " & fallbackTemplate)
                 Else
                     UtilsLib.LogWarn("Loo detailid: Selected template is sheet metal and default is also sheet metal - part may have unexpected properties")
                 End If

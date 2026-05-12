@@ -16,9 +16,10 @@
 ' 1. Open the main assembly of a base element (Aluselemendid/{ElementName}/*.iam)
 ' 2. Ensure elemendid.xlsx exists in the element folder
 ' 3. Run this rule
-' 4. Select release mode
-' 5. Review the plan and confirm
-' 6. Files are created in Elemendid/{ElementName}/ and Elemendid/Ühine/
+' 4. UI shows: left panel = elements with checkboxes, right panel = file tree preview
+' 5. Select which elements to release (default: all)
+' 6. Click "Väljasta" to start - progress window shows status
+' 7. Files are created in Elemendid/{ElementName}/ and Elemendid/Ühine/
 '
 ' Ref: docs/plans/2026-04-26-module-release-cycle.md
 ' ============================================================================
@@ -32,9 +33,12 @@ AddReference "Connectivity.InventorAddin.EdmAddin"
 AddVbFile "Lib/RuntimeLib.vb"
 AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
+AddVbFile "Lib/UILib.vb"
 AddVbFile "Lib/ExcelReaderLib.vb"
 AddVbFile "Lib/VaultNumberingLib.vb"
+AddVbFile "Lib/OccurrenceNamingLib.vb"
 AddVbFile "Lib/ElementReleaseLib.vb"
+AddVbFile "Lib/ElementReleaseUILib.vb"
 
 Imports System.Windows.Forms
 Imports Inventor
@@ -63,24 +67,16 @@ Sub Main()
     
     Logger.Info("Loo elemendid: Active assembly: " & activeDoc.DisplayName)
     
-    ' Step 1: Show mode selection dialog
-    Dim mode As ElementReleaseLib.ReleaseMode = ElementReleaseLib.ShowModeSelectionDialog(app)
-    If mode = ElementReleaseLib.ReleaseMode.Cancelled Then
-        Logger.Info("Loo elemendid: Cancelled by user")
-        Return
-    End If
-    
-    Logger.Info("Loo elemendid: Mode selected: " & mode.ToString())
-    
-    ' Step 2: Discover context
-    Dim context As ElementReleaseLib.ElementReleaseContext = ElementReleaseLib.DiscoverContext(app, mode)
+    ' Step 1: Discover context (always use FullElement mode - UI will allow element selection)
+    Logger.Info("Loo elemendid: Discovering context...")
+    Dim context As ElementReleaseLib.ElementReleaseContext = ElementReleaseLib.DiscoverContext(app, ElementReleaseLib.ReleaseMode.FullElement)
     If context Is Nothing Then
         Logger.Info("Loo elemendid: Context discovery failed")
         MessageBox.Show("Konteksti tuvastamine ebaõnnestus. Kontrolli logi.", "Loo elemendid")
         Return
     End If
     
-    ' Step 3: Discover assembly tree
+    ' Step 2: Discover assembly tree
     Logger.Info("Loo elemendid: Discovering assembly tree...")
     context.AssemblyTree = ElementReleaseLib.DiscoverAssemblyTree(app, _
         CType(activeDoc, AssemblyDocument).FullFileName, _
@@ -92,24 +88,24 @@ Sub Main()
         Return
     End If
     
-    ' Step 4: Discover drawings
+    ' Step 3: Discover drawings
     Logger.Info("Loo elemendid: Discovering drawings...")
     Dim searchFolders As New List(Of String)
     searchFolders.Add(context.SourceRoot)
     context.AssemblyTree.Drawings = ElementReleaseLib.DiscoverDrawings(app, context.AssemblyTree, searchFolders)
     
-    ' Step 5: Get master paths
+    ' Step 4: Get master paths
     context.MasterPaths = ElementReleaseLib.GetMasterPaths(context.AssemblyTree)
     Logger.Info("Loo elemendid: Found " & context.MasterPaths.Count & " master documents")
     
-    ' Step 6: Build element matrix (fingerprint analysis)
+    ' Step 5: Build element matrix (fingerprint analysis)
     Logger.Info("Loo elemendid: Building element matrix...")
     context.ElementMatrix = ElementReleaseLib.BuildElementMatrix(app, _
         context.AssemblyTree, _
         context.Elements, _
         context.MasterPaths)
     
-    ' Step 7: Classify part groups
+    ' Step 6: Classify part groups
     Logger.Info("Loo elemendid: Classifying part groups...")
     context.PartGroups = ElementReleaseLib.ClassifyPartGroups(context.ElementMatrix, context.AssemblyTree)
     
@@ -129,7 +125,111 @@ Sub Main()
     Next
     Logger.Info("Loo elemendid: Shared parts: " & sharedCount & ", Unique parts: " & uniqueCount)
     
-    ' Step 8: Calculate required file numbers
+    ' Step 7: Calculate required file numbers
+    Dim requiredNumbers As Integer = CalculateRequiredNumbers(context)
+    Logger.Info("Loo elemendid: Required file numbers: " & requiredNumbers)
+    
+    ' Step 8: Generate PLACEHOLDER numbers for preview (not real Vault numbers yet)
+    ' Real numbers are allocated only AFTER user confirms release
+    Logger.Info("Loo elemendid: Generating placeholder numbers for preview...")
+    Dim placeholderNumbers As List(Of String) = ElementReleaseLib.GeneratePlaceholderNumbers(requiredNumbers)
+    
+    ' Step 9: Compute release plan with placeholders (reads iProperties from source files)
+    Logger.Info("Loo elemendid: Computing release plan preview...")
+    context.ReleasePlan = ElementReleaseLib.ComputeReleasePlan(
+        app, _
+        context.AssemblyTree, _
+        context.PartGroups, _
+        context.Elements, _
+        context.TargetRoot, _
+        placeholderNumbers)
+    
+    ' Step 10: Show comprehensive UI for element selection and confirmation
+    ' UI shows PLACEHOLDER numbers and PROJECTED properties (what files will become)
+    Logger.Info("Loo elemendid: Showing release UI...")
+    Dim uiResult As ElementReleaseUILib.ReleaseUIResult = ElementReleaseUILib.ShowReleaseUI( _
+        app, context.Elements, context.ReleasePlan, context)
+    
+    If uiResult.Cancelled Then
+        Logger.Info("Loo elemendid: Cancelled by user")
+        Return
+    End If
+    
+    ' Step 11: Filter release plan based on selected elements
+    Logger.Info("Loo elemendid: Filtering plan for selected elements...")
+    Logger.Info("Loo elemendid: Selected elements: " & uiResult.SelectedElements.Count)
+    
+    ' Update context with selected elements
+    context.Elements = uiResult.SelectedElements
+    
+    ' Filter the release plan
+    context.ReleasePlan = ElementReleaseLib.FilterReleasePlan(context.ReleasePlan, uiResult.SelectedElements)
+    Logger.Info("Loo elemendid: Filtered plan has " & context.ReleasePlan.Files.Count & " files")
+    
+    If context.ReleasePlan.Files.Count = 0 Then
+        Logger.Info("Loo elemendid: No files to release after filtering")
+        MessageBox.Show("Valitud elementide jaoks pole faile väljastamiseks.", "Loo elemendid")
+        Return
+    End If
+    
+    ' Step 12: NOW allocate real file numbers (only after user confirms)
+    ' This is when we actually consume Vault numbers
+    Logger.Info("Loo elemendid: Allocating real file numbers...")
+    If Not ElementReleaseLib.AllocateRealNumbers(context.ReleasePlan, context.TargetRoot) Then
+        Logger.Error("Loo elemendid: Failed to allocate file numbers")
+        MessageBox.Show("Failinumbrite hankimine ebaõnnestus.", "Loo elemendid")
+        Return
+    End If
+    Logger.Info("Loo elemendid: Real numbers allocated for " & context.ReleasePlan.Files.Count & " files")
+    
+    ' Step 13: Show execution form and execute release with progress tracking
+    Logger.Info("Loo elemendid: Executing release...")
+    
+    ' Show execution form with file tree
+    Dim execForm As Form = ElementReleaseUILib.ShowExecutionForm(context, context.ReleasePlan)
+    
+    ' Log start
+    ElementReleaseUILib.LogMessage("Väljastamine alustatud: " & DateTime.Now.ToString("HH:mm:ss"))
+    ElementReleaseUILib.LogMessage("Elemente: " & context.Elements.Count)
+    ElementReleaseUILib.LogMessage("Faile: " & context.ReleasePlan.Files.Count)
+    ElementReleaseUILib.LogMessage("")
+    
+    ' Execute with progress tracking
+    Dim success As Boolean = ExecuteReleaseWithProgress(app, context)
+    
+    ' Mark execution complete
+    ElementReleaseUILib.MarkExecutionComplete(success)
+    
+    If success Then
+        Logger.Info("Loo elemendid: Release completed successfully")
+    Else
+        Logger.Error("Loo elemendid: Release failed")
+    End If
+    
+    ' Wait for user to close execution form
+    ElementReleaseUILib.WaitForExecutionFormClose()
+End Sub
+
+''' <summary>
+''' Executes release with progress tracking via UI callbacks
+''' </summary>
+Function ExecuteReleaseWithProgress(app As Inventor.Application, _
+                                    context As ElementReleaseLib.ElementReleaseContext) As Boolean
+    Try
+        ' Execute the release - it will use the callbacks we set up
+        Dim success As Boolean = ElementReleaseLib.ExecuteRelease(app, context)
+        Return success
+    Catch ex As Exception
+        Logger.Error("ExecuteReleaseWithProgress: " & ex.Message)
+        ElementReleaseUILib.LogMessage("VIGA: " & ex.Message)
+        Return False
+    End Try
+End Function
+
+''' <summary>
+''' Calculate required file numbers based on context
+''' </summary>
+Function CalculateRequiredNumbers(context As ElementReleaseLib.ElementReleaseContext) As Integer
     Dim requiredNumbers As Integer = 0
     
     For Each group2 As ElementReleaseLib.PartGroup In context.PartGroups
@@ -143,17 +243,14 @@ Sub Main()
     requiredNumbers += context.AssemblyTree.Assemblies.Count * context.Elements.Count
     
     ' Drawings - only count those that need unique numbers
-    ' (drawings that start with their model's number reuse the model's number)
     Dim canShareDrawings As Boolean = (context.Elements.Count >= 2)
     For Each dwgInfo As ElementReleaseLib.DrawingInfo In context.AssemblyTree.Drawings
-        ' Check if drawing filename starts with its primary model's number
         Dim dwgFileName As String = System.IO.Path.GetFileNameWithoutExtension(dwgInfo.DrawingPath)
         Dim primaryModelPath As String = If(dwgInfo.ReferencedModelPaths.Count > 0, dwgInfo.ReferencedModelPaths(0), "")
         Dim modelNumber As String = System.IO.Path.GetFileNameWithoutExtension(primaryModelPath)
         Dim shareNumberWithModel As Boolean = Not String.IsNullOrEmpty(modelNumber) AndAlso _
             dwgFileName.StartsWith(modelNumber, StringComparison.OrdinalIgnoreCase)
         
-        ' Skip number allocation if drawing reuses model's number
         If shareNumberWithModel Then
             Continue For
         End If
@@ -175,44 +272,8 @@ Sub Main()
         End If
     Next
     
-    Logger.Info("Loo elemendid: Required file numbers: " & requiredNumbers)
-    
-    ' Step 9: Get file numbers
-    Logger.Info("Loo elemendid: Getting file numbers...")
-    Dim fileNumbers As List(Of String) = ElementReleaseLib.GetFileNumbers(context.TargetRoot, requiredNumbers)
-    
-    If fileNumbers Is Nothing OrElse fileNumbers.Count < requiredNumbers Then
-        Logger.Info("Loo elemendid: Failed to get enough file numbers")
-        MessageBox.Show("Failinumbrite hankimine ebaõnnestus.", "Loo elemendid")
-        Return
-    End If
-    
-    ' Step 10: Compute release plan
-    Logger.Info("Loo elemendid: Computing release plan...")
-    context.ReleasePlan = ElementReleaseLib.ComputeReleasePlan(
-        context.AssemblyTree, _
-        context.PartGroups, _
-        context.Elements, _
-        context.TargetRoot, _
-        fileNumbers)
-    
-    ' Step 11: Show confirmation dialog
-    If Not ElementReleaseLib.ShowPlanConfirmationDialog(context.ReleasePlan) Then
-        Logger.Info("Loo elemendid: Cancelled by user at confirmation")
-        Return
-    End If
-    
-    ' Step 12: Execute release
-    Logger.Info("Loo elemendid: Executing release...")
-    Dim success As Boolean = ElementReleaseLib.ExecuteRelease(app, context)
-    
-    ' Step 13: Show completion summary
-    If success Then
-        ElementReleaseLib.ShowCompletionSummary(context.ReleasePlan)
-    Else
-        MessageBox.Show("Väljastamine ebaõnnestus. Kontrolli logi.", "Loo elemendid", MessageBoxButtons.OK, MessageBoxIcon.Error)
-    End If
-End Sub
+    Return requiredNumbers
+End Function
 
 Function FindPartGroupByPath(partGroups As List(Of ElementReleaseLib.PartGroup), refPath As String) As ElementReleaseLib.PartGroup
     For Each g As ElementReleaseLib.PartGroup In partGroups

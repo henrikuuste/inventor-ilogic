@@ -130,6 +130,21 @@ Sub Main()
             
             ' User clicked "Vali pind" or Kohandatud — do face pick
             Dim partDoc As PartDocument = partDocs(pickRowIndex)
+            
+            ' In Pinnalaotus mode, first ensure we have a valid measurement body
+            If customAxisDescs(pickRowIndex) = "Pinnalaotus" Then
+                Dim pinnBody As SurfaceBody = TryAutoDetectPinnalaotusBody(partDoc)
+                If pinnBody Is Nothing Then
+                    Logger.Info("Mõõdud: Pinnalaotus body not found for '" & partNames(pickRowIndex) & "', prompting user")
+                    pinnBody = PromptForPinnalaotusBody(partDoc)
+                    If pinnBody Is Nothing Then
+                        ' User cancelled body selection
+                        pickRowIndex = -1
+                        Continue Do
+                    End If
+                End If
+            End If
+            
             Logger.Info("Mõõdud: Picking face for '" & partNames(pickRowIndex) & "'")
 
             Try
@@ -152,13 +167,22 @@ Sub Main()
                     Dim widthExtent As Double
                     Dim lengthExtent As Double
                     If customAxisDescs(pickRowIndex) = "Pinnalaotus" Then
-                        Dim measBody As SurfaceBody = UnwrapLib.GetPinnalaotusMeasurementBody(partDoc)
+                        ' Use autodetect for Pinnalaotus body - never fall back to all-body measurement
+                        Dim measBody As SurfaceBody = TryAutoDetectPinnalaotusBody(partDoc)
                         If measBody IsNot Nothing Then
                             widthExtent = UnwrapLib.GetOrientedExtentForBody(measBody, wx, wy, wz)
                             lengthExtent = UnwrapLib.GetOrientedExtentForBody(measBody, lx, ly, lz)
                         Else
-                            widthExtent = BoundingBoxStockLib.GetOrientedExtent(partDoc, wx, wy, wz)
-                            lengthExtent = BoundingBoxStockLib.GetOrientedExtent(partDoc, lx, ly, lz)
+                            ' Fall back to unwrap surface if available
+                            Dim unwrapFeat As UnwrapFeature = UnwrapLib.GetUnwrapFeature(partDoc)
+                            Dim unwrapSurf As SurfaceBody = If(unwrapFeat IsNot Nothing, UnwrapLib.GetUnwrappedSurfaceBody(unwrapFeat), Nothing)
+                            If unwrapSurf IsNot Nothing Then
+                                widthExtent = UnwrapLib.GetOrientedExtentForBody(unwrapSurf, wx, wy, wz)
+                                lengthExtent = UnwrapLib.GetOrientedExtentForBody(unwrapSurf, lx, ly, lz)
+                            Else
+                                widthExtent = 0
+                                lengthExtent = 0
+                            End If
                         End If
                     Else
                         widthExtent = BoundingBoxStockLib.GetOrientedExtent(partDoc, wx, wy, wz)
@@ -338,14 +362,20 @@ Sub CollectPartData(ByVal partDoc As PartDocument, _
             Dim lx As Double = 0, ly As Double = 0, lz As Double = 0
             BoundingBoxStockLib.ParseVectorComponents(tAx, tx, ty, tz)
             BoundingBoxStockLib.ComputePerpendicularVectors(tx, ty, tz, wx, wy, wz, lx, ly, lz)
-            Dim measBody As SurfaceBody = UnwrapLib.GetPinnalaotusMeasurementBody(partDoc)
+            ' Use autodetect for correct Pinnalaotus body - never fall back to all-body measurement
+            Dim measBody As SurfaceBody = TryAutoDetectPinnalaotusBody(partDoc)
             Dim wExt As Double = 0, lExt As Double = 0
             If measBody IsNot Nothing Then
                 wExt = UnwrapLib.GetOrientedExtentForBody(measBody, wx, wy, wz)
                 lExt = UnwrapLib.GetOrientedExtentForBody(measBody, lx, ly, lz)
             Else
-                wExt = BoundingBoxStockLib.GetOrientedExtent(partDoc, wx, wy, wz)
-                lExt = BoundingBoxStockLib.GetOrientedExtent(partDoc, lx, ly, lz)
+                ' Fall back to unwrap surface if available
+                Dim unwrapFeatFB As UnwrapFeature = UnwrapLib.GetUnwrapFeature(partDoc)
+                Dim unwrapSurfFB As SurfaceBody = If(unwrapFeatFB IsNot Nothing, UnwrapLib.GetUnwrappedSurfaceBody(unwrapFeatFB), Nothing)
+                If unwrapSurfFB IsNot Nothing Then
+                    wExt = UnwrapLib.GetOrientedExtentForBody(unwrapSurfFB, wx, wy, wz)
+                    lExt = UnwrapLib.GetOrientedExtentForBody(unwrapSurfFB, lx, ly, lz)
+                End If
             End If
             If lExt >= wExt Then
                 wAx = BoundingBoxStockLib.VectorToString(wx, wy, wz)
@@ -356,7 +386,8 @@ Sub CollectPartData(ByVal partDoc As PartDocument, _
             End If
         ElseIf Not (BoundingBoxStockLib.IsVectorFormat(tAx) AndAlso BoundingBoxStockLib.IsVectorFormat(wAx)) Then
             ' Prefer unwrap flat surface plane normal as thickness; fallback = smallest-extent heuristic on measurement body
-            Dim measBodyAD As SurfaceBody = UnwrapLib.GetPinnalaotusMeasurementBody(partDoc)
+            ' Use autodetect for correct body
+            Dim measBodyAD As SurfaceBody = TryAutoDetectPinnalaotusBody(partDoc)
             Dim unwrapF As UnwrapFeature = UnwrapLib.GetUnwrapFeature(partDoc)
             Dim nx As Double = 0, ny As Double = 0, nz As Double = 0
             Dim gotUnwrapNormal As Boolean = (unwrapF IsNot Nothing AndAlso UnwrapLib.TryGetUnwrapFlatSurfaceNormal(unwrapF, nx, ny, nz))
@@ -485,6 +516,182 @@ End Function
 ' Only sheet metal flat-pattern mode blocks face pick and thickness-plane workflow
 Function IsLehtmetallMode(ByVal customAxisDesc As String) As Boolean
     Return customAxisDesc = "Lehtmetall"
+End Function
+
+' ============================================================================
+' Auto-detect or prompt for Pinnalaotus measurement body
+' Similar logic to Pinnalaotuse vaated.vb - finds the correct body to measure
+' ============================================================================
+Function TryAutoDetectPinnalaotusBody(ByVal partDoc As PartDocument) As SurfaceBody
+    ' 1. Try stored property first
+    Dim resolved As SurfaceBody = UnwrapLib.ResolveManufacturedSolidBody(partDoc)
+    If resolved IsNot Nothing Then Return resolved
+    
+    ' 2. Try Thicken output
+    Dim thickBody As SurfaceBody = UnwrapLib.TryGetThickenManufacturedSolidBody(partDoc)
+    If thickBody IsNot Nothing Then Return thickBody
+    
+    ' 3. Find first non-unwrap-surface solid body (like Pinnalaotuse vaated.vb)
+    Dim unwrapFeat As UnwrapFeature = UnwrapLib.GetUnwrapFeature(partDoc)
+    If unwrapFeat Is Nothing Then Return Nothing
+    
+    Dim unwrapSurf As SurfaceBody = UnwrapLib.GetUnwrappedSurfaceBody(unwrapFeat)
+    Dim compDef As PartComponentDefinition = partDoc.ComponentDefinition
+    
+    For Each body As SurfaceBody In compDef.SurfaceBodies
+        ' Skip the unwrap surface
+        If unwrapSurf IsNot Nothing Then
+            Try
+                If ReferenceEquals(body, unwrapSurf) OrElse _
+                   String.Equals(body.Name, unwrapSurf.Name, StringComparison.OrdinalIgnoreCase) Then
+                    Continue For
+                End If
+            Catch
+            End Try
+        End If
+        
+        ' Check if it's a solid (has volume) - precision 1% is sufficient for this check
+        Try
+            If body.Volume(0.01) > 0 Then Return body
+        Catch
+            ' Surface bodies may not have volume, skip them
+            Continue For
+        End Try
+    Next
+    
+    Return Nothing
+End Function
+
+''' <summary>
+''' Show body selection dialog for Pinnalaotus when autodetect fails.
+''' Returns the selected body or Nothing if cancelled.
+''' </summary>
+Function PromptForPinnalaotusBody(ByVal partDoc As PartDocument) As SurfaceBody
+    Dim bodies As New List(Of SurfaceBody)
+    Dim compDef As PartComponentDefinition = partDoc.ComponentDefinition
+    
+    Dim unwrapFeat As UnwrapFeature = UnwrapLib.GetUnwrapFeature(partDoc)
+    Dim unwrapSurf As SurfaceBody = Nothing
+    If unwrapFeat IsNot Nothing Then unwrapSurf = UnwrapLib.GetUnwrappedSurfaceBody(unwrapFeat)
+    
+    For Each b As SurfaceBody In compDef.SurfaceBodies
+        bodies.Add(b)
+    Next
+    
+    If bodies.Count = 0 Then
+        MessageBox.Show("Detailis pole ühtegi keha.", "Mõõdud")
+        Return Nothing
+    End If
+    
+    Dim frm As New System.Windows.Forms.Form()
+    frm.Text = "Mõõdud — vali toodetud keha"
+    frm.FormBorderStyle = FormBorderStyle.FixedDialog
+    frm.StartPosition = FormStartPosition.CenterScreen
+    frm.MinimizeBox = False
+    frm.MaximizeBox = False
+    frm.Width = 440
+    frm.Height = 200
+    
+    Dim lbl As New System.Windows.Forms.Label()
+    lbl.Left = 12
+    lbl.Top = 12
+    lbl.Width = 400
+    lbl.Height = 48
+    lbl.Text = "Pinnalaotuse keha automaatne tuvastamine ebaõnnestus." & vbCrLf &
+               "Vali toodetud lame keha (Thicken või Extrude)."
+    frm.Controls.Add(lbl)
+    
+    Dim cb As New System.Windows.Forms.ComboBox()
+    cb.Left = 12
+    cb.Top = 64
+    cb.Width = 400
+    cb.DropDownStyle = ComboBoxStyle.DropDownList
+    For Each b As SurfaceBody In bodies
+        cb.Items.Add(b.Name)
+    Next
+    frm.Controls.Add(cb)
+    
+    ' Default to first non-unwrap body
+    Dim defaultIdx As Integer = 0
+    For i As Integer = 0 To bodies.Count - 1
+        If unwrapSurf Is Nothing Then Exit For
+        Try
+            If ReferenceEquals(bodies(i), unwrapSurf) OrElse _
+               String.Equals(bodies(i).Name, unwrapSurf.Name, StringComparison.OrdinalIgnoreCase) Then
+                Continue For
+            End If
+        Catch
+        End Try
+        defaultIdx = i
+        Exit For
+    Next
+    cb.SelectedIndex = Math.Min(Math.Max(0, defaultIdx), cb.Items.Count - 1)
+    
+    Dim btnOk As New System.Windows.Forms.Button()
+    btnOk.Text = "OK"
+    btnOk.DialogResult = DialogResult.OK
+    btnOk.Left = 240
+    btnOk.Top = 110
+    btnOk.Width = 80
+    frm.Controls.Add(btnOk)
+    frm.AcceptButton = btnOk
+    
+    Dim btnCancel As New System.Windows.Forms.Button()
+    btnCancel.Text = "Loobu"
+    btnCancel.DialogResult = DialogResult.Cancel
+    btnCancel.Left = 332
+    btnCancel.Top = 110
+    btnCancel.Width = 80
+    frm.Controls.Add(btnCancel)
+    frm.CancelButton = btnCancel
+    
+    If frm.ShowDialog() <> DialogResult.OK Then
+        frm.Dispose()
+        Return Nothing
+    End If
+    
+    Dim selIdx As Integer = cb.SelectedIndex
+    frm.Dispose()
+    
+    If selIdx < 0 OrElse selIdx >= bodies.Count Then Return Nothing
+    
+    Dim chosen As SurfaceBody = bodies(selIdx)
+    
+    ' Warn if user selected the unwrap surface
+    If unwrapSurf IsNot Nothing Then
+        Try
+            If ReferenceEquals(chosen, unwrapSurf) OrElse _
+               String.Equals(chosen.Name, unwrapSurf.Name, StringComparison.OrdinalIgnoreCase) Then
+                MessageBox.Show("Unwrap väljundi pinda ei saa toodetud kehana valida. Vali Extrude/Thicken keha.",
+                                "Mõõdud")
+                Return Nothing
+            End If
+        Catch
+        End Try
+    End If
+    
+    ' Store the selected body name
+    UnwrapLib.SetManufacturedSolidBodyNameProperty(partDoc, chosen.Name)
+    Logger.Info("Mõõdud: Stored Pinnalaotus body: " & chosen.Name)
+    
+    Return chosen
+End Function
+
+''' <summary>
+''' Get Pinnalaotus measurement body with autodetect and optional user prompt.
+''' Returns the body to use for measurements, or Nothing if failed/cancelled.
+''' </summary>
+Function GetPinnalaotusBodyForMeasurement(ByVal partDoc As PartDocument, ByVal promptIfMissing As Boolean) As SurfaceBody
+    ' First try autodetect
+    Dim body As SurfaceBody = TryAutoDetectPinnalaotusBody(partDoc)
+    If body IsNot Nothing Then Return body
+    
+    ' Autodetect failed - prompt if allowed
+    If promptIfMissing Then
+        body = PromptForPinnalaotusBody(partDoc)
+    End If
+    
+    Return body
 End Function
 
 ' ============================================================================
