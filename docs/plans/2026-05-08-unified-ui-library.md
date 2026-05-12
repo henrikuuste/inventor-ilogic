@@ -2,7 +2,7 @@
 
 ## Overview
 
-Create a unified UI management and creation library (`UILib.vb`) with supporting modules to standardize all dialog creation, picker handling, and viewport helpers across the codebase. This will ensure consistent UX, enable non-modal dialogs for workspace interaction, and provide responsive layouts that work well at 1920x1080 with up to 150% DPI scaling.
+Create a unified UI management and creation library (`UILib.vb`) with supporting modules to standardize all dialog creation, picker handling, and viewport helpers across the codebase. This will ensure consistent UX, enable non-modal dialogs for workspace interaction, and provide responsive/fluid layouts that adapt when the user resizes windows. Default sizes target ~1500px wide screens, with content that reflows to remain readable and usable at any size.
 
 ## Current State Analysis
 
@@ -60,7 +60,7 @@ Lib/
 ### Capabilities
 
 1. **Non-Modal Forms**: All dialogs allow full Inventor interaction including `CommandManager.Pick` while open
-2. **Responsive Layouts**: TableLayoutPanel content + Dock/Anchor form resizing, DPI-aware
+2. **Fluid Layouts**: Content reflows when window is resized; defaults target ~1500px screens
 3. **Centralized Strings**: Single source for all Estonian UI text
 4. **Viewport Helpers**: Transient highlights for pick feedback, real features for complex previews
 5. **Unified Pickers**: Consistent pick experience with automatic highlighting and ESC handling
@@ -68,10 +68,10 @@ Lib/
 ### Verification
 
 - [ ] All dialogs are non-modal (user can orbit, pan, pick while dialog open)
-- [ ] All dialogs resize correctly at 100%, 125%, 150% DPI scaling
+- [ ] All dialogs resize gracefully - content reflows, no clipping
 - [ ] All Estonian strings come from `StringsLib.vb`
 - [ ] Picker operations show transient highlights during selection
-- [ ] No hardcoded pixel values in dialog code (uses UILib helpers)
+- [ ] No hardcoded pixel positions in dialog code (uses layout panels)
 
 ## What We're NOT Doing
 
@@ -84,11 +84,17 @@ Lib/
 
 ## Implementation Approach
 
-Use a **hybrid layout strategy**:
+Use a **fluid layout strategy** where content adapts to window size:
 - `TableLayoutPanel` for form content (rows of label+control pairs)
-- `FlowLayoutPanel` for button bars
-- `Dock` and `Anchor` for form-level resizing
-- DPI scaling factors applied to base dimensions
+  - Column 0 (labels): AutoSize width
+  - Column 1 (controls): Percent fill (100%)
+- `FlowLayoutPanel` for button bars (right-aligned, wraps on narrow windows)
+- `Dock.Fill` for main content area, `Dock.Bottom` for buttons
+- `Anchor` for controls that should stretch with their container
+- `MinimumSize` on forms to prevent unusable layouts
+- Default sizes target ~1500px wide screens (most dialogs 400-500px wide)
+
+**No DPI scaling** - Windows handles font scaling; our layouts adapt via flow/anchor.
 
 Use a **hybrid viewport helper strategy**:
 - `ClientGraphics` for lightweight transient markers (points, lines, highlights)
@@ -112,28 +118,30 @@ Create `Lib/UILib.vb` with core form factory, non-modal message loop management,
 
 ```vb
 ' UILib.vb - Unified UI Management Library
-' Provides consistent form creation, non-modal management, and layout helpers
+' Provides consistent form creation, non-modal management, and fluid layout helpers
+' Layouts adapt to window size - no DPI scaling, content reflows naturally
 
 Public Module UILib
     
     ' ============================================================
-    ' CONSTANTS - DPI-aware base dimensions
+    ' CONSTANTS - Default sizes for ~1500px screens
     ' ============================================================
     
-    ' Form sizing (base values for 96 DPI / 100% scaling)
+    ' Form default sizes (user can resize)
     Public Const FORM_WIDTH_SMALL As Integer = 350
-    Public Const FORM_WIDTH_MEDIUM As Integer = 480
-    Public Const FORM_WIDTH_LARGE As Integer = 800
+    Public Const FORM_WIDTH_MEDIUM As Integer = 450
+    Public Const FORM_WIDTH_LARGE As Integer = 700
     Public Const FORM_HEIGHT_SMALL As Integer = 200
-    Public Const FORM_HEIGHT_MEDIUM As Integer = 400
-    Public Const FORM_HEIGHT_LARGE As Integer = 600
+    Public Const FORM_HEIGHT_MEDIUM As Integer = 350
+    Public Const FORM_HEIGHT_LARGE As Integer = 500
     
-    ' Control sizing
+    ' Minimum sizes to prevent unusable layouts
+    Public Const FORM_MIN_WIDTH As Integer = 300
+    Public Const FORM_MIN_HEIGHT As Integer = 150
+    
+    ' Control sizing (buttons only - other controls fill available space)
     Public Const BUTTON_WIDTH As Integer = 90
     Public Const BUTTON_HEIGHT As Integer = 28
-    Public Const ROW_HEIGHT As Integer = 30
-    Public Const LABEL_WIDTH As Integer = 120
-    Public Const CONTROL_WIDTH As Integer = 200
     
     ' Spacing
     Public Const PADDING As Integer = 10
@@ -204,57 +212,91 @@ Public Module UILib
     ' ============================================================
     
     ''' <summary>
-    ''' Creates a standard tool window form with consistent styling.
+    ''' Creates a standard resizable tool window form.
+    ''' Content adapts when user resizes the window.
     ''' </summary>
     Public Function CreateForm(title As String, Optional width As Integer = FORM_WIDTH_MEDIUM, Optional height As Integer = FORM_HEIGHT_MEDIUM) As System.Windows.Forms.Form
         Dim frm As New System.Windows.Forms.Form()
         
         frm.Text = title
-        frm.Width = Scale(width)
-        frm.Height = Scale(height)
+        frm.Width = width
+        frm.Height = height
         frm.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen
-        frm.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedToolWindow
+        frm.FormBorderStyle = System.Windows.Forms.FormBorderStyle.Sizable
         frm.MaximizeBox = False
         frm.MinimizeBox = True
-        frm.Padding = New System.Windows.Forms.Padding(Scale(PADDING))
-        frm.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi
+        frm.Padding = New System.Windows.Forms.Padding(PADDING)
+        
+        SetMinimumSize(frm, FORM_MIN_WIDTH, FORM_MIN_HEIGHT)
         
         Return frm
     End Function
     
     ''' <summary>
-    ''' Creates a resizable form with minimum size constraints.
+    ''' Creates a larger resizable form for dialogs with grids/lists.
     ''' </summary>
-    Public Function CreateResizableForm(title As String, Optional width As Integer = FORM_WIDTH_MEDIUM, Optional height As Integer = FORM_HEIGHT_MEDIUM) As System.Windows.Forms.Form
+    Public Function CreateLargeForm(title As String, Optional width As Integer = FORM_WIDTH_LARGE, Optional height As Integer = FORM_HEIGHT_LARGE) As System.Windows.Forms.Form
         Dim frm As New System.Windows.Forms.Form()
         
         frm.Text = title
-        frm.Width = Scale(width)
-        frm.Height = Scale(height)
+        frm.Width = width
+        frm.Height = height
         frm.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen
         frm.FormBorderStyle = System.Windows.Forms.FormBorderStyle.Sizable
         frm.MaximizeBox = True
         frm.MinimizeBox = True
-        frm.MinimumSize = New System.Drawing.Size(Scale(width * 0.8), Scale(height * 0.6))
-        frm.Padding = New System.Windows.Forms.Padding(Scale(PADDING))
-        frm.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi
+        frm.Padding = New System.Windows.Forms.Padding(PADDING)
+        
+        SetMinimumSize(frm, 400, 300)
+        
+        Return frm
+    End Function
+    
+    ''' <summary>
+    ''' Sets minimum size for a form via Resize handler.
+    ''' Avoids System.Drawing.Size which may not work in iLogic.
+    ''' Uses closure to capture min values (does not consume Form.Tag).
+    ''' </summary>
+    Public Sub SetMinimumSize(frm As System.Windows.Forms.Form, minWidth As Integer, minHeight As Integer)
+        ' Closure captures minWidth/minHeight - this is safe (not ByRef)
+        AddHandler frm.Resize, Sub(s, e)
+            If frm.Width < minWidth Then frm.Width = minWidth
+            If frm.Height < minHeight Then frm.Height = minHeight
+        End Sub
+    End Sub
+    
+    ''' <summary>
+    ''' Creates a fixed-size compact dialog (no resize).
+    ''' Use sparingly - prefer resizable forms.
+    ''' </summary>
+    Public Function CreateCompactForm(title As String, Optional width As Integer = FORM_WIDTH_SMALL, Optional height As Integer = FORM_HEIGHT_SMALL) As System.Windows.Forms.Form
+        Dim frm As New System.Windows.Forms.Form()
+        
+        frm.Text = title
+        frm.Width = width
+        frm.Height = height
+        frm.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen
+        frm.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedToolWindow
+        frm.MaximizeBox = False
+        frm.MinimizeBox = False
+        frm.Padding = New System.Windows.Forms.Padding(PADDING)
         
         Return frm
     End Function
     
     ' ============================================================
-    ' LAYOUT HELPERS
+    ' LAYOUT HELPERS - Fluid layouts that adapt to window size
     ' ============================================================
     
     ''' <summary>
-    ''' Creates a TableLayoutPanel for form content with standard column layout.
-    ''' Column 0: Labels (auto-width), Column 1: Controls (fill)
+    ''' Creates a TableLayoutPanel for form content with fluid column layout.
+    ''' Column 0: Labels (auto-width), Column 1: Controls (fills remaining space)
     ''' </summary>
     Public Function CreateContentPanel() As System.Windows.Forms.TableLayoutPanel
         Dim panel As New System.Windows.Forms.TableLayoutPanel()
         
         panel.Dock = System.Windows.Forms.DockStyle.Fill
-        panel.AutoSize = True
+        panel.AutoSize = False  ' Fill available space
         panel.ColumnCount = 2
         panel.ColumnStyles.Add(New System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.AutoSize))
         panel.ColumnStyles.Add(New System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100))
@@ -264,21 +306,41 @@ Public Module UILib
     End Function
     
     ''' <summary>
-    ''' Creates a FlowLayoutPanel for button bars (right-aligned).
+    ''' Creates a TableLayoutPanel with three columns: label, control, button.
+    ''' Useful for rows with pick buttons.
+    ''' </summary>
+    Public Function CreateContentPanelWithButtons() As System.Windows.Forms.TableLayoutPanel
+        Dim panel As New System.Windows.Forms.TableLayoutPanel()
+        
+        panel.Dock = System.Windows.Forms.DockStyle.Fill
+        panel.AutoSize = False
+        panel.ColumnCount = 3
+        panel.ColumnStyles.Add(New System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.AutoSize))
+        panel.ColumnStyles.Add(New System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100))
+        panel.ColumnStyles.Add(New System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.AutoSize))
+        panel.Padding = New System.Windows.Forms.Padding(0)
+        
+        Return panel
+    End Function
+    
+    ''' <summary>
+    ''' Creates a FlowLayoutPanel for button bars (right-aligned, wraps on narrow windows).
     ''' </summary>
     Public Function CreateButtonPanel() As System.Windows.Forms.FlowLayoutPanel
         Dim panel As New System.Windows.Forms.FlowLayoutPanel()
         
         panel.Dock = System.Windows.Forms.DockStyle.Bottom
         panel.FlowDirection = System.Windows.Forms.FlowDirection.RightToLeft
+        panel.WrapContents = True  ' Buttons wrap to next line if window too narrow
         panel.AutoSize = True
-        panel.Padding = New System.Windows.Forms.Padding(0, Scale(SPACING), 0, 0)
+        panel.Padding = New System.Windows.Forms.Padding(0, SPACING, 0, 0)
         
         Return panel
     End Function
     
     ''' <summary>
     ''' Adds a label+control row to a TableLayoutPanel.
+    ''' Control stretches to fill available width.
     ''' </summary>
     Public Sub AddRow(panel As System.Windows.Forms.TableLayoutPanel, labelText As String, control As System.Windows.Forms.Control, Optional controlName As String = Nothing)
         Dim rowIndex As Integer = panel.RowCount
@@ -289,10 +351,10 @@ Public Module UILib
         lbl.Text = labelText
         lbl.AutoSize = True
         lbl.Anchor = System.Windows.Forms.AnchorStyles.Left
-        lbl.Margin = New System.Windows.Forms.Padding(0, Scale(6), Scale(SPACING), 0)
+        lbl.Margin = New System.Windows.Forms.Padding(0, 6, SPACING, 0)
         
         control.Anchor = System.Windows.Forms.AnchorStyles.Left Or System.Windows.Forms.AnchorStyles.Right
-        control.Margin = New System.Windows.Forms.Padding(0, Scale(3), 0, Scale(3))
+        control.Margin = New System.Windows.Forms.Padding(0, 3, 0, 3)
         If controlName IsNot Nothing Then control.Name = controlName
         
         panel.Controls.Add(lbl, 0, rowIndex)
@@ -300,7 +362,33 @@ Public Module UILib
     End Sub
     
     ''' <summary>
-    ''' Adds a full-width control row (spans both columns).
+    ''' Adds a label+control+button row (for pick buttons).
+    ''' </summary>
+    Public Sub AddRowWithButton(panel As System.Windows.Forms.TableLayoutPanel, labelText As String, control As System.Windows.Forms.Control, button As System.Windows.Forms.Button, Optional controlName As String = Nothing)
+        Dim rowIndex As Integer = panel.RowCount
+        panel.RowCount += 1
+        panel.RowStyles.Add(New System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize))
+        
+        Dim lbl As New System.Windows.Forms.Label()
+        lbl.Text = labelText
+        lbl.AutoSize = True
+        lbl.Anchor = System.Windows.Forms.AnchorStyles.Left
+        lbl.Margin = New System.Windows.Forms.Padding(0, 6, SPACING, 0)
+        
+        control.Anchor = System.Windows.Forms.AnchorStyles.Left Or System.Windows.Forms.AnchorStyles.Right
+        control.Margin = New System.Windows.Forms.Padding(0, 3, SPACING, 3)
+        If controlName IsNot Nothing Then control.Name = controlName
+        
+        button.Margin = New System.Windows.Forms.Padding(0, 3, 0, 3)
+        
+        panel.Controls.Add(lbl, 0, rowIndex)
+        panel.Controls.Add(control, 1, rowIndex)
+        panel.Controls.Add(button, 2, rowIndex)
+    End Sub
+    
+    ''' <summary>
+    ''' Adds a full-width control row (spans all columns).
+    ''' Use for section headers, checkboxes, or wide controls.
     ''' </summary>
     Public Sub AddFullWidthRow(panel As System.Windows.Forms.TableLayoutPanel, control As System.Windows.Forms.Control, Optional controlName As String = Nothing)
         Dim rowIndex As Integer = panel.RowCount
@@ -308,11 +396,39 @@ Public Module UILib
         panel.RowStyles.Add(New System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize))
         
         control.Anchor = System.Windows.Forms.AnchorStyles.Left Or System.Windows.Forms.AnchorStyles.Right
-        control.Margin = New System.Windows.Forms.Padding(0, Scale(3), 0, Scale(3))
+        control.Margin = New System.Windows.Forms.Padding(0, 3, 0, 3)
         If controlName IsNot Nothing Then control.Name = controlName
         
         panel.Controls.Add(control, 0, rowIndex)
-        panel.SetColumnSpan(control, 2)
+        panel.SetColumnSpan(control, panel.ColumnCount)
+    End Sub
+    
+    ''' <summary>
+    ''' Adds a fill row for controls that should expand vertically (ListBox, DataGridView).
+    ''' </summary>
+    Public Sub AddFillRow(panel As System.Windows.Forms.TableLayoutPanel, control As System.Windows.Forms.Control, Optional controlName As String = Nothing)
+        Dim rowIndex As Integer = panel.RowCount
+        panel.RowCount += 1
+        panel.RowStyles.Add(New System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 100))
+        
+        control.Dock = System.Windows.Forms.DockStyle.Fill
+        control.Margin = New System.Windows.Forms.Padding(0, 3, 0, 3)
+        If controlName IsNot Nothing Then control.Name = controlName
+        
+        panel.Controls.Add(control, 0, rowIndex)
+        panel.SetColumnSpan(control, panel.ColumnCount)
+    End Sub
+    
+    ''' <summary>
+    ''' Adds a section header label (bold text, full width).
+    ''' </summary>
+    Public Sub AddSectionHeader(panel As System.Windows.Forms.TableLayoutPanel, text As String)
+        Dim lbl As New System.Windows.Forms.Label()
+        lbl.Text = "— " & text & " —"
+        lbl.AutoSize = True
+        lbl.Margin = New System.Windows.Forms.Padding(0, SPACING * 2, 0, SPACING)
+        
+        AddFullWidthRow(panel, lbl)
     End Sub
     
     ' ============================================================
@@ -329,6 +445,15 @@ Public Module UILib
     Public Function CreateTextBox(Optional text As String = "") As System.Windows.Forms.TextBox
         Dim txt As New System.Windows.Forms.TextBox()
         txt.Text = text
+        Return txt
+    End Function
+    
+    Public Function CreateMultilineTextBox(Optional text As String = "", Optional minLines As Integer = 3) As System.Windows.Forms.TextBox
+        Dim txt As New System.Windows.Forms.TextBox()
+        txt.Text = text
+        txt.Multiline = True
+        txt.ScrollBars = System.Windows.Forms.ScrollBars.Vertical
+        txt.Height = txt.Font.Height * minLines + 8
         Return txt
     End Function
     
@@ -360,15 +485,24 @@ Public Module UILib
     Public Function CreateButton(text As String, Optional width As Integer = BUTTON_WIDTH) As System.Windows.Forms.Button
         Dim btn As New System.Windows.Forms.Button()
         btn.Text = text
-        btn.Width = Scale(width)
-        btn.Height = Scale(BUTTON_HEIGHT)
+        btn.Width = width
+        btn.Height = BUTTON_HEIGHT
+        btn.AutoSize = False
         Return btn
     End Function
     
-    Public Function CreateListBox(Optional height As Integer = 150) As System.Windows.Forms.ListBox
+    Public Function CreateSmallButton(text As String) As System.Windows.Forms.Button
+        Dim btn As New System.Windows.Forms.Button()
+        btn.Text = text
+        btn.AutoSize = True
+        btn.Padding = New System.Windows.Forms.Padding(4, 2, 4, 2)
+        Return btn
+    End Function
+    
+    Public Function CreateListBox() As System.Windows.Forms.ListBox
         Dim lst As New System.Windows.Forms.ListBox()
-        lst.Height = Scale(height)
         lst.SelectionMode = System.Windows.Forms.SelectionMode.MultiExtended
+        lst.IntegralHeight = False  ' Allow partial row display for fluid sizing
         Return lst
     End Function
     
@@ -382,51 +516,25 @@ Public Module UILib
         Return dgv
     End Function
     
-    ' ============================================================
-    ' DPI SCALING
-    ' ============================================================
-    
-    Private m_ScaleFactor As Double = 0
-    
-    ''' <summary>
-    ''' Gets the current DPI scale factor (1.0 = 96 DPI / 100%).
-    ''' </summary>
-    Public Function GetScaleFactor() As Double
-        If m_ScaleFactor = 0 Then
-            Using g As System.Drawing.Graphics = System.Drawing.Graphics.FromHwnd(IntPtr.Zero)
-                m_ScaleFactor = g.DpiX / 96.0
-            End Using
-        End If
-        Return m_ScaleFactor
-    End Function
-    
-    ''' <summary>
-    ''' Scales a pixel value for current DPI.
-    ''' </summary>
-    Public Function Scale(value As Integer) As Integer
-        Return CInt(value * GetScaleFactor())
-    End Function
-    
-    Public Function Scale(value As Double) As Integer
-        Return CInt(value * GetScaleFactor())
-    End Function
-    
 End Module
 ```
 
 ### Success Criteria
 
 #### Verification:
-- [ ] UILib.vb compiles without errors when included via AddVbFile
-- [ ] `CreateForm` produces correctly styled forms
-- [ ] `ShowNonModal` allows Inventor viewport interaction while form is open
-- [ ] `CreateContentPanel` + `AddRow` produces correct two-column layout
-- [ ] `Scale()` returns appropriate values at 100%, 125%, 150% DPI
+- [x] UILib.vb compiles without errors when included via AddVbFile
+- [x] `CreateForm` produces correctly styled resizable forms
+- [x] `ShowNonModal` allows Inventor viewport interaction while form is open
+- [x] `CreateContentPanel` + `AddRow` produces fluid two-column layout
+- [x] Controls stretch to fill available width when window resized
 
 #### Manual Verification:
-- [ ] Test form at different DPI settings in Windows Display Settings
-- [ ] Test non-modal form with orbit, pan, zoom while open
-- [ ] Test `CloseAllForms` cleanup on rule exit
+- [x] Test form resize - content reflows, no clipping
+- [x] Test non-modal form with orbit, pan, zoom while open
+- [x] Test `CloseAllForms` cleanup on rule exit
+- [x] Test minimum size prevents unusable layouts
+
+**Test Script**: Run `Katsetused/TestUILib.vb` to verify all functionality.
 
 **Implementation Note**: After completing this phase and all verification passes, pause here for manual confirmation before proceeding to the next phase.
 
@@ -593,13 +701,15 @@ End Module
 ### Success Criteria
 
 #### Verification:
-- [ ] StringsLib.vb compiles without errors
-- [ ] All common phrases have corresponding constants
-- [ ] Format functions produce expected output
+- [x] StringsLib.vb compiles without errors
+- [x] All common phrases have corresponding constants
+- [x] Format functions produce expected output
 
 #### Manual Verification:
-- [ ] Review string consistency with existing dialogs
-- [ ] Verify Estonian spelling and grammar
+- [x] Review string consistency with existing dialogs
+- [x] Verify Estonian spelling and grammar
+
+**Test Script**: Run `Katsetused/TestStringsLib.vb` to verify all functionality.
 
 **Implementation Note**: After completing this phase and all verification passes, pause here for manual confirmation before proceeding to the next phase.
 
@@ -904,16 +1014,25 @@ End Module
 ### Success Criteria
 
 #### Verification:
-- [ ] ViewportHelperLib.vb compiles without errors
-- [ ] `Highlight()` visually highlights objects in viewport
-- [ ] `AddPointMarker()` / `AddLineMarker()` display transient graphics
-- [ ] `CreatePreviewUCS()` creates visible UCS that can be updated/deleted
-- [ ] `Cleanup()` removes all transient graphics and highlights
+- [x] ViewportHelperLib.vb compiles without errors
+- [x] `Highlight()` visually highlights objects in viewport
+- [x] `AddPointMarker()` / `AddLineMarker()` display transient graphics
+- [x] `CreatePreviewWorkPoint()` creates visible work point that can be deleted
+- [x] `Cleanup()` removes all transient graphics and highlights
 
 #### Manual Verification:
-- [ ] Test highlight visibility with different object types (faces, edges, occurrences)
-- [ ] Test transient markers persist while form is open
-- [ ] Test cleanup removes all visual artifacts
+- [x] Test highlight visibility with different object types (faces, edges, occurrences)
+- [x] Test transient markers persist while form is open
+- [x] Test cleanup removes all visual artifacts
+
+**Test Script**: Run `Katsetused/TestViewportHelperLib.vb` to verify all functionality.
+
+**Implementation Notes:**
+- Transient markers use `ComponentDefinition.ClientGraphicsCollection` with `GraphicsDataSetsCollection`
+- Works with non-modal forms - no conflict with DoEvents loop
+- Call `ClearMarkers()` to remove all transient graphics
+- HighlightSet may clear when selection changes (Inventor behavior - by design)
+- Preview Work Features also available for persistent visual markers
 
 **Implementation Note**: After completing this phase and all verification passes, pause here for manual confirmation before proceeding to the next phase.
 
@@ -1082,17 +1201,17 @@ Extend picker functionality to work with non-modal forms and integrate with view
 ### Success Criteria
 
 #### Verification:
-- [ ] `PickWithForm` allows picking while non-modal form stays open
-- [ ] Picked object is highlighted after selection
-- [ ] ESC cancels pick and returns Nothing
-- [ ] Estonian picker functions use StringsLib prompts
+- [x] `PickWithForm` allows picking while non-modal form stays open
+- [x] Picked object is highlighted after selection (Note: highlights may clear with selection - use preview features instead)
+- [x] ESC cancels pick and returns Nothing
+- [x] Estonian picker functions use StringsLib prompts
 
 #### Manual Verification:
 - [ ] Test pick with non-modal form open - form remains visible
-- [ ] Test highlight appears on picked object
-- [ ] Test multiple picks in sequence
+- [ ] Test multiple picks in sequence (MultiPickWithForm)
+- [ ] Test Estonian prompt displays correctly
 
-**Implementation Note**: After completing this phase and all verification passes, pause here for manual confirmation before proceeding to the next phase.
+**Test Script**: Run `Katsetused/TestPickerIntegration.vb` to verify all functionality.
 
 ---
 
@@ -1131,27 +1250,46 @@ MessageBox.Show(StringsLib.MSG_NO_ACTIVE_DOCUMENT, ruleName)
 
 3. Replace form creation:
 ```vb
-' Before:
+' Before (manual pixel positioning):
 Dim frm As New System.Windows.Forms.Form()
 frm.Text = "Lisa mõõdud"
 frm.Width = 400
 frm.Height = 300
 frm.StartPosition = FormStartPosition.CenterScreen
-' ... manual control positioning
 
-' After:
+Dim lbl As New Label()
+lbl.Text = "Väärtus:"
+lbl.Left = 15
+lbl.Top = 20
+frm.Controls.Add(lbl)
+
+Dim nud As New NumericUpDown()
+nud.Left = 100
+nud.Top = 18
+nud.Width = 80
+frm.Controls.Add(nud)
+' ... more manual positioning
+
+' After (fluid layout):
 Dim frm As System.Windows.Forms.Form = UILib.CreateForm(StringsLib.FormatDialogTitle(ruleName))
 Dim content As System.Windows.Forms.TableLayoutPanel = UILib.CreateContentPanel()
 Dim buttons As System.Windows.Forms.FlowLayoutPanel = UILib.CreateButtonPanel()
 
-UILib.AddRow(content, StringsLib.LBL_VALUE, UILib.CreateNumericUpDown(...))
-' ... add rows
+UILib.AddRow(content, StringsLib.LBL_VALUE, UILib.CreateNumericUpDown(0, 100, 10))
+' ... add more rows - controls automatically fill available width
 
-buttons.Controls.Add(UILib.CreateButton(StringsLib.BTN_OK))
-buttons.Controls.Add(UILib.CreateButton(StringsLib.BTN_CANCEL))
+Dim btnOK As System.Windows.Forms.Button = UILib.CreateButton(StringsLib.BTN_OK)
+btnOK.DialogResult = System.Windows.Forms.DialogResult.OK
+Dim btnCancel As System.Windows.Forms.Button = UILib.CreateButton(StringsLib.BTN_CANCEL)
+btnCancel.DialogResult = System.Windows.Forms.DialogResult.Cancel
+
+buttons.Controls.Add(btnCancel)  ' Add in reverse order (RightToLeft flow)
+buttons.Controls.Add(btnOK)
 
 frm.Controls.Add(content)
 frm.Controls.Add(buttons)
+frm.AcceptButton = btnOK
+frm.CancelButton = btnCancel
 ```
 
 4. Replace ShowDialog with ShowNonModal:
@@ -1261,7 +1399,7 @@ Each phase includes verification steps. Test:
 - Library compilation (AddVbFile without errors)
 - Form creation (correct styling, dimensions)
 - Non-modal behavior (viewport interaction)
-- DPI scaling (multiple settings)
+- Fluid layout reflow on resize
 
 ### Integration Tests
 
@@ -1274,10 +1412,12 @@ After each migration phase:
 
 ### Manual Testing Steps
 
-1. **DPI Testing**:
-   - Set Windows display scaling to 100%, 125%, 150%
-   - Open each dialog
-   - Verify no clipping, correct proportions
+1. **Resize/Reflow Testing**:
+   - Open dialog at default size
+   - Resize smaller - verify content reflows, no clipping
+   - Resize larger - verify controls expand to fill space
+   - Verify minimum size prevents unusable layouts
+   - Test with DataGridView/ListBox dialogs - verify they fill available space
 
 2. **Non-Modal Testing**:
    - Open dialog

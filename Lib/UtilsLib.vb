@@ -477,6 +477,65 @@ Public Module UtilsLib
     End Function
 
     ' ============================================================================
+    ' SECTION 3a: Object Picking with Estonian Prompts
+    ' (Uses StringsLib for localized prompts)
+    ' ============================================================================
+
+    ''' <summary>
+    ''' Pick a WorkPoint with Estonian prompt. Uses StringsLib.PICK_POINT.
+    ''' </summary>
+    Public Function PickPointET(app As Inventor.Application) As Object
+        Return PickPoint(app, StringsLib.PICK_POINT)
+    End Function
+
+    ''' <summary>
+    ''' Pick a WorkAxis with Estonian prompt. Uses StringsLib.PICK_AXIS.
+    ''' </summary>
+    Public Function PickAxisET(app As Inventor.Application) As Object
+        Return PickAxis(app, StringsLib.PICK_AXIS)
+    End Function
+
+    ''' <summary>
+    ''' Pick a WorkPlane with Estonian prompt. Uses StringsLib.PICK_PLANE.
+    ''' </summary>
+    Public Function PickPlaneET(app As Inventor.Application) As Object
+        Return PickPlane(app, StringsLib.PICK_PLANE)
+    End Function
+
+    ''' <summary>
+    ''' Pick a face with Estonian prompt. Uses StringsLib.PICK_FACE.
+    ''' </summary>
+    Public Function PickFaceET(app As Inventor.Application) As Object
+        Try
+            Return app.CommandManager.Pick(SelectionFilterEnum.kPartFacePlanarFilter, StringsLib.PICK_FACE)
+        Catch
+            Return Nothing
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' Pick an edge with Estonian prompt. Uses StringsLib.PICK_EDGE.
+    ''' </summary>
+    Public Function PickEdgeET(app As Inventor.Application) As Object
+        Try
+            Return app.CommandManager.Pick(SelectionFilterEnum.kPartEdgeFilter, StringsLib.PICK_EDGE)
+        Catch
+            Return Nothing
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' Pick an occurrence with Estonian prompt. Uses StringsLib.PICK_OCCURRENCE.
+    ''' </summary>
+    Public Function PickOccurrenceET(app As Inventor.Application) As Object
+        Try
+            Return app.CommandManager.Pick(SelectionFilterEnum.kAssemblyOccurrenceFilter, StringsLib.PICK_OCCURRENCE)
+        Catch
+            Return Nothing
+        End Try
+    End Function
+
+    ' ============================================================================
     ' SECTION 4: Display Names
     ' ============================================================================
 
