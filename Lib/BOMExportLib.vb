@@ -73,8 +73,7 @@ Public Module BOMExportLib
         VLog("BOMExport: Detailne logi = " & m_VerboseLogging.ToString(), Nothing, Nothing)
 
         Dim templateBase As String = System.IO.Path.GetFileNameWithoutExtension(templatePath)
-        Dim sourceBase As String = System.IO.Path.GetFileNameWithoutExtension(asmDoc.DisplayName)
-        Dim defaultOutputFile As String = sourceBase & "_" & templateBase & ".xlsx"
+        Dim defaultOutputFile As String = BuildDefaultOutputFileName(asmDoc, templateBase)
         VLog("BOMExport: Default output name: " & defaultOutputFile, Nothing, Nothing)
 
         Dim sfd As New System.Windows.Forms.SaveFileDialog()
@@ -287,6 +286,35 @@ Public Module BOMExportLib
             End If
         Next
         Return -1
+    End Function
+
+    Private Function BuildDefaultOutputFileName(asmDoc As AssemblyDocument, templateBase As String) As String
+        Dim projectName As String = GetPropertyString(CType(asmDoc, Document), "Project", kDesignProps)
+        Dim elementName As String = GetPropertyString(CType(asmDoc, Document), "Description", kDesignProps)
+        
+        projectName = SanitizeFileName(projectName)
+        elementName = SanitizeFileName(elementName)
+        
+        Dim nameParts As New List(Of String)()
+        If Not String.IsNullOrEmpty(projectName) Then nameParts.Add(projectName)
+        If Not String.IsNullOrEmpty(elementName) Then nameParts.Add(elementName)
+        
+        If nameParts.Count > 0 Then
+            Return String.Join(" ", nameParts) & " - " & templateBase & ".xlsx"
+        Else
+            Dim sourceBase As String = System.IO.Path.GetFileNameWithoutExtension(asmDoc.DisplayName)
+            Return sourceBase & "_" & templateBase & ".xlsx"
+        End If
+    End Function
+
+    Private Function SanitizeFileName(name As String) As String
+        If String.IsNullOrEmpty(name) Then Return ""
+        Dim invalid() As Char = System.IO.Path.GetInvalidFileNameChars()
+        Dim result As String = name
+        For Each c As Char In invalid
+            result = result.Replace(c, "_"c)
+        Next
+        Return result.Trim()
     End Function
 
     Public Sub ExportBOM(asmDoc As AssemblyDocument, templatePath As String, outputPath As String, Optional usePartsOnlyBomView As Boolean = False)
