@@ -76,7 +76,7 @@ Sub Main()
     End If
     
     ' Read configurations from Excel
-    Dim configs As List(Of ExcelReaderLib.ReleaseConfig)
+    Dim configs As List(Of ExcelReaderLib.ElementConfig)
     Try
         configs = ExcelReaderLib.ReadVariantTable(excelPath)
     Catch ex As Exception
@@ -91,8 +91,8 @@ Sub Main()
     
     ' Show confirmation dialog with list of configurations
     Dim configList As String = ""
-    For Each cfg As ExcelReaderLib.ReleaseConfig In configs
-        configList &= "  - " & cfg.ConfigName & " (" & cfg.PartNumber & ")" & vbCrLf
+    For Each cfg As ExcelReaderLib.ElementConfig In configs
+        configList &= "  - " & cfg.ElementName & " (" & cfg.PartNumber & ")" & vbCrLf
     Next
     
     Dim releaseFolder As String = System.IO.Path.Combine(projectRoot, "r")
@@ -108,7 +108,7 @@ Sub Main()
     
     ' Validate parameters for all configurations
     Dim allMissingParams As New HashSet(Of String)
-    For Each cfg As ExcelReaderLib.ReleaseConfig In configs
+    For Each cfg As ExcelReaderLib.ElementConfig In configs
         Dim missing As List(Of String) = ExcelReaderLib.ValidateParameters(asmDoc, cfg)
         For Each p As String In missing
             allMissingParams.Add(p)
@@ -156,10 +156,10 @@ Sub Main()
     allLogs.Add("")
     
     For i As Integer = 0 To configs.Count - 1
-        Dim cfg As ExcelReaderLib.ReleaseConfig = configs(i)
+        Dim cfg As ExcelReaderLib.ElementConfig = configs(i)
         
         allLogs.Add("----------------------------------------")
-        allLogs.Add("Configuration " & (i + 1) & " of " & configs.Count & ": " & cfg.ConfigName)
+        allLogs.Add("Configuration " & (i + 1) & " of " & configs.Count & ": " & cfg.ElementName)
         allLogs.Add("----------------------------------------")
         
         ' Check if drawings should be skipped
@@ -186,7 +186,7 @@ Sub Main()
         Dim releasedPath As String = VariantReleaseLib.ReleaseVariant( _
             app, _
             asmPath, _
-            cfg.ConfigName, _
+            cfg.ElementName, _
             cfg.PartNumber, _
             cfg.Parameters, _
             releaseFolder, _
@@ -214,11 +214,11 @@ Sub Main()
             
             ' Write individual log file
             Dim variantFolder As String = System.IO.Path.GetDirectoryName(releasedPath)
-            VariantReleaseLib.WriteLogFile(variantFolder, cfg.ConfigName, logMessages)
+            VariantReleaseLib.WriteLogFile(variantFolder, cfg.ElementName, logMessages)
         Else
             failCount += 1
             allLogs.Add("  => FAILED")
-            Logger.Error("=> FAILED: " & cfg.ConfigName)
+            Logger.Error("=> FAILED: " & cfg.ElementName)
         End If
         
         allLogs.Add("")

@@ -59,11 +59,11 @@ Dim result As DialogResult = frm.ShowDialog()
 - `Lib\BoundingBoxStockLib.vb`
 - `Lib\BOMExportLib.vb`
 - `Lib\ExcelReaderLib.vb`
-- `Lib\ModuleReleaseLib.vb`
+- `Lib\ElementReleaseLib.vb`
 - `Komponendid\Pinnalaotuse vaated.vb`
 - `Joonised\*.vb` (all drawing-related dialogs)
 - `Mõõdud.vb`
-- `Loo komponendid.vb`
+- `Loo detailid.vb`
 - `Moodulid\Loo alusmoodul.vb`
 - `Koost\Muutujad.vb`
 - `Mustrid\Kordused keskelt.vb`
@@ -106,7 +106,7 @@ frm.Controls.Add(layout)
 | Size | Usage |
 |------|-------|
 | 300×350 | Small picker dialog (`PlaceSupport.vb`) |
-| 350×180 | Compact mode selection (`ModuleReleaseLib.vb`) |
+| 350×180 | Compact mode selection (`ElementReleaseLib.vb`) |
 | 380×420 | Medium dialog (`Koordinaadid.vb`) |
 | 400×250 to 450×320 | Standard dialogs (`Joonised\*.vb`) |
 | 470×500 to 550×580 | Large dialogs (`BOMExportLib.vb`, `Määra materjalide välimus.vb`) |
@@ -115,7 +115,7 @@ frm.Controls.Add(layout)
 | 600×400 | List selection dialog |
 | 800×500 to 800×600 | DataGridView dialogs (`Loo 1-1 joonised.vb`, `Muutujad.vb`) |
 | 900×700 to 1000×800 | Test/result dialogs |
-| 950×680 | Large multi-section dialog (`Loo komponendid.vb`) |
+| 950×680 | Large multi-section dialog (`Loo detailid.vb`) |
 
 #### Common Control Sizes
 
@@ -203,7 +203,7 @@ Files using this pattern:
 - `Joonised\Uuenda lehe suurus.vb`
 - `Joonised\Loo 1-1 joonised.vb`
 - `Määra materjalide välimus.vb`
-- `Loo komponendid.vb`
+- `Loo detailid.vb`
 - `Mõõdud.vb`
 - `Koordinaadid.vb`
 - `Mustrid\Kordused keskelt.vb`
@@ -221,7 +221,7 @@ AddHandler btn.Click, Sub(s, e)
 End Sub
 ```
 
-**Files:** Most rule files and `ModuleReleaseLib.vb`, `BOMExportLib.vb`
+**Files:** Most rule files and `ElementReleaseLib.vb`, `BOMExportLib.vb`
 
 #### `AddressOf` with Named Handler
 Used when handler needs control access via `Tag`:
@@ -256,7 +256,7 @@ If result = DialogResult.OK Then
 End If
 ```
 
-**Files:** `ModuleReleaseLib.vb`, `Mustrid\Kordused keskelt.vb`, `Katsetused\PlaceSupport.vb`
+**Files:** `ElementReleaseLib.vb`, `Mustrid\Kordused keskelt.vb`, `Katsetused\PlaceSupport.vb`
 
 #### Form.Tag for State Object
 ```vb
@@ -293,7 +293,7 @@ Dim expParam As ExposedParameter = CType(row.Tag, ExposedParameter)
 | `Lib\BoundingBoxStockLib.vb` | `ShowConfigForm` — TableLayoutPanel, FlowLayoutPanel, AutoSize |
 | `Lib\BOMExportLib.vb` | `SelectTemplateFromListOrBrowse`, `BrowseTemplateFile` — ListBox, FileDialogs |
 | `Lib\ExcelReaderLib.vb` | `ShowConfigSelectionDialog` — ListBox + OK/Cancel |
-| `Lib\ModuleReleaseLib.vb` | `ShowModeSelectionDialog`, `ShowPlanConfirmationDialog`, `ShowCompletionSummary` |
+| `Lib\ElementReleaseLib.vb` | `ShowModeSelectionDialog`, `ShowPlanConfirmationDialog`, `ShowCompletionSummary` |
 | `Lib\SupportPatternLibrary.vb` | MessageBox only (no forms) |
 
 ### 7. Constants
@@ -315,9 +315,9 @@ Public Const DIMENSION_OFFSET As Double = DEFAULT_DIMENSION_OFFSET
 - `Lib\BoundingBoxStockLib.vb:407-545` - TableLayoutPanel usage (only layout container example)
 - `Mustrid\Kordused keskelt.vb:244-564` - Comprehensive manual layout with local variables
 - `Koordinaadid.vb:150-450` - Non-modal form with DoEvents, state via Tag
-- `Loo komponendid.vb:684-1288` - Large dialog with DataGridView
+- `Loo detailid.vb:684-1288` - Large dialog with DataGridView
 - `Komponendid\Pinnalaotuse vaated.vb:91-180` - Simple fixed dialog pattern
-- `Lib\ModuleReleaseLib.vb:160-216` - Modal dialog with enum return via Tag
+- `Lib\ElementReleaseLib.vb:160-216` - Modal dialog with enum return via Tag
 - `Katsetused\PlaceSupport.vb:758-1260` - Configurable form position and modeless operation
 
 ## Architecture Documentation

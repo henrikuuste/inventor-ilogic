@@ -112,7 +112,7 @@ Public Module MakeComponentsLib
         Public ProjectName As String
         Public Template As String
         Public AssemblyTemplate As String
-        Public BaseModuleRelativePath As String
+        Public BaseElementRelativePath As String
         Public Subfolder As String
         Public AssemblyAction As String  ' NONE, CREATE, UPDATE
         Public AssemblyPath As String
@@ -121,7 +121,7 @@ Public Module MakeComponentsLib
             ProjectName = ""
             Template = ""
             AssemblyTemplate = ""
-            BaseModuleRelativePath = ""
+            BaseElementRelativePath = ""
             Subfolder = "Detailid"
             AssemblyAction = "NONE"
             AssemblyPath = ""
@@ -139,7 +139,7 @@ Public Module MakeComponentsLib
             SetOrAddProperty(userProps, GENERAL_PREFIX & "Project", settings.ProjectName)
             SetOrAddProperty(userProps, GENERAL_PREFIX & "Template", settings.Template)
             SetOrAddProperty(userProps, GENERAL_PREFIX & "AsmTemplate", settings.AssemblyTemplate)
-            SetOrAddProperty(userProps, GENERAL_PREFIX & "BaseModule", settings.BaseModuleRelativePath)
+            SetOrAddProperty(userProps, GENERAL_PREFIX & "BaseModule", settings.BaseElementRelativePath)
             
             ' Convert paths to relative for storage
             Dim relativeSubfolder As String = ToRelativeProjectPath(settings.Subfolder, projectRoot)
@@ -167,7 +167,7 @@ Public Module MakeComponentsLib
             settings.ProjectName = GetPropertyValue(userProps, GENERAL_PREFIX & "Project", "")
             settings.Template = GetPropertyValue(userProps, GENERAL_PREFIX & "Template", "")
             settings.AssemblyTemplate = GetPropertyValue(userProps, GENERAL_PREFIX & "AsmTemplate", "")
-            settings.BaseModuleRelativePath = GetPropertyValue(userProps, GENERAL_PREFIX & "BaseModule", "")
+            settings.BaseElementRelativePath = GetPropertyValue(userProps, GENERAL_PREFIX & "BaseModule", "")
             settings.AssemblyAction = GetPropertyValue(userProps, GENERAL_PREFIX & "AsmAction", "NONE")
             
             ' Load and convert paths from relative to absolute (handles legacy absolute paths too)

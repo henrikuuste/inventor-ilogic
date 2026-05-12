@@ -600,8 +600,7 @@ Public Module StringsLib
     Public Const PICK_PLANE As String = "Vali tasand" & PICK_CANCEL_SUFFIX
     Public Const PICK_FACE As String = "Vali pind" & PICK_CANCEL_SUFFIX
     Public Const PICK_EDGE As String = "Vali serv" & PICK_CANCEL_SUFFIX
-    Public Const PICK_COMPONENT As String = "Vali komponent" & PICK_CANCEL_SUFFIX
-    Public Const PICK_OCCURRENCE As String = "Vali element" & PICK_CANCEL_SUFFIX
+    Public Const PICK_OCCURRENCE As String = "Vali komponent" & PICK_CANCEL_SUFFIX
     
     ''' <summary>
     ''' Formats a pick prompt with custom description.
@@ -1350,7 +1349,7 @@ Convert dialog functions in library modules to use UILib and StringsLib.
 
 ### Files to Migrate
 
-1. `Lib/ModuleReleaseLib.vb` - ShowModeSelectionDialog, ShowPlanConfirmationDialog, ShowCompletionSummary
+1. `Lib/ElementReleaseLib.vb` - ShowModeSelectionDialog, ShowPlanConfirmationDialog, ShowCompletionSummary
 2. `Lib/BOMExportLib.vb` - SelectTemplateFromListOrBrowse, BrowseTemplateFile
 3. `Lib/BoundingBoxStockLib.vb` - ShowConfigForm (already uses TableLayoutPanel)
 4. `Lib/ExcelReaderLib.vb` - ShowConfigSelectionDialog
@@ -1373,11 +1372,11 @@ Convert all remaining rule dialogs to use UILib and StringsLib.
 ### Files to Migrate
 
 1. `Koordinaadid.vb` - Already non-modal, adapt to UILib
-2. `Loo komponendid.vb` - Large dialog with DataGridView
+2. `Loo detailid.vb` - Large dialog with DataGridView
 3. `Mustrid/Kordused keskelt.vb` - Complex dialog with pickers
 4. `Mõõdud.vb` - Dimension configuration
 5. `Määra materjalide välimus.vb` - Material appearance
-6. `Komponendid/Pinnalaotuse vaated.vb` - Flat pattern views
+6. `Detailid/Pinnalaotuse vaated.vb` - Flat pattern views
 7. `Lehtmetall.vb` - Sheet metal (picker only)
 8. `Taasta värvid.vb` - Color restore
 9. `Kopeeri pinnad.vb` - Surface copy

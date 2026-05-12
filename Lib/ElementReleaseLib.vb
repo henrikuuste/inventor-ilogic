@@ -1,14 +1,16 @@
 ' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
-' ModuleReleaseLib - Module Release System Core Library
+' ElementReleaseLib - Element Release System Core Library
 ' 
-' Provides functions for releasing parametric Inventor modules with optimal
+' Provides functions for releasing parametric Inventor elements with optimal
 ' file sharing. Analyzes variant parameters, computes geometry fingerprints,
 ' and creates standalone copies only where geometry differs.
 '
+' Terminology updated 2026-05-12: module -> element per UBIQUITOUS_LANGUAGE.md
+'
 ' Dependencies:
 '   UtilsLib - logging via UtilsLib.LogInfo / UtilsLib.LogWarn
-'   ExcelReaderLib - variant table reading (ReleaseConfig)
+'   ExcelReaderLib - variant table reading (ElementConfig)
 '   VaultNumberingLib - Vault operations (production mode only)
 '
 ' Usage: 
@@ -19,7 +21,7 @@
 '     AddVbFile "Lib/UtilsLib.vb"
 '     AddVbFile "Lib/ExcelReaderLib.vb"
 '     AddVbFile "Lib/VaultNumberingLib.vb"
-'     AddVbFile "Lib/ModuleReleaseLib.vb"
+'     AddVbFile "Lib/ElementReleaseLib.vb"
 '
 ' ============================================================================
 
@@ -27,7 +29,7 @@ Imports Inventor
 Imports System.Collections.Generic
 Imports System.Windows.Forms
 
-Public Module ModuleReleaseLib
+Public Module ElementReleaseLib
 
     ' ============================================================================
     ' Configuration Constants
@@ -42,7 +44,7 @@ Public Module ModuleReleaseLib
     
     Public Enum ReleaseMode
         Cancelled = 0
-        FullModule = 1
+        FullElement = 1
         CurrentAssembly = 2
     End Enum
     
@@ -60,15 +62,15 @@ Public Module ModuleReleaseLib
     ''' <summary>
     ''' Main context object carrying all release information.
     ''' </summary>
-    Public Class ReleaseContext
+    Public Class ElementReleaseContext
         Public Mode As ReleaseMode
         Public ExcelPath As String
-        Public Variants As List(Of ExcelReaderLib.ReleaseConfig)
+        Public Elements As List(Of ExcelReaderLib.ElementConfig)
         Public SourceRoot As String
         Public TargetRoot As String
-        Public ModuleName As String
+        Public ElementName As String
         Public AssemblyTree As AssemblyTree
-        Public VariantMatrix As VariantMatrix
+        Public ElementMatrix As ElementMatrix
         Public PartGroups As List(Of PartGroup)
         Public ReleasePlan As ReleasePlan
         Public MasterPaths As List(Of String)
@@ -106,11 +108,11 @@ Public Module ModuleReleaseLib
     End Class
     
     ''' <summary>
-    ''' Variant matrix with fingerprints per part per variant.
+    ''' Element matrix with fingerprints per part per released element.
     ''' </summary>
-    Public Class VariantMatrix
+    Public Class ElementMatrix
         Public PartPaths As New List(Of String)
-        Public VariantNames As New List(Of String)
+        Public ElementNames As New List(Of String)
         Public Fingerprints As New Dictionary(Of String, Dictionary(Of String, String))
     End Class
     
@@ -156,7 +158,7 @@ Public Module ModuleReleaseLib
     ''' </summary>
     Public Function ShowModeSelectionDialog(app As Inventor.Application) As ReleaseMode
         Dim frm As New Form()
-        frm.Text = "Moodulite väljastamine"
+        frm.Text = StringsLib.TITLE_ELEMENT_RELEASE
         frm.Width = 350
         frm.Height = 180
         frm.StartPosition = FormStartPosition.Manual
@@ -170,26 +172,26 @@ Public Module ModuleReleaseLib
         frm.Tag = ReleaseMode.Cancelled
         
         Dim lblPrompt As New Label()
-        lblPrompt.Text = "Vali väljastamise režiim (moodulid Excelist):"
+        lblPrompt.Text = "Vali väljastamise režiim (elemendid Excelist):"
         lblPrompt.Left = 20
         lblPrompt.Top = 20
         lblPrompt.Width = 300
         frm.Controls.Add(lblPrompt)
         
         Dim btnFull As New Button()
-        btnFull.Text = "Kõik moodulid"
+        btnFull.Text = StringsLib.BTN_ALL_ELEMENTS
         btnFull.Left = 20
         btnFull.Top = 50
         btnFull.Width = 140
         btnFull.Height = 35
         AddHandler btnFull.Click, Sub(s, e)
-            frm.Tag = ReleaseMode.FullModule
+            frm.Tag = ReleaseMode.FullElement
             frm.DialogResult = DialogResult.OK
         End Sub
         frm.Controls.Add(btnFull)
         
         Dim btnCurrent As New Button()
-        btnCurrent.Text = "Esimene moodul"
+        btnCurrent.Text = StringsLib.BTN_FIRST_ELEMENT
         btnCurrent.Left = 175
         btnCurrent.Top = 50
         btnCurrent.Width = 140
@@ -220,8 +222,8 @@ Public Module ModuleReleaseLib
     End Function
     
     ''' <summary>
-    ''' Discover the Excel configuration file for the module.
-    ''' Looks for moodulid.xlsx in the module source folder.
+    ''' Discover the Excel configuration file for the element.
+    ''' Looks for elemendid.xlsx (or moodulid.xlsx for backward compatibility) in the source folder.
     ''' </summary>
     Public Function DiscoverExcel(sourceFolder As String) As String
         If String.IsNullOrEmpty(sourceFolder) OrElse Not System.IO.Directory.Exists(sourceFolder) Then
@@ -231,31 +233,38 @@ Public Module ModuleReleaseLib
         
         UtilsLib.LogInfo("DiscoverExcel: Searching in " & sourceFolder)
         
-        ' Look for moodulid.xlsx first
-        Dim excelPath As String = System.IO.Path.Combine(sourceFolder, "moodulid.xlsx")
+        ' Look for elemendid.xlsx first (new naming)
+        Dim excelPath As String = System.IO.Path.Combine(sourceFolder, "elemendid.xlsx")
         If System.IO.File.Exists(excelPath) Then
-            UtilsLib.LogInfo("DiscoverExcel: Found moodulid.xlsx")
+            UtilsLib.LogInfo("DiscoverExcel: Found elemendid.xlsx")
+            Return excelPath
+        End If
+        
+        ' Backward compatibility: look for moodulid.xlsx
+        excelPath = System.IO.Path.Combine(sourceFolder, "moodulid.xlsx")
+        If System.IO.File.Exists(excelPath) Then
+            UtilsLib.LogInfo("DiscoverExcel: Found moodulid.xlsx (legacy name)")
             Return excelPath
         End If
         
         ' Fallback to .xls
-        excelPath = System.IO.Path.Combine(sourceFolder, "moodulid.xls")
+        excelPath = System.IO.Path.Combine(sourceFolder, "elemendid.xls")
         If System.IO.File.Exists(excelPath) Then
-            UtilsLib.LogInfo("DiscoverExcel: Found moodulid.xls")
+            UtilsLib.LogInfo("DiscoverExcel: Found elemendid.xls")
             Return excelPath
         End If
         
-        UtilsLib.LogInfo("DiscoverExcel: No moodulid.xlsx found")
+        UtilsLib.LogInfo("DiscoverExcel: No elemendid.xlsx found")
         Return Nothing
     End Function
     
     ''' <summary>
     ''' Discover release context based on mode selection.
     ''' </summary>
-    Public Function DiscoverContext(app As Inventor.Application, mode As ReleaseMode) As ReleaseContext
+    Public Function DiscoverContext(app As Inventor.Application, mode As ReleaseMode) As ElementReleaseContext
         If mode = ReleaseMode.Cancelled Then Return Nothing
         
-        Dim context As New ReleaseContext()
+        Dim context As New ElementReleaseContext()
         context.Mode = mode
         
         Dim activeDoc As Document = app.ActiveDocument
@@ -274,14 +283,14 @@ Public Module ModuleReleaseLib
         
         UtilsLib.LogInfo("DiscoverContext: Active assembly: " & asmPath)
         
-        context.SourceRoot = FindModuleSourceRoot(asmPath)
+        context.SourceRoot = FindElementSourceRoot(asmPath)
         If String.IsNullOrEmpty(context.SourceRoot) Then
             UtilsLib.LogInfo("DiscoverContext: Could not determine source root")
             Return Nothing
         End If
         
-        context.ModuleName = System.IO.Path.GetFileName(context.SourceRoot)
-        UtilsLib.LogInfo("DiscoverContext: Module name: " & context.ModuleName)
+        context.ElementName = System.IO.Path.GetFileName(context.SourceRoot)
+        UtilsLib.LogInfo("DiscoverContext: Element name: " & context.ElementName)
         
         context.TargetRoot = ComputeTargetRoot(context.SourceRoot)
         UtilsLib.LogInfo("DiscoverContext: Target root: " & context.TargetRoot)
@@ -290,68 +299,78 @@ Public Module ModuleReleaseLib
         context.ExcelPath = DiscoverExcel(context.SourceRoot)
         If String.IsNullOrEmpty(context.ExcelPath) Then
             UtilsLib.LogInfo("DiscoverContext: Excel file required")
-            MessageBox.Show("Excel faili (moodulid.xlsx) ei leitud kaustast:" & vbCrLf & _
+            MessageBox.Show("Excel faili (elemendid.xlsx) ei leitud kaustast:" & vbCrLf & _
                            context.SourceRoot & vbCrLf & vbCrLf & _
-                           "Loo Excel fail moodulite kirjeldusega." & vbCrLf & _
-                           "Vaata malli: Moodulid\_moodulid_template.xlsx", "Loo moodulid")
+                           "Loo Excel fail elementide kirjeldusega." & vbCrLf & _
+                           "Vaata malli: Elemendid\_elemendid_template.xlsx", "Loo elemendid")
             Return Nothing
         End If
         
-        Dim allVariants As List(Of ExcelReaderLib.ReleaseConfig) = ExcelReaderLib.ReadVariantTable(context.ExcelPath)
-        UtilsLib.LogInfo("DiscoverContext: Loaded " & allVariants.Count & " moodulid from Excel")
+        Dim allVariants As List(Of ExcelReaderLib.ElementConfig) = ExcelReaderLib.ReadVariantTable(context.ExcelPath)
+        UtilsLib.LogInfo("DiscoverContext: Loaded " & allVariants.Count & " elements from Excel")
         
         If allVariants.Count = 0 Then
-            UtilsLib.LogInfo("DiscoverContext: No moodulid found in Excel")
+            UtilsLib.LogInfo("DiscoverContext: No elements found in Excel")
             MessageBox.Show("Excel fail on tühi või vigane:" & vbCrLf & _
-                           context.ExcelPath, "Loo moodulid")
+                           context.ExcelPath, "Loo elemendid")
             Return Nothing
         End If
         
         ' Filter based on mode
-        If mode = ReleaseMode.FullModule Then
-            context.Variants = allVariants
-            UtilsLib.LogInfo("DiscoverContext: Full module mode - using all " & context.Variants.Count & " moodulid")
+        If mode = ReleaseMode.FullElement Then
+            context.Elements = allVariants
+            UtilsLib.LogInfo("DiscoverContext: Full element mode - using all " & context.Elements.Count & " elements")
         Else
-            ' CurrentAssembly mode - use only first moodul
-            context.Variants = New List(Of ExcelReaderLib.ReleaseConfig)
-            context.Variants.Add(allVariants(0))
-            UtilsLib.LogInfo("DiscoverContext: Single moodul mode - using: " & allVariants(0).ConfigName)
+            ' CurrentAssembly mode - use only first element
+            context.Elements = New List(Of ExcelReaderLib.ElementConfig)
+            context.Elements.Add(allVariants(0))
+            UtilsLib.LogInfo("DiscoverContext: Single element mode - using: " & allVariants(0).ElementName)
         End If
         
         Return context
     End Function
     
     ''' <summary>
-    ''' Find the module source root folder (Alusmoodulid/{ModuleName}).
+    ''' Find the element source root folder (Aluselemendid/{ElementName}).
+    ''' Also supports legacy Alusmoodulid for backward compatibility.
     ''' </summary>
-    Private Function FindModuleSourceRoot(asmPath As String) As String
+    Private Function FindElementSourceRoot(asmPath As String) As String
         Dim folder As String = System.IO.Path.GetDirectoryName(asmPath)
         
         Do While Not String.IsNullOrEmpty(folder)
             Dim parentName As String = System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(folder))
-            If parentName.Equals("Alusmoodulid", StringComparison.OrdinalIgnoreCase) Then
-                UtilsLib.LogInfo("FindModuleSourceRoot: Found module root: " & folder)
+            ' Support both new (Aluselemendid) and legacy (Alusmoodulid) folder names
+            If parentName.Equals("Aluselemendid", StringComparison.OrdinalIgnoreCase) OrElse _
+               parentName.Equals("Alusmoodulid", StringComparison.OrdinalIgnoreCase) Then
+                UtilsLib.LogInfo("FindElementSourceRoot: Found element root: " & folder)
                 Return folder
             End If
             folder = System.IO.Path.GetDirectoryName(folder)
         Loop
         
-        UtilsLib.LogInfo("FindModuleSourceRoot: Alusmoodulid not found in path, using assembly folder")
+        UtilsLib.LogInfo("FindElementSourceRoot: Aluselemendid not found in path, using assembly folder")
         Return System.IO.Path.GetDirectoryName(asmPath)
     End Function
     
     ''' <summary>
-    ''' Compute target root folder (Moodulid/ at same level as Alusmoodulid/).
+    ''' Compute target root folder (Elemendid/ at same level as Aluselemendid/).
+    ''' Also supports legacy Alusmoodulid → Moodulid for backward compatibility.
     ''' </summary>
     Private Function ComputeTargetRoot(sourceRoot As String) As String
         Dim parent As String = System.IO.Path.GetDirectoryName(sourceRoot)
         Dim grandparent As String = System.IO.Path.GetDirectoryName(parent)
         
+        ' New naming: Aluselemendid → Elemendid
+        If System.IO.Path.GetFileName(parent).Equals("Aluselemendid", StringComparison.OrdinalIgnoreCase) Then
+            Return System.IO.Path.Combine(grandparent, "Elemendid")
+        End If
+        
+        ' Legacy naming: Alusmoodulid → Moodulid (backward compatibility)
         If System.IO.Path.GetFileName(parent).Equals("Alusmoodulid", StringComparison.OrdinalIgnoreCase) Then
             Return System.IO.Path.Combine(grandparent, "Moodulid")
         End If
         
-        Return System.IO.Path.Combine(parent, "Moodulid")
+        Return System.IO.Path.Combine(parent, "Elemendid")
     End Function
     
     ''' <summary>
@@ -750,22 +769,22 @@ Public Module ModuleReleaseLib
     ''' <summary>
     ''' Build variant matrix with fingerprints for all parts across all variants.
     ''' </summary>
-    Public Function BuildVariantMatrix(app As Inventor.Application, _
+    Public Function BuildElementMatrix(app As Inventor.Application, _
                                         tree As AssemblyTree, _
-                                        variants As List(Of ExcelReaderLib.ReleaseConfig), _
-                                        masterPaths As List(Of String)) As VariantMatrix
-        Dim matrix As New VariantMatrix()
+                                        variants As List(Of ExcelReaderLib.ElementConfig), _
+                                        masterPaths As List(Of String)) As ElementMatrix
+        Dim matrix As New ElementMatrix()
         matrix.PartPaths = New List(Of String)(tree.Parts.Keys)
-        matrix.VariantNames = New List(Of String)
-        For Each vc As ExcelReaderLib.ReleaseConfig In variants
-            matrix.VariantNames.Add(vc.ConfigName)
+        matrix.ElementNames = New List(Of String)
+        For Each vc As ExcelReaderLib.ElementConfig In variants
+            matrix.ElementNames.Add(vc.ElementName)
         Next
         
         Dim snapshot = SnapshotMasterParameters(app, masterPaths)
         
         Try
-            For Each variantCfg As ExcelReaderLib.ReleaseConfig In variants
-                UtilsLib.LogInfo("BuildVariantMatrix: Analyzing moodul " & variantCfg.ConfigName)
+            For Each variantCfg As ExcelReaderLib.ElementConfig In variants
+                UtilsLib.LogInfo("BuildElementMatrix: Analyzing element " & variantCfg.ElementName)
                 
                 For Each masterPath In masterPaths
                     Dim doc As Document = Nothing
@@ -809,7 +828,7 @@ Public Module ModuleReleaseLib
                     End If
                 Next
                 
-                matrix.Fingerprints.Add(variantCfg.ConfigName, variantFps)
+                matrix.Fingerprints.Add(variantCfg.ElementName, variantFps)
             Next
         Finally
             RestoreMasterParameters(app, snapshot)
@@ -819,14 +838,14 @@ Public Module ModuleReleaseLib
             End Try
         End Try
         
-        UtilsLib.LogInfo("BuildVariantMatrix: Complete - " & matrix.PartPaths.Count & " parts x " & matrix.VariantNames.Count & " moodulid")
+        UtilsLib.LogInfo("BuildElementMatrix: Complete - " & matrix.PartPaths.Count & " parts x " & matrix.ElementNames.Count & " elements")
         Return matrix
     End Function
     
     ''' <summary>
     ''' Classify parts into groups based on fingerprint sharing.
     ''' </summary>
-    Public Function ClassifyPartGroups(matrix As VariantMatrix, _
+    Public Function ClassifyPartGroups(matrix As ElementMatrix, _
                                         tree As AssemblyTree) As List(Of PartGroup)
         Dim groups As New List(Of PartGroup)
         
@@ -836,7 +855,7 @@ Public Module ModuleReleaseLib
             group.RelativePath = tree.Parts(partPath).RelativePath
             group.PartNumber = tree.Parts(partPath).PartNumber
             
-            For Each variantName In matrix.VariantNames
+            For Each variantName In matrix.ElementNames
                 Dim fp = matrix.Fingerprints(variantName)(partPath)
                 If Not group.UniqueFingerprints.ContainsKey(fp) Then
                     group.UniqueFingerprints.Add(fp, New List(Of String))
@@ -940,7 +959,7 @@ Public Module ModuleReleaseLib
     ''' </summary>
     Public Function ComputeReleasePlan(tree As AssemblyTree, _
                                         partGroups As List(Of PartGroup), _
-                                        variants As List(Of ExcelReaderLib.ReleaseConfig), _
+                                        variants As List(Of ExcelReaderLib.ElementConfig), _
                                         targetRoot As String, _
                                         fileNumbers As List(Of String)) As ReleasePlan
         Dim plan As New ReleasePlan()
@@ -948,8 +967,8 @@ Public Module ModuleReleaseLib
         
         Dim numberIndex As Integer = 0
         
-        For Each variantCfg As ExcelReaderLib.ReleaseConfig In variants
-            plan.VariantFolders.Add(variantCfg.ConfigName, System.IO.Path.Combine(targetRoot, variantCfg.ConfigName))
+        For Each variantCfg As ExcelReaderLib.ElementConfig In variants
+            plan.VariantFolders.Add(variantCfg.ElementName, System.IO.Path.Combine(targetRoot, variantCfg.ElementName))
         Next
         
         ' Sharing only makes sense with 2+ moodulid
@@ -973,8 +992,8 @@ Public Module ModuleReleaseLib
             If isShared Then
                 Dim fp As String = GetFirstKey(group.UniqueFingerprints)
                 Dim allVariantNames As New List(Of String)
-                For Each vc As ExcelReaderLib.ReleaseConfig In variants
-                    allVariantNames.Add(vc.ConfigName)
+                For Each vc As ExcelReaderLib.ElementConfig In variants
+                    allVariantNames.Add(vc.ElementName)
                 Next
                 plan.Files.Add(New PlannedFile With {
                     .SourcePath = group.PartPath,
@@ -1008,7 +1027,7 @@ Public Module ModuleReleaseLib
             End If
         Next
         
-        For Each variantCfg As ExcelReaderLib.ReleaseConfig In variants
+        For Each variantCfg As ExcelReaderLib.ElementConfig In variants
             For Each asmKvp In tree.Assemblies
                 Dim relativePath = asmKvp.Value.RelativePath
                 Dim newFileName As String = fileNumbers(numberIndex) & ".iam"
@@ -1016,11 +1035,11 @@ Public Module ModuleReleaseLib
                 
                 plan.Files.Add(New PlannedFile With {
                     .SourcePath = asmKvp.Key,
-                    .TargetLocalPath = System.IO.Path.Combine(plan.VariantFolders(variantCfg.ConfigName), relDir, newFileName),
+                    .TargetLocalPath = System.IO.Path.Combine(plan.VariantFolders(variantCfg.ElementName), relDir, newFileName),
                     .VaultNumber = fileNumbers(numberIndex),
                     .FileType = FileType.Assembly,
                     .IsShared = False,
-                    .ForVariants = New List(Of String) From {variantCfg.ConfigName}
+                    .ForVariants = New List(Of String) From {variantCfg.ElementName}
                 })
                 numberIndex += 1
             Next
@@ -1076,8 +1095,8 @@ Public Module ModuleReleaseLib
                 Dim newFileName As String = vaultNum & dwgSuffix & ".idw"
                 Dim relDir As String = System.IO.Path.GetDirectoryName(dwgInfo.RelativePath)
                 Dim allVariantNames2 As New List(Of String)
-                For Each vc2 As ExcelReaderLib.ReleaseConfig In variants
-                    allVariantNames2.Add(vc2.ConfigName)
+                For Each vc2 As ExcelReaderLib.ElementConfig In variants
+                    allVariantNames2.Add(vc2.ElementName)
                 Next
                 
                 plan.Files.Add(New PlannedFile With {
@@ -1089,14 +1108,14 @@ Public Module ModuleReleaseLib
                     .ForVariants = allVariantNames2
                 })
             Else
-                For Each variantCfg2 As ExcelReaderLib.ReleaseConfig In variants
+                For Each variantCfg2 As ExcelReaderLib.ElementConfig In variants
                     ' Find the released model's number for this variant if drawing shares number
                     Dim vaultNum As String
                     If shareNumberWithModel AndAlso Not String.IsNullOrEmpty(primaryModelPath) Then
-                        Dim modelFile As PlannedFile = FindPlannedFileBySourceAndVariant(plan.Files, primaryModelPath, variantCfg2.ConfigName)
+                        Dim modelFile As PlannedFile = FindPlannedFileBySourceAndVariant(plan.Files, primaryModelPath, variantCfg2.ElementName)
                         If modelFile IsNot Nothing Then
                             vaultNum = modelFile.VaultNumber
-                            UtilsLib.LogInfo("Drawing " & dwgFileName & ".idw (" & variantCfg2.ConfigName & ") reuses model number " & vaultNum & " with suffix '" & dwgSuffix & "'")
+                            UtilsLib.LogInfo("Drawing " & dwgFileName & ".idw (" & variantCfg2.ElementName & ") reuses model number " & vaultNum & " with suffix '" & dwgSuffix & "'")
                         Else
                             vaultNum = fileNumbers(numberIndex)
                             numberIndex += 1
@@ -1112,11 +1131,11 @@ Public Module ModuleReleaseLib
                     
                     plan.Files.Add(New PlannedFile With {
                         .SourcePath = dwgInfo.DrawingPath,
-                        .TargetLocalPath = System.IO.Path.Combine(plan.VariantFolders(variantCfg2.ConfigName), relDir, newFileName),
+                        .TargetLocalPath = System.IO.Path.Combine(plan.VariantFolders(variantCfg2.ElementName), relDir, newFileName),
                         .VaultNumber = vaultNum,
                         .FileType = FileType.Drawing,
                         .IsShared = False,
-                        .ForVariants = New List(Of String) From {variantCfg2.ConfigName}
+                        .ForVariants = New List(Of String) From {variantCfg2.ElementName}
                     })
                 Next
             End If
@@ -1136,7 +1155,7 @@ Public Module ModuleReleaseLib
         
         UtilsLib.LogInfo("ComputeReleasePlan: Total files: " & plan.Files.Count)
         UtilsLib.LogInfo("  - Shared: " & sharedCount)
-        UtilsLib.LogInfo("  - Moodul-specific: " & variantSpecificCount)
+        UtilsLib.LogInfo("  - Element-specific: " & variantSpecificCount)
         UtilsLib.LogInfo("  - Parts: " & partsCount)
         UtilsLib.LogInfo("  - Assemblies: " & assembliesCount)
         UtilsLib.LogInfo("  - Drawings: " & drawingsCount)
@@ -1232,7 +1251,7 @@ Public Module ModuleReleaseLib
         Dim message As String = "Väljastamise plaan:" & vbCrLf & vbCrLf &
             "Faile kokku: " & plan.Files.Count & vbCrLf &
             "  - Jagatud detailid: " & sharedPartsCount & vbCrLf &
-            "  - Mooduli detailid: " & variantPartsCount & vbCrLf &
+            "  - Elemendi detailid: " & variantPartsCount & vbCrLf &
             "  - Koostud: " & asmCount & vbCrLf &
             "  - Joonised: " & dwgCount & vbCrLf & vbCrLf &
             "Numbrid: " & firstNum & " kuni " & lastNum & vbCrLf & vbCrLf &
@@ -1653,7 +1672,7 @@ Public Module ModuleReleaseLib
     ''' <summary>
     ''' Execute the complete release plan.
     ''' </summary>
-    Public Function ExecuteRelease(app As Inventor.Application, context As ReleaseContext) As Boolean
+    Public Function ExecuteRelease(app As Inventor.Application, context As ElementReleaseContext) As Boolean
         UtilsLib.LogInfo("ExecuteRelease: Starting...")
         
         Dim masterSnapshot = SnapshotMasterParameters(app, context.MasterPaths)
@@ -1703,11 +1722,11 @@ Public Module ModuleReleaseLib
             Next
             
             UtilsLib.LogInfo("ExecuteRelease: Creating assemblies...")
-            For Each variantCfg As ExcelReaderLib.ReleaseConfig In context.Variants
-                Dim refMap = BuildReferenceMapForVariant(context, variantCfg.ConfigName)
+            For Each variantCfg As ExcelReaderLib.ElementConfig In context.Elements
+                Dim refMap = BuildReferenceMapForVariant(context, variantCfg.ElementName)
                 
                 For Each file As PlannedFile In context.ReleasePlan.Files
-                    If file.FileType = FileType.Assembly AndAlso file.ForVariants.Contains(variantCfg.ConfigName) Then
+                    If file.FileType = FileType.Assembly AndAlso file.ForVariants.Contains(variantCfg.ElementName) Then
                         ' Safety check for OldVersions
                         If IsOldVersionsPath(file.SourcePath) OrElse IsOldVersionsPath(file.TargetLocalPath) Then
                             UtilsLib.LogWarn("  Skipping OldVersions file: " & System.IO.Path.GetFileName(file.SourcePath))
@@ -1891,7 +1910,7 @@ Public Module ModuleReleaseLib
     ''' Verify that all released files have correct Part Number and Title.
     ''' Opens each file fresh to avoid caching issues.
     ''' </summary>
-    Private Function VerifyReleasedFiles(app As Inventor.Application, context As ReleaseContext) As Boolean
+    Private Function VerifyReleasedFiles(app As Inventor.Application, context As ElementReleaseContext) As Boolean
         Dim allPassed As Boolean = True
         
         For Each file As PlannedFile In context.ReleasePlan.Files
@@ -1981,9 +2000,9 @@ Public Module ModuleReleaseLib
     ''' <summary>
     ''' Find a variant configuration by name.
     ''' </summary>
-    Private Function FindVariantByName(variants As List(Of ExcelReaderLib.ReleaseConfig), name As String) As ExcelReaderLib.ReleaseConfig
-        For Each v As ExcelReaderLib.ReleaseConfig In variants
-            If v.ConfigName = name Then Return v
+    Private Function FindVariantByName(variants As List(Of ExcelReaderLib.ElementConfig), name As String) As ExcelReaderLib.ElementConfig
+        For Each v As ExcelReaderLib.ElementConfig In variants
+            If v.ElementName = name Then Return v
         Next
         Return Nothing
     End Function
@@ -1991,7 +2010,7 @@ Public Module ModuleReleaseLib
     ''' <summary>
     ''' Build reference map for a specific variant.
     ''' </summary>
-    Private Function BuildReferenceMapForVariant(context As ReleaseContext, variantName As String) As Dictionary(Of String, String)
+    Private Function BuildReferenceMapForVariant(context As ElementReleaseContext, variantName As String) As Dictionary(Of String, String)
         Dim map As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
         
         For Each file As PlannedFile In context.ReleasePlan.Files
@@ -2015,18 +2034,18 @@ Public Module ModuleReleaseLib
     
     Public Class ReleaseManifest
         Public LastUpdated As DateTime
-        Public Modules As New List(Of ModuleEntry)
+        Public Elements As New List(Of ElementEntry)
         Public SharedParts As New List(Of SharedPartEntry)
     End Class
     
-    Public Class ModuleEntry
-        Public ModuleName As String
+    Public Class ElementEntry
+        Public ElementName As String
         Public Variants As New List(Of VariantEntry)
         Public ReleaseDate As DateTime
     End Class
     
     Public Class VariantEntry
-        Public ConfigName As String
+        Public ReleasedElementName As String
         Public VaultFolder As String
         Public Parts As New List(Of String)
         Public Assemblies As New List(Of String)
@@ -2038,7 +2057,7 @@ Public Module ModuleReleaseLib
         Public VaultNumber As String
         Public SourcePartNumber As String
         Public GeometryFingerprint As String
-        Public UsedByModules As New List(Of String)
+        Public UsedByElements As New List(Of String)
         Public UsedByVariants As New List(Of String)
         Public ReleaseDate As DateTime
     End Class
@@ -2132,13 +2151,13 @@ Public Module ModuleReleaseLib
             If f.IsShared Then sharedCnt += 1 Else variantCnt += 1
         Next
         
-        Dim summary As String = "Moodulite väljastamine lõpetatud!" & vbCrLf & vbCrLf &
+        Dim summary As String = "Elementide väljastamine lõpetatud!" & vbCrLf & vbCrLf &
             "Faile loodud: " & plan.Files.Count & vbCrLf &
             "  - Jagatud: " & sharedCnt & vbCrLf &
-            "  - Moodulispetsiifilised: " & variantCnt & vbCrLf & vbCrLf &
+            "  - Elemendispetsiifilised: " & variantCnt & vbCrLf & vbCrLf &
             "Numbrid: " & firstNum & " kuni " & lastNum
         
-        MessageBox.Show(summary, "Väljastamine lõpetatud", MessageBoxButtons.OK, MessageBoxIcon.Information)
+        MessageBox.Show(summary, StringsLib.MSG_RELEASE_COMPLETE, MessageBoxButtons.OK, MessageBoxIcon.Information)
     End Sub
 
 End Module

@@ -2,20 +2,22 @@
 ---
 date: 2026-04-25T06:26:00+03:00
 researcher: Claude
-topic: "Loo komponendid - Save Errors and Flat Pattern Failures Analysis"
-tags: [research, debugging, sheet-metal, vault, loo-komponendid]
+topic: "Loo detailid - Save Errors and Flat Pattern Failures Analysis"
+tags: [research, debugging, sheet-metal, vault, loo-detailid]
 status: complete
-last_updated: 2026-04-25
+last_updated: 2026-05-12
 ---
 
-# Research: Loo komponendid - Save Errors and Flat Pattern Failures
+> **TERMINOLOGY NOTE (2026-05-12)**: Script renamed from "Loo komponendid" to "Loo detailid" per `docs/UBIQUITOUS_LANGUAGE.md`. "Detail" is the Estonian term for "Part".
+
+# Research: Loo detailid - Save Errors and Flat Pattern Failures
 
 **Date**: 2026-04-25
 **Topic**: Debugging failures in multi-body component creation script
 
 ## Research Question
 
-Two issues were observed when running `Loo komponendid.vb`:
+Two issues were observed when running `Loo detailid.vb`:
 1. Assembly save error mid-process with Vault popup interruption
 2. Flat pattern creation failed for most sheet metal parts (all but 2), though manual creation worked
 
@@ -33,7 +35,7 @@ The flat pattern creation fails because **face references become invalid** after
 
 ### Issue 1: Save Operations and Vault Interaction
 
-#### Current Save Sequence in `Loo komponendid.vb`
+#### Current Save Sequence in `Loo detailid.vb`
 
 ```
 For each body:
@@ -48,7 +50,7 @@ After all parts:
 
 #### Problem Areas
 
-**Line 394-412 (`Loo komponendid.vb`)** - Part save:
+**Line 394-412 (`Loo detailid.vb`)** - Part save:
 ```vb
 Try
     newPart.SaveAs(filePath, False)
@@ -173,9 +175,9 @@ Multiple Try/Catch blocks swallow exceptions:
 ## Code References
 
 ### Main Script
-- `Loo komponendid.vb:378-391` - Sheet metal conversion call
-- `Loo komponendid.vb:394-415` - Part save with Vault interaction
-- `Loo komponendid.vb:434-468` - Assembly save operations
+- `Loo detailid.vb:378-391` - Sheet metal conversion call
+- `Loo detailid.vb:394-415` - Part save with Vault interaction
+- `Loo detailid.vb:434-468` - Assembly save operations
 
 ### Sheet Metal Library  
 - `Lib/SheetMetalLib.vb:146-180` - `ConvertToSheetMetal` function
@@ -190,7 +192,7 @@ Multiple Try/Catch blocks swallow exceptions:
 
 ### Issue 1 (Save Errors) - Restructured Save Flow
 
-Changes to `Loo komponendid.vb`:
+Changes to `Loo detailid.vb`:
 
 1. **Keep parts open during creation**: Parts are no longer closed immediately after SaveAs
 2. **Batch save approach**: 

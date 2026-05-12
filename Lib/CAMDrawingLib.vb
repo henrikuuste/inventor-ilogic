@@ -6,7 +6,7 @@
 ' - Create drawings from template with 1:1 scale views
 ' - Place all 6 orthographic views in T-layout
 ' - Pinnalaotus DVR (thickened manufactured solid): AddBaseView AdditionalOptions DesignViewRepresentation + DVR activate fallback + MemberSpecific sync
-' - EnsureOrthographicCamViewsForPart: reuse views when layout exists (used by Joonised/Loo 1-1 joonised.vb; run Komponendid/Pinnalaotuse vaated.vb first on the part for DVRs)
+' - EnsureOrthographicCamViewsForPart: reuse views when layout exists (used by Joonised/Loo 1-1 joonised.vb; run Detailid/Pinnalaotuse vaated.vb first on the part for DVRs)
 ' - Resize sheets to fit part extents
 ' - Add extent dimensions
 ' - Export to DWG/DXF (2010 format)

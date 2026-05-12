@@ -1,14 +1,17 @@
 ' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
-' Loo alusmoodul - Create base module folder structure
+' Loo aluselement - Create base element folder structure
 ' 
-' Creates the standard folder structure for a parametric base module:
-'   Alusmoodulid/<ModuleName>/
+' Creates the standard folder structure for a parametric base element:
+'   Aluselemendid/<ElementName>/
 '     Eskiis/
 '     Karkass/Detailid/, Karkass/Joonised/
 '     Poroloon/Detailid/, Poroloon/Joonised/
 '
 ' Folders are created both on disk and in Vault (if connected).
+'
+' Terminology updated 2026-05-12 per docs/UBIQUITOUS_LANGUAGE.md:
+'   - "Alusmoodul" (old) → "Aluselement" (base element)
 '
 ' Usage: Run from any open document in the target project
 ' ============================================================================
@@ -23,7 +26,7 @@ AddVbFile "Lib/RuntimeLib.vb"
 AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/VaultNumberingLib.vb"
-AddVbFile "Lib/BaseModuleLayoutLib.vb"
+AddVbFile "Lib/BaseElementLayoutLib.vb"
 
 Imports System.Windows.Forms
 Imports Inventor
@@ -34,7 +37,7 @@ Sub Main()
     Dim app As Inventor.Application = ThisApplication
     UtilsLib.SetLogger(Logger)
     
-    UtilsLib.LogInfo("Loo alusmoodul: Starting...")
+    UtilsLib.LogInfo("Loo aluselement: Starting...")
     
     ' Get default project path from active document
     Dim defaultProjectPath As String = ""
@@ -43,9 +46,9 @@ Sub Main()
     End If
     
     If String.IsNullOrEmpty(defaultProjectPath) Then
-        UtilsLib.LogWarn("Loo alusmoodul: Could not detect project path from active document")
+        UtilsLib.LogWarn("Loo aluselement: Could not detect project path from active document")
     Else
-        UtilsLib.LogInfo("Loo alusmoodul: Detected project path: " & defaultProjectPath)
+        UtilsLib.LogInfo("Loo aluselement: Detected project path: " & defaultProjectPath)
     End If
     
     ' Get Vault connection
@@ -53,9 +56,9 @@ Sub Main()
     Dim vaultConnected As Boolean = (vaultConn IsNot Nothing)
     
     If vaultConnected Then
-        UtilsLib.LogInfo("Loo alusmoodul: Vault connected - " & VaultNumberingLib.GetConnectionInfo(vaultConn))
+        UtilsLib.LogInfo("Loo aluselement: Vault connected - " & VaultNumberingLib.GetConnectionInfo(vaultConn))
     Else
-        UtilsLib.LogWarn("Loo alusmoodul: Vault not connected - folders will be created locally only")
+        UtilsLib.LogWarn("Loo aluselement: Vault not connected - folders will be created locally only")
     End If
     
     ' Get workspace root for Vault path conversion
@@ -66,39 +69,39 @@ Sub Main()
     
     ' Show dialog and get user input
     Dim projectPath As String = defaultProjectPath
-    Dim moduleName As String = ""
+    Dim elementName As String = ""
     
-    Dim result As DialogResult = ShowInputDialog(projectPath, moduleName)
+    Dim result As DialogResult = ShowInputDialog(projectPath, elementName)
     
     If result <> DialogResult.OK Then
-        UtilsLib.LogInfo("Loo alusmoodul: Cancelled by user")
+        UtilsLib.LogInfo("Loo aluselement: Cancelled by user")
         Exit Sub
     End If
     
     ' Validate input
     If String.IsNullOrEmpty(projectPath) Then
-        UtilsLib.LogError("Loo alusmoodul: Project path is required")
-        MessageBox.Show("Projekti kaust on kohustuslik.", "Loo alusmoodul")
+        UtilsLib.LogError("Loo aluselement: Project path is required")
+        MessageBox.Show("Projekti kaust on kohustuslik.", StringsLib.TITLE_CREATE_BASE_ELEMENT)
         Exit Sub
     End If
     
-    If String.IsNullOrEmpty(moduleName) Then
-        UtilsLib.LogError("Loo alusmoodul: Module name is required")
-        MessageBox.Show("Mooduli nimi on kohustuslik.", "Loo alusmoodul")
+    If String.IsNullOrEmpty(elementName) Then
+        UtilsLib.LogError("Loo aluselement: Element name is required")
+        MessageBox.Show("Elemendi nimi on kohustuslik.", StringsLib.TITLE_CREATE_BASE_ELEMENT)
         Exit Sub
     End If
     
-    ' Validate module name (no invalid characters)
+    ' Validate element name (no invalid characters)
     Dim invalidChars() As Char = System.IO.Path.GetInvalidFileNameChars()
     For Each c As Char In invalidChars
-        If moduleName.Contains(c) Then
-            UtilsLib.LogError("Loo alusmoodul: Invalid character in module name: " & c)
-            MessageBox.Show("Mooduli nimes on keelatud sümbol: " & c, "Loo alusmoodul")
+        If elementName.Contains(c) Then
+            UtilsLib.LogError("Loo aluselement: Invalid character in element name: " & c)
+            MessageBox.Show("Elemendi nimes on keelatud sümbol: " & c, StringsLib.TITLE_CREATE_BASE_ELEMENT)
             Exit Sub
         End If
     Next
     
-    UtilsLib.LogInfo("Loo alusmoodul: Creating module '" & moduleName & "' in " & projectPath)
+    UtilsLib.LogInfo("Loo aluselement: Creating element '" & elementName & "' in " & projectPath)
     
     ' Update workspace root if project path changed
     If vaultConnected AndAlso projectPath <> defaultProjectPath Then
@@ -106,8 +109,8 @@ Sub Main()
     End If
     
     ' Create the folder structure via shared library
-    Dim moduleRoot As String = BaseModuleLayoutLib.EnsureBaseModuleLayout(projectPath, moduleName, vaultConn, workspaceRoot)
-    Dim expectedFolders As System.Collections.Generic.List(Of String) = BaseModuleLayoutLib.EnumerateExpectedFolders(projectPath, moduleName)
+    Dim elementRoot As String = BaseElementLayoutLib.EnsureBaseElementLayout(projectPath, elementName, vaultConn, workspaceRoot)
+    Dim expectedFolders As System.Collections.Generic.List(Of String) = BaseElementLayoutLib.EnumerateExpectedFolders(projectPath, elementName)
     Dim successCount As Integer = 0
     Dim failCount As Integer = 0
     For Each folderPath As String In expectedFolders
@@ -120,19 +123,19 @@ Sub Main()
     
     ' Summary
     If failCount = 0 Then
-        UtilsLib.LogInfo("Loo alusmoodul: Successfully created " & successCount & " folders for module '" & moduleName & "'")
-        MessageBox.Show("Moodul '" & moduleName & "' loodud edukalt!" & vbCrLf & _
-                       "Kaustu loodud: " & successCount, "Loo alusmoodul")
+        UtilsLib.LogInfo("Loo aluselement: Successfully created " & successCount & " folders for element '" & elementName & "'")
+        MessageBox.Show("Element '" & elementName & "' loodud edukalt!" & vbCrLf & _
+                       "Kaustu loodud: " & successCount, StringsLib.TITLE_CREATE_BASE_ELEMENT)
     Else
-        UtilsLib.LogWarn("Loo alusmoodul: Created " & successCount & " folders, " & failCount & " failed")
-        MessageBox.Show("Moodul '" & moduleName & "' loomine osaliselt ebaõnnestus." & vbCrLf & _
-                       "Õnnestus: " & successCount & ", Ebaõnnestus: " & failCount, "Loo alusmoodul")
+        UtilsLib.LogWarn("Loo aluselement: Created " & successCount & " folders, " & failCount & " failed")
+        MessageBox.Show("Element '" & elementName & "' loomine osaliselt ebaõnnestus." & vbCrLf & _
+                       "Õnnestus: " & successCount & ", Ebaõnnestus: " & failCount, StringsLib.TITLE_CREATE_BASE_ELEMENT)
     End If
 End Sub
 
-Function ShowInputDialog(ByRef projectPath As String, ByRef moduleName As String) As DialogResult
+Function ShowInputDialog(ByRef projectPath As String, ByRef elementName As String) As DialogResult
     Dim frm As New System.Windows.Forms.Form()
-    frm.Text = "Loo alusmoodul"
+    frm.Text = StringsLib.TITLE_CREATE_BASE_ELEMENT
     frm.Width = 500
     frm.Height = 200
     frm.StartPosition = FormStartPosition.CenterScreen
@@ -181,22 +184,22 @@ Function ShowInputDialog(ByRef projectPath As String, ByRef moduleName As String
     
     yPos += 35
     
-    ' Module name label
+    ' Element name label
     Dim lblModule As New System.Windows.Forms.Label()
-    lblModule.Text = "Mooduli nimi:"
+    lblModule.Text = "Elemendi nimi:"
     lblModule.Left = 15
     lblModule.Top = yPos
     lblModule.Width = 100
     frm.Controls.Add(lblModule)
     
-    ' Module name textbox
-    Dim txtModule As New System.Windows.Forms.TextBox()
-    txtModule.Name = "txtModule"
-    txtModule.Text = ""
-    txtModule.Left = 120
-    txtModule.Top = yPos
-    txtModule.Width = 315
-    frm.Controls.Add(txtModule)
+    ' Element name textbox
+    Dim txtElement As New System.Windows.Forms.TextBox()
+    txtElement.Name = "txtElement"
+    txtElement.Text = ""
+    txtElement.Left = 120
+    txtElement.Top = yPos
+    txtElement.Width = 315
+    frm.Controls.Add(txtElement)
     
     yPos += 45
     
@@ -228,7 +231,7 @@ Function ShowInputDialog(ByRef projectPath As String, ByRef moduleName As String
     ' Read values after dialog closes (avoiding ByRef in lambda issues)
     If result = DialogResult.OK Then
         projectPath = txtProject.Text.Trim()
-        moduleName = txtModule.Text.Trim()
+        elementName = txtElement.Text.Trim()
     End If
     
     Return result

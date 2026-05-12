@@ -157,8 +157,9 @@ Sub Main()
     Next
     
     ' Search for existing drawings using depth-first search
-    ' vaultRoot = workspace root (search boundary), startPath = document folder (starting point)
-    Dim vaultRoot As String = If(Not String.IsNullOrEmpty(workspaceRoot), workspaceRoot, outputFolder)
+    ' vaultRoot = project folder (search boundary), startPath = document folder (starting point)
+    Dim projectPath As String = UtilsLib.GetProjectPath(outputFolder)
+    Dim vaultRoot As String = If(Not String.IsNullOrEmpty(projectPath), projectPath, outputFolder)
     UtilsLib.LogInfo("Loo 1:1 joonised: Drawing search - start: " & outputFolder & ", limit: " & vaultRoot)
     
     ' Check for existing 1:1 drawings (in open documents and on disk)

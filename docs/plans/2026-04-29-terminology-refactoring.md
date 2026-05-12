@@ -35,7 +35,7 @@ The codebase has been improved with centralized constants that make refactoring 
 | `Lib/ExcelReaderLib.vb` | Rename ReleaseConfig, column names | HIGH | |
 | `Moodulid/Loo moodulid.vb` | Rename to element release, update calls | HIGH | |
 | `Moodulid/Loo alusmoodul.vb` | Rename to base element creation | HIGH | |
-| `Loo komponendid.vb` | Update AddVbFile paths | MEDIUM | Uses BaseModuleLayoutLib |
+| `Loo detailid.vb` | Update AddVbFile paths | MEDIUM | Uses BaseElementLayoutLib |
 | `Koost/Sorteeri detailid.vb` | Update AddVbFile paths | MEDIUM | Uses BaseModuleLayoutLib |
 | `Lib/MaterialRoutingLib.vb` | Verify uses BaseModuleLayoutLib | LOW | Should auto-update via constants |
 | `Moodulid/README.md` | Update all terminology | HIGH | |
@@ -52,7 +52,7 @@ The codebase has been improved with centralized constants that make refactoring 
 | `Lib/StringsLib.vb` | NEW | Centralizes UI strings - key refactoring target |
 | `Lib/UILib.vb` | NEW | No terminology issues |
 | `Lib/MaterialRoutingLib.vb` | NEW | Uses BaseModuleLayoutLib constants |
-| `Komponendid/Pinnalaotuse vaated.vb` | NEW | New script folder |
+| `Detailid/Pinnalaotuse vaated.vb` | NEW | New script folder |
 | `Test11_DrawingTitleBlockUpdate.vb` | NEW | Test file |
 | `Test11_UserInfo.vb` | NEW | Test file |
 | `Test12_VaultLoginLogout.vb` | NEW | Test file |
@@ -258,7 +258,7 @@ Update all scripts that use the renamed libraries.
 | Script | AddVbFile Change |
 |--------|------------------|
 | `Moodulid/Loo alusmoodul.vb` | `Lib/BaseModuleLayoutLib.vb` → `Lib/BaseElementLayoutLib.vb` |
-| `Loo komponendid.vb` | Same |
+| `Loo detailid.vb` | Same |
 | `Koost/Sorteeri detailid.vb` | Same |
 
 #### 2. Scripts using ModuleReleaseLib → ElementReleaseLib
@@ -427,15 +427,15 @@ During transition, the code should:
 
 ```
 1. Update UBIQUITOUS_LANGUAGE.md              ✓ (completed 2026-04-29)
-2. Update BaseModuleLayoutLib.vb constants    
-3. Update StringsLib.vb UI strings            
-4. Rename Lib/ModuleReleaseLib.vb → Lib/ElementReleaseLib.vb
-5. Update ExcelReaderLib.vb
-6. Update caller scripts (AddVbFile paths)
-7. Rename Moodulid/ → Elemendid/
-8. Rename Katsetused/Moodulid/ → Katsetused/Elemendid/
-9. Update AGENTS.md
-10. Update historical docs
+2. Update BaseModuleLayoutLib.vb constants    ✓ (completed 2026-05-12)
+3. Update StringsLib.vb UI strings            ✓ (completed 2026-05-12)
+4. Rename Lib/ModuleReleaseLib.vb → Lib/ElementReleaseLib.vb  ✓ (completed 2026-05-12)
+5. Update ExcelReaderLib.vb                   ✓ (completed 2026-05-12)
+6. Update caller scripts (AddVbFile paths)    ✓ (completed 2026-05-12)
+7. Rename Moodulid/ → Elemendid/              ✓ (completed 2026-05-12)
+8. Rename Katsetused/Moodulid/ → Katsetused/Elemendid/  ✓ (completed 2026-05-12)
+9. Update AGENTS.md                           ✓ (completed 2026-05-12)
+10. Update historical docs                    ✓ (completed 2026-05-12)
 ```
 
 ## References

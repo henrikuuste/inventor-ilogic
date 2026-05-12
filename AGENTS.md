@@ -15,12 +15,16 @@ We work with product family projects organized in Vault. Each project represents
 
 ### Standard Folder Structure
 
+**Note**: Terminology updated 2026-05-12 per `docs/UBIQUITOUS_LANGUAGE.md`:
+- "Alusmoodul" (old) → "Aluselement" (base element)
+- "Moodul" (old) → "Väljastatud element" (released element)
+
 ```
 Tooted/
   <ProjectName>/
     Algmaterjal/           - Source data (STEP files, design drawings, specifications)
-    Alusmoodulid/          - Parametric base modules (design masters)
-      <ModuleName>/        - Assemblies
+    Aluselemendid/         - Parametric base elements (design masters)
+      <ElementName>/       - Assemblies
         Eskiis/            - Sketches, skeleton parts and concepts
         Karkass/           - Frame/structure components and subassemblies
           Detailid/        - Individual parts
@@ -28,7 +32,13 @@ Tooted/
         Poroloon/          - Foam/upholstery components and subassemblies
           Detailid/        - Individual parts
           Joonised/        - Drawings
-    Moodulid/              - Released module versions (production-ready)
+        elemendid.xlsx     - Element release definitions
+    Elemendid/             - Released elements (production-ready)
+      Ühine/               - Shared parts across elements
+      <ElementName>/       - Element-specific files
+    Alusmoodulid/          - Base module assemblies (element arrangements)
+      moodulid.xlsx        - Module release definitions
+    Moodulid/              - Released modules (final assembly units)
 ```
 
 ### File Naming and Properties

@@ -12,7 +12,7 @@
 ' 4. Does fingerprint match before/after?
 ' 5. What happens if link is already broken or unresolved?
 '
-' RUN: Open a DERIVED part file (one created via Loo komponendid), then run this rule
+' RUN: Open a DERIVED part file (one created via Loo detailid), then run this rule
 
 AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
@@ -43,7 +43,7 @@ Sub Main()
     
     If dpcs.Count = 0 Then
         Logger.Warn("This part has NO derived part components - nothing to break")
-        Logger.Info("Try opening a part created with 'Loo komponendid.vb'")
+        Logger.Info("Try opening a part created with 'Loo detailid.vb'")
         
         ' Check ReferencedDocuments anyway
         Logger.Info("")

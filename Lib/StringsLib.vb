@@ -45,8 +45,7 @@ Public Module StringsLib
     Public Const PICK_PLANE As String = "Vali tasand" & PICK_CANCEL_SUFFIX
     Public Const PICK_FACE As String = "Vali pind" & PICK_CANCEL_SUFFIX
     Public Const PICK_EDGE As String = "Vali serv" & PICK_CANCEL_SUFFIX
-    Public Const PICK_COMPONENT As String = "Vali komponent" & PICK_CANCEL_SUFFIX
-    Public Const PICK_OCCURRENCE As String = "Vali element" & PICK_CANCEL_SUFFIX
+    Public Const PICK_OCCURRENCE As String = "Vali komponent" & PICK_CANCEL_SUFFIX
     
     ''' <summary>
     ''' Formats a pick prompt with custom description.
@@ -108,12 +107,12 @@ Public Module StringsLib
     Public Const TITLE_UPDATE_SHEET_SIZE As String = "Uuenda lehe suurus"
     
     ' ============================================================
-    ' MODULE RELEASE
+    ' ELEMENT RELEASE
     ' ============================================================
     
-    Public Const TITLE_MODULE_RELEASE As String = "Moodulite väljastamine"
-    Public Const BTN_ALL_MODULES As String = "Kõik moodulid"
-    Public Const BTN_FIRST_MODULE As String = "Esimene moodul"
+    Public Const TITLE_ELEMENT_RELEASE As String = "Elementide väljastamine"
+    Public Const BTN_ALL_ELEMENTS As String = "Kõik elemendid"
+    Public Const BTN_FIRST_ELEMENT As String = "Esimene element"
     Public Const MSG_CONFIRM_RELEASE As String = "Kinnita väljastamine"
     Public Const MSG_RELEASE_COMPLETE As String = "Väljastamine lõpetatud"
     
@@ -138,7 +137,7 @@ Public Module StringsLib
     ' COMPONENTS
     ' ============================================================
     
-    Public Const TITLE_CREATE_COMPONENTS As String = "Loo komponendid"
+    Public Const TITLE_CREATE_PARTS As String = "Loo detailid"
     Public Const TITLE_FLAT_PATTERN_VIEWS As String = "Pinnalaotuse vaated"
     Public Const TITLE_SHEET_METAL As String = "Lehtmetall"
     Public Const TITLE_RESTORE_COLORS As String = "Taasta värvid"
@@ -154,7 +153,7 @@ Public Module StringsLib
     ' ASSEMBLY
     ' ============================================================
     
-    Public Const TITLE_CREATE_BASE_MODULE As String = "Loo alusmoodul"
+    Public Const TITLE_CREATE_BASE_ELEMENT As String = "Loo aluselement"
     Public Const TITLE_VARIABLES As String = "Muutujad"
     Public Const TITLE_SORT_PARTS As String = "Sorteeri detailid"
     Public Const TITLE_NAME_PARTS As String = "Nimeta detailid"

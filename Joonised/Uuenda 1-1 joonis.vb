@@ -75,15 +75,12 @@ Sub Main()
             
             UtilsLib.LogInfo("Uuenda 1:1 joonis: Part: " & partDoc.DisplayName & " (" & partNumber & ")")
             
-            ' Get workspace root for disk search (depth-first search boundary)
+            ' Get project folder for disk search (depth-first search boundary)
             Dim partFolder As String = System.IO.Path.GetDirectoryName(partDoc.FullDocumentName)
-            Dim vaultRoot As String = partFolder
-            Dim vaultConn As Object = VaultNumberingLib.GetVaultConnection()
-            If vaultConn IsNot Nothing Then
-                Dim workspaceRoot As String = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, partFolder)
-                If Not String.IsNullOrEmpty(workspaceRoot) Then
-                    vaultRoot = workspaceRoot
-                End If
+            Dim vaultRoot As String = UtilsLib.GetProjectPath(partFolder)
+            If String.IsNullOrEmpty(vaultRoot) Then
+                ' Fallback to part folder if project path not detected
+                vaultRoot = partFolder
             End If
             
             UtilsLib.LogInfo("Uuenda 1:1 joonis: Searching for drawing - start: " & partFolder & ", limit: " & vaultRoot)
@@ -129,15 +126,12 @@ Sub Main()
             Dim partsWithDrawingPaths As New List(Of Tuple(Of PartDocument, String)) ' Parts with drawings on disk (not open)
             Dim partPaths As New HashSet(Of String)
             
-            ' Get workspace root for disk search (depth-first search boundary)
+            ' Get project folder for disk search (depth-first search boundary)
             Dim asmFolder As String = System.IO.Path.GetDirectoryName(asmDoc.FullDocumentName)
-            Dim vaultRoot As String = asmFolder
-            Dim vaultConn As Object = VaultNumberingLib.GetVaultConnection()
-            If vaultConn IsNot Nothing Then
-                Dim workspaceRoot As String = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, asmFolder)
-                If Not String.IsNullOrEmpty(workspaceRoot) Then
-                    vaultRoot = workspaceRoot
-                End If
+            Dim vaultRoot As String = UtilsLib.GetProjectPath(asmFolder)
+            If String.IsNullOrEmpty(vaultRoot) Then
+                ' Fallback to assembly folder if project path not detected
+                vaultRoot = asmFolder
             End If
             
             UtilsLib.LogInfo("Uuenda 1:1 joonis: Searching for drawings - limit: " & vaultRoot)

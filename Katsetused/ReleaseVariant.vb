@@ -73,7 +73,7 @@ Sub Main()
     End If
     
     ' Read configurations from Excel
-    Dim configs As List(Of ExcelReaderLib.ReleaseConfig)
+    Dim configs As List(Of ExcelReaderLib.ElementConfig)
     Try
         configs = ExcelReaderLib.ReadVariantTable(excelPath)
     Catch ex As Exception
@@ -87,7 +87,7 @@ Sub Main()
     End If
     
     ' Let user select a configuration
-    Dim selectedConfig As ExcelReaderLib.ReleaseConfig = ExcelReaderLib.ShowConfigSelectionDialog(configs)
+    Dim selectedConfig As ExcelReaderLib.ElementConfig = ExcelReaderLib.ShowConfigSelectionDialog(configs)
     
     If selectedConfig Is Nothing Then
         Exit Sub ' User cancelled
@@ -120,7 +120,7 @@ Sub Main()
     ' Perform the release (master assembly stays open)
     Dim logMessages As New List(Of String)
     
-    Logger.Info("Starting release of: " & selectedConfig.ConfigName)
+    Logger.Info("Starting release of: " & selectedConfig.ElementName)
     
     ' Get iLogic automation for running rules
     Dim iLogicAuto As Object = Nothing
@@ -132,7 +132,7 @@ Sub Main()
     Dim releasedPath As String = VariantReleaseLib.ReleaseVariant( _
         app, _
         asmPath, _
-        selectedConfig.ConfigName, _
+        selectedConfig.ElementName, _
         selectedConfig.PartNumber, _
         selectedConfig.Parameters, _
         releaseFolder, _
@@ -155,7 +155,7 @@ Sub Main()
     ' Write log file
     If Not String.IsNullOrEmpty(releasedPath) Then
         Dim variantFolder As String = System.IO.Path.GetDirectoryName(releasedPath)
-        VariantReleaseLib.WriteLogFile(variantFolder, selectedConfig.ConfigName, logMessages)
+        VariantReleaseLib.WriteLogFile(variantFolder, selectedConfig.ElementName, logMessages)
     End If
     
     ' Reopen the master assembly if it was closed during release

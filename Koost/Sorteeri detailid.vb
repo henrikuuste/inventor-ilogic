@@ -8,11 +8,16 @@
 ' Usage: Run from an open assembly
 ' ============================================================================
 
+AddReference "Autodesk.Connectivity.WebServices"
+AddReference "Autodesk.DataManagement.Client.Framework.Vault"
+AddReference "Connectivity.InventorAddin.EdmAddin"
+
 AddVbFile "Lib/RuntimeLib.vb"
 AddVbFile "Lib/StringsLib.vb"
 AddVbFile "Lib/UtilsLib.vb"
 AddVbFile "Lib/SortingLib.vb"
-AddVbFile "Lib/BaseModuleLayoutLib.vb"
+AddVbFile "Lib/VaultNumberingLib.vb"
+AddVbFile "Lib/BaseElementLayoutLib.vb"
 AddVbFile "Lib/MaterialRoutingLib.vb"
 
 Imports System.Collections.Generic

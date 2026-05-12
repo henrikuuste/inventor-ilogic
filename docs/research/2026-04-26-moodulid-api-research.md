@@ -529,7 +529,7 @@ The codebase uses simple string-based property storage (iProperties). For JSON m
 
 ### Main Related Scripts
 
-- `Loo komponendid.vb` - Creates derived parts from multibody masters (reference for derived part patterns)
+- `Loo detailid.vb` - Creates derived parts from multibody masters (reference for derived part patterns)
 
 ---
 

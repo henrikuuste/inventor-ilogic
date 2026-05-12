@@ -1,4 +1,4 @@
-# Loo komponendid
+# Loo detailid
 - Let the user select/deselect in the viewport
 - Apply material to multiple
 - Templates changed

@@ -1,6 +1,14 @@
 <!-- Copyright (c) 2026 Henri Kuuste -->
 # Module Release Cycle Implementation Plan
 
+> **TERMINOLOGY NOTE (2026-05-12)**: This plan uses outdated terminology. Per `docs/UBIQUITOUS_LANGUAGE.md`:
+> - "Alusmoodul" → "Aluselement" (base element)
+> - "Moodul" (released unit) → "Väljastatud element" (released element)
+> - "ModuleReleaseLib" → "ElementReleaseLib"
+> - "Moodulid/" folder → "Elemendid/" (for scripts)
+>
+> The core concepts and architecture remain valid; only the naming has changed.
+
 ## Overview
 
 Create a smart module release system (`Moodulid/Loo moodulid.vb`) that releases parametric Inventor modules with optimal file sharing. The system analyzes variant parameters, computes geometry fingerprints, and creates standalone copies only where geometry differs. Shared parts are consolidated in a common folder (`Ühine`), reducing Vault file numbers and simplifying manufacturing.

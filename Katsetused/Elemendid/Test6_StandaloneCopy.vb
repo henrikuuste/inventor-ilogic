@@ -45,7 +45,7 @@ Sub Main()
     
     If dpcs.Count = 0 Then
         Logger.Warn("This part has NO derivation - nothing to test")
-        Logger.Info("Open a part created with 'Loo komponendid.vb'")
+        Logger.Info("Open a part created with 'Loo detailid.vb'")
         Return
     End If
     

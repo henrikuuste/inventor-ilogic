@@ -43,14 +43,14 @@ Public Module MaterialRoutingLib
         Return ROUTE_FRAME
     End Function
 
-    Public Function GetDefaultDetailFolder(moduleRoot As String, kind As String) As String
-        If String.IsNullOrEmpty(moduleRoot) Then Return ""
+    Public Function GetDefaultDetailFolder(elementRoot As String, kind As String) As String
+        If String.IsNullOrEmpty(elementRoot) Then Return ""
 
         If String.Equals(kind, ROUTE_PADDING, StringComparison.OrdinalIgnoreCase) Then
-            Return System.IO.Path.Combine(moduleRoot, BaseModuleLayoutLib.SEG_PADDING, BaseModuleLayoutLib.SEG_PARTS)
+            Return System.IO.Path.Combine(elementRoot, BaseElementLayoutLib.SEG_PADDING, BaseElementLayoutLib.SEG_PARTS)
         End If
 
-        Return System.IO.Path.Combine(moduleRoot, BaseModuleLayoutLib.SEG_FRAME, BaseModuleLayoutLib.SEG_PARTS)
+        Return System.IO.Path.Combine(elementRoot, BaseElementLayoutLib.SEG_FRAME, BaseElementLayoutLib.SEG_PARTS)
     End Function
 
 End Module

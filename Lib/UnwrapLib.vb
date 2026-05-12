@@ -832,7 +832,7 @@ Public Module UnwrapLib
     ''' <summary>
     ''' True when 1:1 CAM drawings should use the <c>Pinnalaotus</c> DVR (thickened manufactured solid).
     ''' False when user chose Normal or Lehtmetall dimensioning (full model / flat pattern semantics).
-    ''' When <paramref name="force"/> is True, uses Pinnalaotus DVR whenever Unwrap and a manufactured solid exist (e.g. Komponendid/Pinnalaotuse vaated.vb).
+    ''' When <paramref name="force"/> is True, uses Pinnalaotus DVR whenever Unwrap and a manufactured solid exist (e.g. Detailid/Pinnalaotuse vaated.vb).
     ''' </summary>
     Public Function ShouldUsePinnalaotusDvrInDrawing(partDoc As PartDocument, Optional force As Boolean = False) As Boolean
         If Not HasCompletePinnalaotus(partDoc) Then Return False

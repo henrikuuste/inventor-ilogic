@@ -399,7 +399,7 @@ The dimension handling has been unified using a new `DimensionUpdateLib` module 
 |--------|--------|-------|
 | `Mõõdud.vb` | `BoundingBoxStockLib.CreateOrUpdateRule()` | `DimensionUpdateLib.RegisterDimensionHandler()` |
 | `Lehtmetall.vb` | No auto-update rule | `DimensionUpdateLib.RegisterDimensionHandler()` |
-| `Loo komponendid.vb` | `BoundingBoxStockLib.CreateOrUpdateRule()` | `DimensionUpdateLib.RegisterDimensionHandler()` |
+| `Loo detailid.vb` | `BoundingBoxStockLib.CreateOrUpdateRule()` | `DimensionUpdateLib.RegisterDimensionHandler()` |
 
 ### Generated Code Structure
 

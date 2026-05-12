@@ -2,7 +2,7 @@
 
 **Date**: 2026-04-28  
 **Status**: Resolved  
-**Related**: Module Release System (`ModuleReleaseLib.vb`)
+**Related**: Element Release System (`ElementReleaseLib.vb`)
 
 ## Problem Statement
 

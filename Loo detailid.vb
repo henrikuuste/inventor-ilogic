@@ -1,7 +1,9 @@
 ' Copyright (c) 2026 Henri Kuuste
 ' ============================================================================
-' Loo komponendid - Create components from multi-body master part
+' Loo detailid - Create parts from multi-body master part
 ' 
+' Terminology updated 2026-05-12: komponent -> detail per UBIQUITOUS_LANGUAGE.md
+'
 ' Features:
 ' - Detect and display dimensions (T/W/L) for each solid body
 ' - Generate Vault file numbers
@@ -31,7 +33,7 @@ AddVbFile "Lib/CustomPropertiesLib.vb"
 AddVbFile "Lib/VaultNumberingLib.vb"
 AddVbFile "Lib/FileSearchLib.vb"
 AddVbFile "Lib/MakeComponentsLib.vb"
-AddVbFile "Lib/BaseModuleLayoutLib.vb"
+AddVbFile "Lib/BaseElementLayoutLib.vb"
 AddVbFile "Lib/MaterialRoutingLib.vb"
 AddVbFile "Lib/SheetMetalLib.vb"
 AddVbFile "Lib/BoundingBoxStockLib.vb"
@@ -49,33 +51,33 @@ Sub Main()
     
     ' Validate document
     If app.ActiveDocument Is Nothing Then
-        UtilsLib.LogError("Loo komponendid: No active document")
-        MessageBox.Show("Ava esmalt multi-body detail.", "Loo komponendid")
+        UtilsLib.LogError("Loo detailid: No active document")
+        MessageBox.Show("Ava esmalt multi-body detail.", StringsLib.TITLE_CREATE_PARTS)
         Exit Sub
     End If
     
     If app.ActiveDocument.DocumentType <> DocumentTypeEnum.kPartDocumentObject Then
-        UtilsLib.LogError("Loo komponendid: Active document is not a part")
-        MessageBox.Show("Aktiivseks dokumendiks peab olema detail (.ipt).", "Loo komponendid")
+        UtilsLib.LogError("Loo detailid: Active document is not a part")
+        MessageBox.Show("Aktiivseks dokumendiks peab olema detail (.ipt).", StringsLib.TITLE_CREATE_PARTS)
         Exit Sub
     End If
     
     Dim masterDoc As PartDocument = CType(app.ActiveDocument, PartDocument)
     
     If masterDoc.ComponentDefinition.SurfaceBodies.Count < 1 Then
-        UtilsLib.LogError("Loo komponendid: No solid bodies in part")
-        MessageBox.Show("Detailis puuduvad tahked kehad.", "Loo komponendid")
+        UtilsLib.LogError("Loo detailid: No solid bodies in part")
+        MessageBox.Show("Detailis puuduvad tahked kehad.", StringsLib.TITLE_CREATE_PARTS)
         Exit Sub
     End If
     
     ' Ensure master is saved
     If String.IsNullOrEmpty(masterDoc.FullDocumentName) Then
-        UtilsLib.LogError("Loo komponendid: Master document not saved")
-        MessageBox.Show("Salvesta esmalt master-detail.", "Loo komponendid")
+        UtilsLib.LogError("Loo detailid: Master document not saved")
+        MessageBox.Show("Salvesta esmalt master-detail.", StringsLib.TITLE_CREATE_PARTS)
         Exit Sub
     End If
     
-    UtilsLib.LogInfo("Loo komponendid: Starting for " & masterDoc.DisplayName)
+    UtilsLib.LogInfo("Loo detailid: Starting for " & masterDoc.DisplayName)
     
     ' Get selected bodies from SelectSet (if any)
     Dim selectedBodyNames As New List(Of String)
@@ -86,9 +88,9 @@ Sub Main()
     Next
     
     If selectedBodyNames.Count > 0 Then
-        UtilsLib.LogInfo("Loo komponendid: User selected " & selectedBodyNames.Count & " body(ies)")
+        UtilsLib.LogInfo("Loo detailid: User selected " & selectedBodyNames.Count & " body(ies)")
     Else
-        UtilsLib.LogInfo("Loo komponendid: No selection, using all " & masterDoc.ComponentDefinition.SurfaceBodies.Count & " body(ies)")
+        UtilsLib.LogInfo("Loo detailid: No selection, using all " & masterDoc.ComponentDefinition.SurfaceBodies.Count & " body(ies)")
     End If
     
     ' Get Vault connection
@@ -96,9 +98,9 @@ Sub Main()
     Dim vaultConnected As Boolean = (vaultConn IsNot Nothing)
     
     If vaultConnected Then
-        UtilsLib.LogInfo("Loo komponendid: Vault connected - " & VaultNumberingLib.GetConnectionInfo(vaultConn))
+        UtilsLib.LogInfo("Loo detailid: Vault connected - " & VaultNumberingLib.GetConnectionInfo(vaultConn))
     Else
-        UtilsLib.LogWarn("Loo komponendid: Vault not connected - manual filenames required")
+        UtilsLib.LogWarn("Loo detailid: Vault not connected - manual filenames required")
     End If
     
     ' Get workspace root for Vault path conversion
@@ -110,9 +112,9 @@ Sub Main()
     End If
     
     If String.IsNullOrEmpty(workspaceRoot) Then
-        UtilsLib.LogWarn("Loo komponendid: Could not detect Vault workspace root")
+        UtilsLib.LogWarn("Loo detailid: Could not detect Vault workspace root")
     Else
-        UtilsLib.LogInfo("Loo komponendid: Workspace root: " & workspaceRoot)
+        UtilsLib.LogInfo("Loo detailid: Workspace root: " & workspaceRoot)
     End If
     
     ' Get all bodies with detected axes
@@ -143,10 +145,10 @@ Sub Main()
     ' Get project root for relative path resolution (e.g., "C:\_SoftcomVault\Tooted\Lume")
     Dim projectRoot As String = UtilsLib.GetProjectPath(masterDoc.FullDocumentName)
     If String.IsNullOrEmpty(projectRoot) Then
-        UtilsLib.LogWarn("Loo komponendid: Could not detect project root, using master folder")
+        UtilsLib.LogWarn("Loo detailid: Could not detect project root, using master folder")
         projectRoot = masterFolder
     Else
-        UtilsLib.LogInfo("Loo komponendid: Project root: " & projectRoot)
+        UtilsLib.LogInfo("Loo detailid: Project root: " & projectRoot)
     End If
     
     If storedData.Count > 0 Then
@@ -160,7 +162,7 @@ Sub Main()
     
     ' Get available materials from document's Materials collection
     Dim materials As List(Of String) = MakeComponentsLib.GetAvailableMaterials(masterDoc)
-    UtilsLib.LogInfo("Loo komponendid: Materials available for selection: " & materials.Count)
+    UtilsLib.LogInfo("Loo detailid: Materials available for selection: " & materials.Count)
     
     ' Note: Vault numbering scheme fetching removed - Vault handles numbering on save
     
@@ -225,7 +227,7 @@ Sub Main()
         If matched IsNot Nothing Then
             selectedTemplate = matched
         Else
-            UtilsLib.LogWarn("Loo komponendid: Stored template not found in list ('" & stored & "'); using default: " & defaultTemplate)
+            UtilsLib.LogWarn("Loo detailid: Stored template not found in list ('" & stored & "'); using default: " & defaultTemplate)
         End If
     End If
     
@@ -242,27 +244,27 @@ Sub Main()
         If matchedAsm IsNot Nothing Then
             selectedAssemblyTemplate = matchedAsm
         Else
-            UtilsLib.LogWarn("Loo komponendid: Stored assembly template not in list ('" & storedAsm & "'); using default: " & defaultAsmTemplate)
+            UtilsLib.LogWarn("Loo detailid: Stored assembly template not in list ('" & storedAsm & "'); using default: " & defaultAsmTemplate)
         End If
     End If
     
     Dim projectName As String = If(Not String.IsNullOrEmpty(generalSettings.ProjectName), _
                                    generalSettings.ProjectName, defaultProject)
 
-    ' Module root is now the primary output anchor (assembly + part class subfolders).
+    ' Element root is now the primary output anchor (assembly + part class subfolders).
     Dim selectedSubfolder As String = ""
-    If Not String.IsNullOrEmpty(generalSettings.BaseModuleRelativePath) Then
-        selectedSubfolder = MakeComponentsLib.ToAbsoluteProjectPath(generalSettings.BaseModuleRelativePath, projectRoot)
+    If Not String.IsNullOrEmpty(generalSettings.BaseElementRelativePath) Then
+        selectedSubfolder = MakeComponentsLib.ToAbsoluteProjectPath(generalSettings.BaseElementRelativePath, projectRoot)
     End If
     If String.IsNullOrEmpty(selectedSubfolder) Then
-        Dim detectedModuleRoot As String = BaseModuleLayoutLib.DetectModuleRootFromMasterPath( _
+        Dim detectedElementRoot As String = BaseElementLayoutLib.DetectElementRootFromMasterPath( _
             masterDoc.FullDocumentName, projectRoot, projectName)
-        If Not String.IsNullOrEmpty(detectedModuleRoot) Then
-            selectedSubfolder = detectedModuleRoot
+        If Not String.IsNullOrEmpty(detectedElementRoot) Then
+            selectedSubfolder = detectedElementRoot
         End If
     End If
     If String.IsNullOrEmpty(selectedSubfolder) Then
-        selectedSubfolder = System.IO.Path.Combine(projectRoot, BaseModuleLayoutLib.SEG_BASE_MODULES, defaultProject)
+        selectedSubfolder = System.IO.Path.Combine(projectRoot, BaseElementLayoutLib.SEG_BASE_ELEMENTS, defaultProject)
     End If
     
     ' If assembly was previously created and still exists, default to UPDATE
@@ -271,7 +273,7 @@ Sub Main()
     If Not String.IsNullOrEmpty(assemblyPath) AndAlso System.IO.File.Exists(assemblyPath) Then
         If assemblyAction = "CREATE" OrElse assemblyAction = "NONE" Then
             assemblyAction = "UPDATE"
-            UtilsLib.LogInfo("Loo komponendid: Found existing assembly, defaulting to UPDATE")
+            UtilsLib.LogInfo("Loo detailid: Found existing assembly, defaulting to UPDATE")
         End If
     End If
     
@@ -286,7 +288,7 @@ Sub Main()
         If dialogResult = DialogResult.Retry AndAlso pickBodyIndex >= 0 AndAlso pickBodyIndex < bodies.Count Then
             ' User clicked "Vali pind" - do face pick
             Dim bi As MakeComponentsLib.BodyInfo = bodies(pickBodyIndex)
-            UtilsLib.LogInfo("Loo komponendid: Picking face for '" & bi.Name & "'")
+            UtilsLib.LogInfo("Loo detailid: Picking face for '" & bi.Name & "'")
             
             Try
                 Dim pickedFace As Object = app.CommandManager.Pick( _
@@ -309,7 +311,7 @@ Sub Main()
     Loop
     
     If dialogResult <> DialogResult.OK Then
-        UtilsLib.LogInfo("Loo komponendid: Cancelled by user")
+        UtilsLib.LogInfo("Loo detailid: Cancelled by user")
         Exit Sub
     End If
     
@@ -334,24 +336,24 @@ Sub Main()
                 .ProjectName = projectName,
                 .Template = selectedTemplate,
                 .AssemblyTemplate = selectedAssemblyTemplate,
-                .BaseModuleRelativePath = MakeComponentsLib.ToRelativeProjectPath(selectedSubfolder, projectRoot),
+                .BaseElementRelativePath = MakeComponentsLib.ToRelativeProjectPath(selectedSubfolder, projectRoot),
                 .Subfolder = selectedSubfolder,
                 .AssemblyAction = assemblyAction,
                 .AssemblyPath = assemblyPath
             }, projectRoot)
             Try
                 masterDoc.Save()
-                UtilsLib.LogInfo("Loo komponendid: Saved " & linkedCount & " body link(s) to master")
+                UtilsLib.LogInfo("Loo detailid: Saved " & linkedCount & " body link(s) to master")
             Catch ex As Exception
-                UtilsLib.LogWarn("Loo komponendid: Could not save master: " & ex.Message)
+                UtilsLib.LogWarn("Loo detailid: Could not save master: " & ex.Message)
             End Try
         Else
-            UtilsLib.LogWarn("Loo komponendid: No bodies selected")
+            UtilsLib.LogWarn("Loo detailid: No bodies selected")
         End If
         Exit Sub
     End If
     
-    UtilsLib.LogInfo("Loo komponendid: Processing " & selectedBodies.Count & " body(ies)")
+    UtilsLib.LogInfo("Loo detailid: Processing " & selectedBodies.Count & " body(ies)")
     
     ' Use body names as filenames - Vault will assign part numbers on save
     ' Note: Vault numbering scheme selection is shown in dialog but actual numbering
@@ -363,18 +365,18 @@ Sub Main()
         fileNumbers.Add(safeName)
     Next
     
-    ' Module root is the primary output anchor for assembly and part class folders.
-    Dim moduleRoot As String = selectedSubfolder
-    If String.IsNullOrEmpty(moduleRoot) Then
-        UtilsLib.LogError("Loo komponendid: Module root is empty")
-        MessageBox.Show("Mooduli kaust puudub.", "Loo komponendid")
+    ' Element root is the primary output anchor for assembly and part class folders.
+    Dim elementRoot As String = selectedSubfolder
+    If String.IsNullOrEmpty(elementRoot) Then
+        UtilsLib.LogError("Loo detailid: Element root is empty")
+        MessageBox.Show("Elemendi kaust puudub.", StringsLib.TITLE_CREATE_PARTS)
         Exit Sub
     End If
-    If Not System.IO.Directory.Exists(moduleRoot) Then
-        System.IO.Directory.CreateDirectory(moduleRoot)
+    If Not System.IO.Directory.Exists(elementRoot) Then
+        System.IO.Directory.CreateDirectory(elementRoot)
     End If
-    MakeComponentsLib.EnsureFolderInVault(moduleRoot, vaultConn, workspaceRoot)
-    UtilsLib.LogInfo("Loo komponendid: Module root: " & moduleRoot)
+    MakeComponentsLib.EnsureFolderInVault(elementRoot, vaultConn, workspaceRoot)
+    UtilsLib.LogInfo("Loo detailid: Element root: " & elementRoot)
     
     ' Find template path
     Dim templatePath As String = MakeComponentsLib.FindTemplate(app, selectedTemplate)
@@ -387,9 +389,9 @@ Sub Main()
     ElseIf assemblyAction = "UPDATE" AndAlso Not String.IsNullOrEmpty(assemblyPath) Then
         Try
             asmDoc = CType(app.Documents.Open(assemblyPath, True), AssemblyDocument)
-            UtilsLib.LogInfo("Loo komponendid: Opened assembly for update: " & assemblyPath)
+            UtilsLib.LogInfo("Loo detailid: Opened assembly for update: " & assemblyPath)
         Catch ex As Exception
-            UtilsLib.LogError("Loo komponendid: Could not open assembly: " & ex.Message)
+            UtilsLib.LogError("Loo detailid: Could not open assembly: " & ex.Message)
         End Try
     End If
     
@@ -406,7 +408,7 @@ Sub Main()
             ' RECREATE existing part - user has opted to overwrite
             isRecreate = True
             filePath = bi.CreatedPartPath
-            UtilsLib.LogInfo("Loo komponendid: Recreating '" & bi.Name & "' - " & System.IO.Path.GetFileName(filePath))
+            UtilsLib.LogInfo("Loo detailid: Recreating '" & bi.Name & "' - " & System.IO.Path.GetFileName(filePath))
             
             ' Close the file if it's open and delete it
             Try
@@ -417,18 +419,18 @@ Sub Main()
                     End If
                 Next
                 System.IO.File.Delete(filePath)
-                UtilsLib.LogInfo("Loo komponendid: Deleted old file")
+                UtilsLib.LogInfo("Loo detailid: Deleted old file")
             Catch ex As Exception
-                UtilsLib.LogError("Loo komponendid: Could not delete old file: " & ex.Message)
+                UtilsLib.LogError("Loo detailid: Could not delete old file: " & ex.Message)
                 Continue For
             End Try
         Else
             ' CREATE new part
             Dim fileNumber As String = fileNumbers(i)
             Dim fileName As String = fileNumber & ".ipt"
-            Dim bodyOutputFolder As String = ResolveBodyOutputFolder(bi, moduleRoot)
+            Dim bodyOutputFolder As String = ResolveBodyOutputFolder(bi, elementRoot)
             If String.IsNullOrEmpty(bodyOutputFolder) Then
-                UtilsLib.LogError("Loo komponendid: Could not resolve output folder for '" & bi.Name & "'")
+                UtilsLib.LogError("Loo detailid: Could not resolve output folder for '" & bi.Name & "'")
                 Continue For
             End If
             If Not System.IO.Directory.Exists(bodyOutputFolder) Then
@@ -437,7 +439,7 @@ Sub Main()
             MakeComponentsLib.EnsureFolderInVault(bodyOutputFolder, vaultConn, workspaceRoot)
             filePath = System.IO.Path.Combine(bodyOutputFolder, fileName)
             
-            UtilsLib.LogInfo("Loo komponendid: Creating '" & bi.Name & "' as " & fileName)
+            UtilsLib.LogInfo("Loo detailid: Creating '" & bi.Name & "' as " & fileName)
         End If
         
         ' Determine the correct template to use
@@ -452,9 +454,9 @@ Sub Main()
                 If Not String.IsNullOrEmpty(defaultTemplatePath) AndAlso _
                    Not MakeComponentsLib.IsSheetMetalTemplate(app, defaultTemplatePath) Then
                     effectiveTemplatePath = defaultTemplatePath
-                    UtilsLib.LogInfo("Loo komponendid: Selected template is sheet metal but part is normal - using default template: " & defaultTemplate)
+                    UtilsLib.LogInfo("Loo detailid: Selected template is sheet metal but part is normal - using default template: " & defaultTemplate)
                 Else
-                    UtilsLib.LogWarn("Loo komponendid: Selected template is sheet metal and default is also sheet metal - part may have unexpected properties")
+                    UtilsLib.LogWarn("Loo detailid: Selected template is sheet metal and default is also sheet metal - part may have unexpected properties")
                 End If
             End If
         End If
@@ -463,13 +465,13 @@ Sub Main()
         newPart = MakeComponentsLib.CreatePartFromTemplate(app, effectiveTemplatePath)
         
         If newPart Is Nothing Then
-            UtilsLib.LogError("Loo komponendid: Failed to create part for '" & bi.Name & "'")
+            UtilsLib.LogError("Loo detailid: Failed to create part for '" & bi.Name & "'")
             Continue For
         End If
         
         ' Derive body
         If Not MakeComponentsLib.DeriveBodyAsNewPart(masterDoc, bi.Name, newPart) Then
-            UtilsLib.LogError("Loo komponendid: Failed to derive body '" & bi.Name & "'")
+            UtilsLib.LogError("Loo detailid: Failed to derive body '" & bi.Name & "'")
             newPart.Close(True)
             Continue For
         End If
@@ -485,19 +487,19 @@ Sub Main()
         ' Convert to sheet metal or set dimensions and register update handler
         If bi.ConvertToSheetMetal Then
             If SheetMetalLib.ConvertToSheetMetal(newPart, bi.ThicknessVector, bi.ThicknessValue) Then
-                UtilsLib.LogInfo("Loo komponendid: Converted '" & bi.Name & "' to sheet metal")
+                UtilsLib.LogInfo("Loo detailid: Converted '" & bi.Name & "' to sheet metal")
                 ' Register dimension handler for sheet metal (empty axes = use flat pattern formulas)
                 DimensionUpdateLib.RegisterDimensionHandler(newPart, iLogicVb.Automation, "", "", "")
             Else
                 ' Sheet metal conversion failed - set dimension properties and register update handler
                 MakeComponentsLib.SetDimensionProperties(newPart, bi.ThicknessValue, bi.WidthValue, bi.LengthValue)
                 DimensionUpdateLib.RegisterDimensionHandler(newPart, iLogicVb.Automation, bi.ThicknessVector, bi.WidthVector, bi.LengthVector)
-                UtilsLib.LogInfo("Loo komponendid: Registered dimension handler for '" & bi.Name & "'")
+                UtilsLib.LogInfo("Loo detailid: Registered dimension handler for '" & bi.Name & "'")
             End If
         Else
             MakeComponentsLib.SetDimensionProperties(newPart, bi.ThicknessValue, bi.WidthValue, bi.LengthValue)
             DimensionUpdateLib.RegisterDimensionHandler(newPart, iLogicVb.Automation, bi.ThicknessVector, bi.WidthVector, bi.LengthVector)
-            UtilsLib.LogInfo("Loo komponendid: Registered dimension handler for '" & bi.Name & "'")
+            UtilsLib.LogInfo("Loo detailid: Registered dimension handler for '" & bi.Name & "'")
         End If
         
         ' Save part (always SaveAs - either new file or recreated file)
@@ -506,7 +508,7 @@ Sub Main()
             
             ' Read actual path after save (Vault may have renamed the file)
             Dim actualPath As String = newPart.FullDocumentName
-            UtilsLib.LogInfo("Loo komponendid: Saved " & actualPath)
+            UtilsLib.LogInfo("Loo detailid: Saved " & actualPath)
             
             ' Only add to createdParts if this is a new part (not recreate)
             ' Recreated parts are already in the assembly
@@ -518,7 +520,7 @@ Sub Main()
             bi.CreatedPartPath = actualPath
             bi.PartExists = True
         Catch ex As Exception
-            UtilsLib.LogError("Loo komponendid: Failed to save: " & ex.Message)
+            UtilsLib.LogError("Loo detailid: Failed to save: " & ex.Message)
         End Try
         
         ' Close part
@@ -534,9 +536,9 @@ Sub Main()
     If bodies.Count > 0 Then
         Try
             masterDoc.Save()
-            UtilsLib.LogInfo("Loo komponendid: Master document saved with body references")
+            UtilsLib.LogInfo("Loo detailid: Master document saved with body references")
         Catch ex As Exception
-            UtilsLib.LogWarn("Loo komponendid: Could not save master document: " & ex.Message)
+            UtilsLib.LogWarn("Loo detailid: Could not save master document: " & ex.Message)
         End Try
     End If
     
@@ -558,19 +560,19 @@ Sub Main()
             Try
                 asmDoc.SaveAs(assemblyPath, False)
                 actualAssemblyPath = asmDoc.FullDocumentName
-                UtilsLib.LogInfo("Loo komponendid: Saved assembly: " & actualAssemblyPath)
+                UtilsLib.LogInfo("Loo detailid: Saved assembly: " & actualAssemblyPath)
             Catch ex As Exception
-                UtilsLib.LogError("Loo komponendid: Failed to save assembly: " & ex.Message)
+                UtilsLib.LogError("Loo detailid: Failed to save assembly: " & ex.Message)
             End Try
         ElseIf assemblyAction = "CREATE" Then
             Dim asmFileName As String = defaultProject & "_asm.iam"
-            Dim asmFilePath As String = System.IO.Path.Combine(moduleRoot, asmFileName)
+            Dim asmFilePath As String = System.IO.Path.Combine(elementRoot, asmFileName)
             Try
                 asmDoc.SaveAs(asmFilePath, False)
                 actualAssemblyPath = asmDoc.FullDocumentName
-                UtilsLib.LogInfo("Loo komponendid: Saved assembly: " & actualAssemblyPath)
+                UtilsLib.LogInfo("Loo detailid: Saved assembly: " & actualAssemblyPath)
             Catch ex As Exception
-                UtilsLib.LogError("Loo komponendid: Failed to save assembly: " & ex.Message)
+                UtilsLib.LogError("Loo detailid: Failed to save assembly: " & ex.Message)
             End Try
         Else
             asmDoc.Save()
@@ -583,7 +585,7 @@ Sub Main()
     settingsToSave.ProjectName = projectName
     settingsToSave.Template = selectedTemplate
     settingsToSave.AssemblyTemplate = selectedAssemblyTemplate
-    settingsToSave.BaseModuleRelativePath = MakeComponentsLib.ToRelativeProjectPath(selectedSubfolder, projectRoot)
+    settingsToSave.BaseElementRelativePath = MakeComponentsLib.ToRelativeProjectPath(selectedSubfolder, projectRoot)
     settingsToSave.Subfolder = selectedSubfolder
     settingsToSave.AssemblyAction = assemblyAction
     settingsToSave.AssemblyPath = If(Not String.IsNullOrEmpty(actualAssemblyPath), actualAssemblyPath, assemblyPath)
@@ -593,16 +595,16 @@ Sub Main()
     ' Save master document again to persist general settings
     Try
         masterDoc.Save()
-        UtilsLib.LogInfo("Loo komponendid: Master document saved with general settings")
+        UtilsLib.LogInfo("Loo detailid: Master document saved with general settings")
     Catch ex As Exception
-        UtilsLib.LogWarn("Loo komponendid: Could not save master document: " & ex.Message)
+        UtilsLib.LogWarn("Loo detailid: Could not save master document: " & ex.Message)
     End Try
     
     Dim recreatedCount As Integer = selectedBodies.Count - createdParts.Count
     If recreatedCount > 0 Then
-        UtilsLib.LogInfo("Loo komponendid: Completed - " & createdParts.Count & " new part(s), " & recreatedCount & " recreated")
+        UtilsLib.LogInfo("Loo detailid: Completed - " & createdParts.Count & " new part(s), " & recreatedCount & " recreated")
     Else
-        UtilsLib.LogInfo("Loo komponendid: Completed - created " & createdParts.Count & " part(s)")
+        UtilsLib.LogInfo("Loo detailid: Completed - created " & createdParts.Count & " part(s)")
     End If
 End Sub
 
@@ -663,12 +665,12 @@ Sub RecalculateAxesFromFace(bi As MakeComponentsLib.BodyInfo, face As Face)
                 bi.LengthVector = MakeComponentsLib.VectorToString(wx, wy, wz)
             End If
             
-            UtilsLib.LogInfo("Loo komponendid: Recalculated axes for '" & bi.Name & "' - T:" & _
+            UtilsLib.LogInfo("Loo detailid: Recalculated axes for '" & bi.Name & "' - T:" & _
                      FormatNumber(bi.ThicknessValue * 10, 2) & " W:" & FormatNumber(bi.WidthValue * 10, 2) & _
                      " L:" & FormatNumber(bi.LengthValue * 10, 2))
         End If
     Catch ex As Exception
-        UtilsLib.LogError("Loo komponendid: Error recalculating axes: " & ex.Message)
+        UtilsLib.LogError("Loo detailid: Error recalculating axes: " & ex.Message)
     End Try
 End Sub
 
@@ -700,7 +702,7 @@ Function ShowMainDialog(app As Inventor.Application, _
     pickBodyIndex = -1
     
     Dim frm As New System.Windows.Forms.Form()
-    frm.Text = "Loo komponendid"
+    frm.Text = StringsLib.TITLE_CREATE_PARTS
     frm.Width = 950
     frm.Height = 680
     frm.StartPosition = FormStartPosition.CenterScreen
@@ -755,9 +757,9 @@ Function ShowMainDialog(app As Inventor.Application, _
     cboTemplate.SelectedIndex = templateSelIdx
     frm.Controls.Add(cboTemplate)
     
-    ' Module root folder (assembly + part class folders are derived from this)
+    ' Element root folder (assembly + part class folders are derived from this)
     Dim lblSubfolder As New System.Windows.Forms.Label()
-    lblSubfolder.Text = "Mooduli kaust:"
+    lblSubfolder.Text = "Elemendi kaust:"
     lblSubfolder.Left = 310
     lblSubfolder.Top = currentY + 3
     lblSubfolder.Width = 85
@@ -781,18 +783,18 @@ Function ShowMainDialog(app As Inventor.Application, _
     btnBrowseFolder.Height = 23
     frm.Controls.Add(btnBrowseFolder)
     
-    Dim btnCreateModule As New System.Windows.Forms.Button()
-    btnCreateModule.Name = "btnCreateModule"
-    btnCreateModule.Text = "Loo struktuur"
-    btnCreateModule.Left = 835
-    btnCreateModule.Top = currentY
-    btnCreateModule.Width = 85
-    btnCreateModule.Height = 23
-    frm.Controls.Add(btnCreateModule)
+    Dim btnCreateElement As New System.Windows.Forms.Button()
+    btnCreateElement.Name = "btnCreateElement"
+    btnCreateElement.Text = "Loo struktuur"
+    btnCreateElement.Left = 835
+    btnCreateElement.Top = currentY
+    btnCreateElement.Width = 85
+    btnCreateElement.Height = 23
+    frm.Controls.Add(btnCreateElement)
     
     AddHandler btnBrowseFolder.Click, Sub(s, e)
         Dim fbd As New FolderBrowserDialog()
-        fbd.Description = "Vali mooduli kaust (Alusmoodulid\\<nimi>)"
+        fbd.Description = "Vali elemendi kaust (Aluselemendid\\<nimi>)"
         fbd.ShowNewFolderButton = True
         If Not String.IsNullOrEmpty(txtSubfolder.Text) AndAlso System.IO.Directory.Exists(txtSubfolder.Text) Then
             fbd.SelectedPath = txtSubfolder.Text
@@ -804,21 +806,21 @@ Function ShowMainDialog(app As Inventor.Application, _
         End If
     End Sub
 
-    AddHandler btnCreateModule.Click, Sub(s, e)
-        Dim moduleRootCandidate As String = txtSubfolder.Text.Trim()
-        Dim moduleName As String = ""
+    AddHandler btnCreateElement.Click, Sub(s, e)
+        Dim elementRootCandidate As String = txtSubfolder.Text.Trim()
+        Dim elementName As String = ""
         Try
-            moduleName = BaseModuleLayoutLib.GetModuleName(moduleRootCandidate)
+            elementName = BaseElementLayoutLib.GetElementName(elementRootCandidate)
         Catch
-            moduleName = ""
+            elementName = ""
         End Try
         
-        If String.IsNullOrEmpty(projectRoot) OrElse String.IsNullOrEmpty(moduleName) Then
-            MessageBox.Show("Määra esmalt mooduli kaust kujul Alusmoodulid\\<nimi>.", "Loo komponendid")
+        If String.IsNullOrEmpty(projectRoot) OrElse String.IsNullOrEmpty(elementName) Then
+            MessageBox.Show("Määra esmalt elemendi kaust kujul Aluselemendid\\<nimi>.", StringsLib.TITLE_CREATE_PARTS)
             Exit Sub
         End If
         
-        Dim createdRoot As String = BaseModuleLayoutLib.EnsureBaseModuleLayout(projectRoot, moduleName, vaultConn, workspaceRoot)
+        Dim createdRoot As String = BaseElementLayoutLib.EnsureBaseElementLayout(projectRoot, elementName, vaultConn, workspaceRoot)
         If Not String.IsNullOrEmpty(createdRoot) Then
             txtSubfolder.Text = createdRoot
         End If
@@ -1290,7 +1292,7 @@ Function ShowMainDialog(app As Inventor.Application, _
     
     ' OK/Cancel buttons (wider OK button)
     Dim btnOK As New System.Windows.Forms.Button()
-    btnOK.Text = "Loo komponendid"
+    btnOK.Text = StringsLib.TITLE_CREATE_PARTS
     btnOK.Left = 700
     btnOK.Top = 570
     btnOK.Width = 130
@@ -1387,8 +1389,8 @@ Function DisplayNameToRoute(displayName As String) As String
 End Function
 
 ' Resolve output folder per body according to route/material.
-Function ResolveBodyOutputFolder(bi As MakeComponentsLib.BodyInfo, moduleRoot As String) As String
-    If String.IsNullOrEmpty(moduleRoot) Then Return ""
+Function ResolveBodyOutputFolder(bi As MakeComponentsLib.BodyInfo, elementRoot As String) As String
+    If String.IsNullOrEmpty(elementRoot) Then Return ""
 
     Dim route As String = UCase(If(bi.OutputRoute, MaterialRoutingLib.ROUTE_AUTO))
     If route = MaterialRoutingLib.ROUTE_CUSTOM Then
@@ -1400,40 +1402,40 @@ Function ResolveBodyOutputFolder(bi As MakeComponentsLib.BodyInfo, moduleRoot As
 
     If route = MaterialRoutingLib.ROUTE_AUTO Then
         Dim autoKind As String = MaterialRoutingLib.GetPartOutputKind(bi.MaterialName)
-        Return MaterialRoutingLib.GetDefaultDetailFolder(moduleRoot, autoKind)
+        Return MaterialRoutingLib.GetDefaultDetailFolder(elementRoot, autoKind)
     End If
 
-    Return MaterialRoutingLib.GetDefaultDetailFolder(moduleRoot, route)
+    Return MaterialRoutingLib.GetDefaultDetailFolder(elementRoot, route)
 End Function
 
 ' Read-only informational target shown for Auto route.
-Function GetAutoRouteFolderByMaterial(materialName As String, moduleRoot As String) As String
+Function GetAutoRouteFolderByMaterial(materialName As String, elementRoot As String) As String
     Dim autoKind As String = MaterialRoutingLib.GetPartOutputKind(materialName)
     If String.Equals(autoKind, MaterialRoutingLib.ROUTE_PADDING, StringComparison.OrdinalIgnoreCase) Then
-        Return BaseModuleLayoutLib.SEG_PADDING & "\" & BaseModuleLayoutLib.SEG_PARTS
+        Return BaseElementLayoutLib.SEG_PADDING & "\" & BaseElementLayoutLib.SEG_PARTS
     End If
-    Return BaseModuleLayoutLib.SEG_FRAME & "\" & BaseModuleLayoutLib.SEG_PARTS
+    Return BaseElementLayoutLib.SEG_FRAME & "\" & BaseElementLayoutLib.SEG_PARTS
 End Function
 
-Sub RefreshAutoRouteColumn(dgv As DataGridView, bodies As List(Of MakeComponentsLib.BodyInfo), moduleRoot As String)
+Sub RefreshAutoRouteColumn(dgv As DataGridView, bodies As List(Of MakeComponentsLib.BodyInfo), elementRoot As String)
     For Each row As DataGridViewRow In dgv.Rows
         Dim idx As Integer = CInt(row.Tag)
         If idx >= 0 AndAlso idx < bodies.Count Then
             Dim matObj As Object = row.Cells("colMat").Value
             Dim matName As String = If(matObj IsNot Nothing, matObj.ToString(), "")
-            row.Cells("colAuto").Value = GetAutoRouteFolderByMaterial(matName, moduleRoot)
+            row.Cells("colAuto").Value = GetAutoRouteFolderByMaterial(matName, elementRoot)
         End If
     Next
 End Sub
 
-Sub UpdateAutoRouteForRow(dgv As DataGridView, bodies As List(Of MakeComponentsLib.BodyInfo), rowIndex As Integer, moduleRoot As String)
+Sub UpdateAutoRouteForRow(dgv As DataGridView, bodies As List(Of MakeComponentsLib.BodyInfo), rowIndex As Integer, elementRoot As String)
     Dim idx As Integer = CInt(dgv.Rows(rowIndex).Tag)
     If idx < 0 OrElse idx >= bodies.Count Then Exit Sub
 
     Dim matObj As Object = dgv.Rows(rowIndex).Cells("colMat").Value
     Dim matName As String = If(matObj IsNot Nothing, matObj.ToString(), "")
     bodies(idx).MaterialName = matName
-    dgv.Rows(rowIndex).Cells("colAuto").Value = GetAutoRouteFolderByMaterial(matName, moduleRoot)
+    dgv.Rows(rowIndex).Cells("colAuto").Value = GetAutoRouteFolderByMaterial(matName, elementRoot)
 End Sub
 
 ' Get validated material value for ComboBox (returns empty if not in items)

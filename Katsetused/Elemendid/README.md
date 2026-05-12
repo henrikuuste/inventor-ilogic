@@ -10,7 +10,7 @@ This folder contains focused concept tests to validate API features needed for t
 | Test | API Being Validated | Risk Level | Prerequisites |
 |------|---------------------|------------|---------------|
 | Test1_Fingerprint | `SurfaceBody.Volume()`, `SurfaceArea()`, `RangeBox` | Low | Any part file |
-| Test2_BreakLink | `DerivedPartComponent.BreakLinkToFile()` | **HIGH** | Derived part (from Loo komponendid) |
+| Test2_BreakLink | `DerivedPartComponent.BreakLinkToFile()` | **HIGH** | Derived part (from Loo detailid) |
 | Test3_TransactionRollback | `TransactionManager.StartTransaction/Abort` | Medium | Part with user parameters |
 | Test4_DrawingRelink | `ReferencedFileDescriptor.PutLogicalFileName()` | **HIGH** | Drawing file with model references |
 | Test5_ParameterCycle | Parameter save/restore across masters | Medium | Assembly with parametric masters |
@@ -269,7 +269,7 @@ app.CommandManager.ControlDefinitions.Item("LoginCmdIntName").Execute()
 ## How to Run Tests
 
 1. **Test1_Fingerprint**: Open any `.ipt` file → Run rule
-2. **Test2_BreakLink**: Open a derived part (created by Loo komponendid) → Run rule
+2. **Test2_BreakLink**: Open a derived part (created by Loo detailid) → Run rule
 3. **Test3_TransactionRollback**: Open a part with user parameters → Run rule
 4. **Test4_DrawingRelink**: Open a `.idw` file that references a model → Run rule
 5. **Test5_ParameterCycle**: Open an assembly with master/derived parts → Run rule

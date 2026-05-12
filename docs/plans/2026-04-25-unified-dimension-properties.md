@@ -13,7 +13,7 @@ Unify the handling of Thickness/Width/Length dimension properties across all scr
 |--------|-----------|----------|--------|
 | `Mõõdud.vb` | Normal parts | Creates "Uuenda mõõdud" rule with `AddVbFile "Lib/CustomPropertiesLib.vb"` | Depends on external library |
 | `Lehtmetall.vb` | Sheet metal | Calls `CustomPropertiesLib.ValidateAndFixDimensionProperties()` | No auto-update rule created |
-| `Loo komponendid.vb` | Both | Calls `BoundingBoxStockLib.CreateOrUpdateRule()` | Same dependency issue |
+| `Loo detailid.vb` | Both | Calls `BoundingBoxStockLib.CreateOrUpdateRule()` | Same dependency issue |
 | `BoundingBoxStockLib.BuildRuleText()` | Normal parts | Generates standalone rule text | Requires `AddVbFile` |
 
 ### Key Discoveries
@@ -208,21 +208,21 @@ Note: For sheet metal, axis parameters are empty since dimensions come from flat
 
 ---
 
-## Phase 4: Update Loo komponendid.vb
+## Phase 4: Update Loo detailid.vb
 
 ### Overview
-Modify Loo komponendid.vb to use the unified dimension handler for created parts.
+Modify Loo detailid.vb to use the unified dimension handler for created parts.
 
 ### Changes Required
 
 #### 1. Add library dependency
-**File**: `Loo komponendid.vb`
+**File**: `Loo detailid.vb`
 **Changes**:
 - Add `AddVbFile "Lib/DocumentUpdateLib.vb"`
 - Add `AddVbFile "Lib/DimensionUpdateLib.vb"`
 
 #### 2. Replace rule creation in part processing loop
-**File**: `Loo komponendid.vb` (lines ~378-392)
+**File**: `Loo detailid.vb` (lines ~378-392)
 **Current**:
 ```vb
 BoundingBoxStockLib.CreateOrUpdateRule(newPart, bi.ThicknessVector, bi.WidthVector, bi.LengthVector, iLogicVb.Automation)
@@ -235,10 +235,10 @@ DimensionUpdateLib.RegisterDimensionHandler(newPart, iLogicVb.Automation, bi.Thi
 ### Success Criteria
 
 #### Automated Verification:
-- [x] Loo komponendid.vb compiles without errors
+- [x] Loo detailid.vb compiles without errors
 
 #### Manual Verification:
-- [ ] Run Loo komponendid on a multi-body part
+- [ ] Run Loo detailid on a multi-body part
 - [ ] Verify created parts have "Uuenda" rule with "Dimensions" section
 - [ ] Verify both normal parts and sheet metal converted parts work
 
@@ -285,7 +285,7 @@ Remove duplicated code, deprecate old patterns, and ensure consistency across th
 - [x] No warnings from deprecated function usage in active code paths
 
 #### Manual Verification:
-- [ ] Run all three scripts (Mõõdud, Lehtmetall, Loo komponendid)
+- [ ] Run all three scripts (Mõõdud, Lehtmetall, Loo detailid)
 - [ ] Verify consistent behavior across all scripts
 - [ ] Verify migration works on parts with old "Uuenda mõõdud" rule
 
@@ -311,7 +311,7 @@ Comprehensive testing across all scenarios and documentation updates.
 3. Modify flat pattern → verify dimensions update
 
 #### Multi-Body Flow
-1. Multi-body part → run Loo komponendid → verify all created parts have handler
+1. Multi-body part → run Loo detailid → verify all created parts have handler
 2. Mix of sheet metal and normal bodies → verify correct handling for each
 3. Re-run on same master → verify no duplicate handlers
 
@@ -349,7 +349,7 @@ Comprehensive testing across all scenarios and documentation updates.
 ### Regression Tests (Manual)
 - Existing parts with old rules continue to work
 - No breaking changes to axis detection UI
-- Material assignment still works in Loo komponendid
+- Material assignment still works in Loo detailid
 
 ## References
 
