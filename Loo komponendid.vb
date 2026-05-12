@@ -439,8 +439,27 @@ Sub Main()
             UtilsLib.LogInfo("Loo komponendid: Creating '" & bi.Name & "' as " & fileName)
         End If
         
+        ' Determine the correct template to use
+        ' If user didn't select sheet metal but template is sheet metal, use default non-sheet-metal template
+        Dim effectiveTemplatePath As String = templatePath
+        If Not bi.ConvertToSheetMetal Then
+            If MakeComponentsLib.IsSheetMetalTemplate(app, templatePath) Then
+                Dim defaultTemplate As String = MakeComponentsLib.GetDefaultPartTemplate(app)
+                Dim defaultTemplatePath As String = MakeComponentsLib.FindTemplate(app, defaultTemplate)
+                
+                ' Verify the default template is not sheet metal either
+                If Not String.IsNullOrEmpty(defaultTemplatePath) AndAlso _
+                   Not MakeComponentsLib.IsSheetMetalTemplate(app, defaultTemplatePath) Then
+                    effectiveTemplatePath = defaultTemplatePath
+                    UtilsLib.LogInfo("Loo komponendid: Selected template is sheet metal but part is normal - using default template: " & defaultTemplate)
+                Else
+                    UtilsLib.LogWarn("Loo komponendid: Selected template is sheet metal and default is also sheet metal - part may have unexpected properties")
+                End If
+            End If
+        End If
+        
         ' Create new part from template (both for new and recreate)
-        newPart = MakeComponentsLib.CreatePartFromTemplate(app, templatePath)
+        newPart = MakeComponentsLib.CreatePartFromTemplate(app, effectiveTemplatePath)
         
         If newPart Is Nothing Then
             UtilsLib.LogError("Loo komponendid: Failed to create part for '" & bi.Name & "'")

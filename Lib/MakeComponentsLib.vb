@@ -921,6 +921,24 @@ Public Module MakeComponentsLib
         Return "Standard.ipt"
     End Function
     
+    ' Check if a template file is a sheet metal template
+    ' Opens the template briefly to check SubType, then closes it
+    Public Function IsSheetMetalTemplate(app As Inventor.Application, templatePath As String) As Boolean
+        If String.IsNullOrEmpty(templatePath) OrElse Not System.IO.File.Exists(templatePath) Then
+            Return False
+        End If
+        
+        Try
+            ' Open template invisibly to check SubType
+            Dim templateDoc As PartDocument = CType(app.Documents.Open(templatePath, False), PartDocument)
+            Dim isSheetMetal As Boolean = (templateDoc.SubType = "{9C464203-9BAE-11D3-8BAD-0060B0CE6BB4}")
+            templateDoc.Close(True)
+            Return isSheetMetal
+        Catch
+            Return False
+        End Try
+    End Function
+    
     ' Resolves a template display name to a full path. Uses FileManager default folder, then project TemplatesPath.
     Public Function FindTemplate(app As Inventor.Application, templateName As String) As String
         Dim templatesPath As String = ""
