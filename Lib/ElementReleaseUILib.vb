@@ -1,11 +1,18 @@
 ' ElementReleaseUILib.vb - UI for Element Release System
 ' Provides interactive UI for selecting elements, previewing files, and tracking progress
-' NOTE: Avoids System.Drawing types per iLogic constraints
+' NOTE: Requires AddReference "System.Drawing" in main rule for color support
 
 Imports System.Windows.Forms
+Imports System.Drawing
 Imports Inventor
 
 Public Module ElementReleaseUILib
+
+    ' ============================================================================
+    ' Module-level font for regular (non-bold) TreeView nodes
+    ' Set when TreeView is created with bold base font
+    ' ============================================================================
+    Private m_RegularFont As Font = Nothing
     
     ' ============================================================================
     ' UI State
@@ -53,6 +60,10 @@ Public Module ElementReleaseUILib
     Public Class ElementSelectionData
         Public Property Element As ExcelReaderLib.ElementConfig
         Public Property IsSelected As Boolean = True
+        Public Property RelativePath As String  ' For display in node text
+        Public Property FileCount As Integer     ' Total file count (own + shared)
+        Public Property OwnFileCount As Integer  ' Element-specific file count
+        Public Property SharedFileCount As Integer ' Shared file count
     End Class
     
     ' ============================================================================
@@ -171,6 +182,11 @@ Public Module ElementReleaseUILib
         treeView.HideSelection = False
         treeView.Indent = 20
         treeView.ShowNodeToolTips = True  ' Enable tooltips for file details
+        treeView.Scrollable = True  ' Enable scrollbars (horizontal when text is wider than view)
+        ' Set TreeView base font to bold - this fixes width calculation for bold nodes
+        ' Store regular font for non-bold nodes (file nodes, folder nodes)
+        m_RegularFont = New Font(treeView.Font, FontStyle.Regular)
+        treeView.Font = New Font(treeView.Font, FontStyle.Bold)
         mainPanel.Controls.Add(treeView)
         
         ' Populate unified tree (reads iProperties from source files)
@@ -279,10 +295,22 @@ Public Module ElementReleaseUILib
             {"btnCancel", btnCancel}
         }
         
+        ' Initial stats update (sets correct shared node appearance)
+        UpdateStats(frm)
+
         ' Wire up button events
         AddHandler btnCancel.Click, Sub(s, e)
             result.Cancelled = True
             frm.Close()
+        End Sub
+        
+        ' Handle form close (X button) same as Cancel
+        AddHandler frm.FormClosing, Sub(s, e)
+            ' Only treat as cancel if user closed via X button (not via Execute or Cancel buttons)
+            ' Execute sets DialogResult = OK, Cancel button sets Cancelled = True directly
+            If frm.DialogResult <> DialogResult.OK AndAlso Not result.Cancelled Then
+                result.Cancelled = True
+            End If
         End Sub
         
         AddHandler btnExecute.Click, AddressOf OnExecuteClick
@@ -322,7 +350,7 @@ Public Module ElementReleaseUILib
     Private Const STATUS_SKIPPED As String = "[-] "
     
     ''' <summary>
-    ''' Populates a unified tree with elements and all their files (shared + own) in folder structure
+    ''' Populates a unified tree with Ühine (shared) section at top, then elements with their own files
     ''' </summary>
     Private Sub PopulateUnifiedTree(tree As TreeView, _
                                     elements As List(Of ExcelReaderLib.ElementConfig), _
@@ -351,7 +379,34 @@ Public Module ElementReleaseUILib
             End If
         Next
         
-        ' Add each element with ALL its files (shared + own) merged together
+        ' Get product family name for relative paths (last folder in TargetRoot)
+        Dim productFamily As String = System.IO.Path.GetFileName(context.TargetRoot.TrimEnd("\"c))
+        
+        ' ========================================
+        ' SECTION 1: Ühine (Shared files) at TOP
+        ' ========================================
+        If sharedFiles.Count > 0 Then
+            Dim sharedFolder As String = If(plan.SharedFolder, context.TargetRoot & "\Ühine")
+            Dim sharedRelativePath As String = productFamily & "\Ühine"
+            Dim sharedNodeText As String = "ÜHINE — " & sharedFiles.Count & " faili → " & sharedRelativePath
+            Dim sharedNode As New TreeNode(sharedNodeText)
+            sharedNode.Tag = "SHARED_ROOT"  ' Not an element, not checkable
+            
+            ' Shared root inherits bold from TreeView, just set color
+            sharedNode.ForeColor = Drawing.Color.DarkOrange
+            sharedNode.ToolTipText = "Jagatud failid luuakse ühiskausta ja on kasutatavad kõigi valitud elementide poolt." & vbCrLf & _
+                                     "Need failid luuakse ainult siis, kui vähemalt üks element on valitud." & vbCrLf & _
+                                     "Täielik tee: " & sharedFolder
+            
+            ' Add shared files in folder structure - use type colors (not gray) for Ühine
+            AddFilesToNodeByFolderMerged(sharedNode, sharedFiles, context, forceTypeColors:=True)
+            
+            tree.Nodes.Add(sharedNode)
+        End If
+        
+        ' ========================================
+        ' SECTION 2: Each element with its OWN files only
+        ' ========================================
         For Each elem As ExcelReaderLib.ElementConfig In elements
             ' Build parameters string
             Dim paramStr As String = ""
@@ -361,32 +416,44 @@ Public Module ElementReleaseUILib
             Next
             
             Dim elemFileCount As Integer = elementFiles(elem.ElementName).Count
-            Dim totalFileCount As Integer = elemFileCount + sharedFiles.Count
             Dim elemFolder As String = ""
             If plan.VariantFolders.ContainsKey(elem.ElementName) Then
                 elemFolder = plan.VariantFolders(elem.ElementName)
             Else
                 elemFolder = context.TargetRoot & "\" & elem.ElementName
             End If
+            Dim elemRelativePath As String = productFamily & "\" & elem.ElementName
             
             ' Create element node with selection marker
             Dim selData As New ElementSelectionData()
             selData.Element = elem
             selData.IsSelected = True
+            selData.RelativePath = elemRelativePath
+            selData.FileCount = elemFileCount + sharedFiles.Count  ' Total including shared
+            selData.OwnFileCount = elemFileCount
+            selData.SharedFileCount = sharedFiles.Count
             
+            ' Show element file count + output folder
+            Dim totalFiles As Integer = elemFileCount + sharedFiles.Count
             Dim elemText As String = "[✓] " & elem.ElementName
             If paramStr <> "" Then elemText &= " (" & paramStr & ")"
-            elemText &= " — " & totalFileCount & " faili"
+            elemText &= " — " & totalFiles & " faili (" & elemFileCount & " oma + " & sharedFiles.Count & " jagatud) → " & elemRelativePath
             
             Dim elemNode As New TreeNode(elemText)
             elemNode.Tag = selData
+            elemNode.ToolTipText = "Elemendi failid luuakse kausta: " & elemFolder & vbCrLf & _
+                                   "Kasutab ka " & sharedFiles.Count & " jagatud faili kaustast Ühine"
             
-            ' Combine all files (shared + element-specific) and add by folder structure
-            Dim allFiles As New List(Of ElementReleaseLib.PlannedFile)
-            allFiles.AddRange(sharedFiles)
-            allFiles.AddRange(elementFiles(elem.ElementName))
+            ' Element nodes inherit bold from TreeView (base font is bold)
             
-            AddFilesToNodeByFolderMerged(elemNode, allFiles, context)
+            ' Combine element-specific files and shared files into one list
+            Dim allFilesForElement As New List(Of ElementReleaseLib.PlannedFile)
+            allFilesForElement.AddRange(elementFiles(elem.ElementName))
+            allFilesForElement.AddRange(sharedFiles)
+            
+            ' Add all files in unified folder structure
+            ' Shared files will be gray with [jagatud] marker, own files get type colors
+            AddFilesToNodeByFolderMerged(elemNode, allFilesForElement, context)
             
             tree.Nodes.Add(elemNode)
         Next
@@ -404,20 +471,17 @@ Public Module ElementReleaseUILib
     Private Sub UpdateElementNodeText(node As TreeNode, selData As ElementSelectionData)
         Dim marker As String = If(selData.IsSelected, "[✓] ", "[ ] ")
         Dim elem As ExcelReaderLib.ElementConfig = selData.Element
-        
+
         Dim paramStr As String = ""
         For Each kvp In elem.Parameters
             If paramStr <> "" Then paramStr &= ", "
             paramStr &= kvp.Key & "=" & kvp.Value
         Next
-        
+
         Dim elemText As String = marker & elem.ElementName
         If paramStr <> "" Then elemText &= " (" & paramStr & ")"
-        
-        ' Count files from child nodes
-        Dim fileCount As Integer = CountFilesInNode(node)
-        elemText &= " — " & fileCount & " faili"
-        
+        elemText &= " — " & selData.FileCount & " faili (" & selData.OwnFileCount & " oma + " & selData.SharedFileCount & " jagatud) → " & selData.RelativePath
+
         node.Text = elemText
     End Sub
     
@@ -452,9 +516,11 @@ Public Module ElementReleaseUILib
     ''' <summary>
     ''' Adds files to a tree node, organized by folder path, merging shared and own files
     ''' </summary>
+    ''' <param name="forceTypeColors">If True, use type-based colors even for shared files (for Ühine section)</param>
     Private Sub AddFilesToNodeByFolderMerged(parentNode As TreeNode, _
                                               files As List(Of ElementReleaseLib.PlannedFile), _
-                                              context As ElementReleaseLib.ElementReleaseContext)
+                                              context As ElementReleaseLib.ElementReleaseContext, _
+                                              Optional forceTypeColors As Boolean = False)
         ' Group files by their relative folder path
         Dim folderGroups As New Dictionary(Of String, List(Of ElementReleaseLib.PlannedFile))
 
@@ -479,7 +545,7 @@ Public Module ElementReleaseUILib
             If String.IsNullOrEmpty(folderPath) Then
                 ' Root level files - add directly
                 For Each f As ElementReleaseLib.PlannedFile In folderFiles
-                    Dim fileNode As TreeNode = CreateFileNodeWithDescription(f, context)
+                    Dim fileNode As TreeNode = CreateFileNodeWithDescription(f, context, forceTypeColors)
                     parentNode.Nodes.Add(fileNode)
                 Next
             Else
@@ -509,6 +575,8 @@ Public Module ElementReleaseUILib
                         End If
                         existingFolder = New TreeNode(folderText)
                         existingFolder.Tag = "FOLDER"
+                        ' Set regular font (TreeView base is bold)
+                        If m_RegularFont IsNot Nothing Then existingFolder.NodeFont = m_RegularFont
                         currentNode.Nodes.Add(existingFolder)
                     End If
 
@@ -517,7 +585,7 @@ Public Module ElementReleaseUILib
 
                 ' Add files to deepest folder
                 For Each f As ElementReleaseLib.PlannedFile In folderFiles
-                    Dim fileNode As TreeNode = CreateFileNodeWithDescription(f, context)
+                    Dim fileNode As TreeNode = CreateFileNodeWithDescription(f, context, forceTypeColors)
                     currentNode.Nodes.Add(fileNode)
                 Next
             End If
@@ -528,8 +596,10 @@ Public Module ElementReleaseUILib
     ''' Creates a file node with full property display
     ''' Format: PartNumber | Description | Type [jagatud]
     ''' </summary>
+    ''' <param name="forceTypeColors">If True, use type-based colors even for shared files (for Ühine section)</param>
     Private Function CreateFileNodeWithDescription(f As ElementReleaseLib.PlannedFile, _
-                                                    context As ElementReleaseLib.ElementReleaseContext) As TreeNode
+                                                    context As ElementReleaseLib.ElementReleaseContext, _
+                                                    Optional forceTypeColors As Boolean = False) As TreeNode
         Dim nodeData As New TreeNodeData()
         nodeData.FilePath = f.TargetLocalPath
         nodeData.VaultNumber = f.VaultNumber
@@ -576,6 +646,26 @@ Public Module ElementReleaseUILib
         
         Dim fileNode As New TreeNode(nodeText)
         fileNode.Tag = nodeData
+        
+        ' Set regular font (TreeView base is bold for root nodes)
+        If m_RegularFont IsNot Nothing Then fileNode.NodeFont = m_RegularFont
+        
+        ' Set styling based on file type and shared status
+        ' forceTypeColors = True means use type colors even for shared files (for Ühine section)
+        If f.IsShared AndAlso Not forceTypeColors Then
+            ' Shared files shown as gray references (under element nodes)
+            fileNode.ForeColor = Drawing.Color.Gray
+        Else
+            ' Color code by file type - for non-shared files or for Ühine section
+            Select Case f.FileType
+                Case ElementReleaseLib.FileType.Part
+                    fileNode.ForeColor = Drawing.Color.DarkBlue
+                Case ElementReleaseLib.FileType.Assembly
+                    fileNode.ForeColor = Drawing.Color.DarkGreen
+                Case ElementReleaseLib.FileType.Drawing
+                    fileNode.ForeColor = Drawing.Color.DarkRed
+            End Select
+        End If
         
         ' Build tooltip with all properties
         Dim tooltip As String = ""
@@ -849,6 +939,67 @@ Public Module ElementReleaseUILib
         Dim totalFiles As Integer = sharedFileCount + elementFileCount
         lblStats.Text = String.Format("Valitud: {0} elementi | Faile kokku: {1} (jagatud: {2}, elemendispetsiifilised: {3})", _
             selectedElements, totalFiles, sharedFileCount, elementFileCount)
+        
+        ' Update shared node appearance based on selection
+        UpdateSharedNodeAppearance(treeView, selectedElements > 0)
+    End Sub
+    
+    ''' <summary>
+    ''' Updates the shared (Ühine) node appearance based on whether any elements are selected
+    ''' </summary>
+    Private Sub UpdateSharedNodeAppearance(tree As TreeView, hasSelectedElements As Boolean)
+        For Each node As TreeNode In tree.Nodes
+            If node.Tag IsNot Nothing AndAlso TypeOf node.Tag Is String AndAlso CStr(node.Tag) = "SHARED_ROOT" Then
+                If hasSelectedElements Then
+                    ' Shared files will be created - show normally with type-based colors
+                    node.ForeColor = Drawing.Color.DarkOrange
+                    ' Restore type-based colors for file nodes
+                    RestoreTypeBasedColors(node.Nodes)
+                Else
+                    ' No elements selected - shared files won't be created
+                    node.ForeColor = Drawing.Color.LightGray
+                    ' Gray out all child nodes
+                    SetNodeTreeColor(node.Nodes, Drawing.Color.LightGray)
+                End If
+                Exit For
+            End If
+        Next
+    End Sub
+    
+    ''' <summary>
+    ''' Recursively sets color for all nodes in a collection
+    ''' </summary>
+    Private Sub SetNodeTreeColor(nodes As TreeNodeCollection, color As Drawing.Color)
+        For Each node As TreeNode In nodes
+            node.ForeColor = color
+            If node.Nodes.Count > 0 Then
+                SetNodeTreeColor(node.Nodes, color)
+            End If
+        Next
+    End Sub
+    
+    ''' <summary>
+    ''' Recursively restores type-based colors for file nodes
+    ''' </summary>
+    Private Sub RestoreTypeBasedColors(nodes As TreeNodeCollection)
+        For Each node As TreeNode In nodes
+            If node.Tag IsNot Nothing AndAlso TypeOf node.Tag Is TreeNodeData Then
+                Dim data As TreeNodeData = DirectCast(node.Tag, TreeNodeData)
+                Select Case data.FileType
+                    Case "Part"
+                        node.ForeColor = Drawing.Color.DarkBlue
+                    Case "Assembly"
+                        node.ForeColor = Drawing.Color.DarkGreen
+                    Case "Drawing"
+                        node.ForeColor = Drawing.Color.DarkRed
+                    Case Else
+                        node.ForeColor = Drawing.Color.Black
+                End Select
+            End If
+            If node.Nodes.Count > 0 Then
+                RestoreTypeBasedColors(node.Nodes)
+            End If
+        Next
     End Sub
     
     ''' <summary>
@@ -1235,19 +1386,23 @@ Public Module ElementReleaseUILib
             Dim nodeData As TreeNodeData = CType(node.Tag, TreeNodeData)
             nodeData.Status = status
             
-            ' Update node text with status prefix
+            ' Update node text with status prefix and set color
             Dim baseText As String = nodeData.VaultNumber & " - " & System.IO.Path.GetFileName(nodeData.FilePath)
             Select Case status
                 Case FileStatus.InProgress
                     node.Text = STATUS_INPROGRESS & baseText
+                    node.ForeColor = Drawing.Color.Blue
                 Case FileStatus.Completed
                     node.Text = STATUS_COMPLETED & baseText
+                    node.ForeColor = Drawing.Color.Green
                     m_CompletedFiles += 1
                 Case FileStatus.Failed
                     node.Text = STATUS_FAILED & baseText
+                    node.ForeColor = Drawing.Color.Red
                     m_FailedFiles += 1
                 Case FileStatus.Skipped
                     node.Text = STATUS_SKIPPED & baseText
+                    node.ForeColor = Drawing.Color.Gray
             End Select
             
             ' Ensure node is visible

@@ -882,7 +882,7 @@ Public Module ElementReleaseLib
     ''' </summary>
     Public Sub ApplyParameters(doc As Document, parameters As Dictionary(Of String, String))
         If doc Is Nothing OrElse parameters Is Nothing Then Return
-        
+
         Dim params As Parameters = Nothing
         Try
             If doc.DocumentType = DocumentTypeEnum.kPartDocumentObject Then
@@ -890,17 +890,58 @@ Public Module ElementReleaseLib
             ElseIf doc.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
                 params = CType(doc, AssemblyDocument).ComponentDefinition.Parameters
             End If
-        Catch
+        Catch ex As Exception
+            UtilsLib.LogWarn("ApplyParameters: Failed to get parameters from " & System.IO.Path.GetFileName(doc.FullFileName) & ": " & ex.Message)
             Return
         End Try
-        
-        If params Is Nothing Then Return
-        
+
+        If params Is Nothing Then
+            UtilsLib.LogWarn("ApplyParameters: No parameters collection in " & System.IO.Path.GetFileName(doc.FullFileName))
+            Return
+        End If
+
         For Each kvp In parameters
             If kvp.Key.StartsWith("_") Then Continue For
             Try
-                params.Item(kvp.Key).Expression = kvp.Value
-            Catch
+                ' First check if parameter exists
+                Dim param As Parameter = Nothing
+                Try
+                    param = params.Item(kvp.Key)
+                Catch
+                    ' Parameter not found by name, try user parameters
+                    Try
+                        If doc.DocumentType = DocumentTypeEnum.kPartDocumentObject Then
+                            param = CType(doc, PartDocument).ComponentDefinition.Parameters.UserParameters.Item(kvp.Key)
+                        ElseIf doc.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
+                            param = CType(doc, AssemblyDocument).ComponentDefinition.Parameters.UserParameters.Item(kvp.Key)
+                        End If
+                    Catch
+                    End Try
+                End Try
+                
+                If param Is Nothing Then
+                    ' List available parameters for debugging
+                    Dim availableParams As New List(Of String)
+                    Try
+                        For Each p As Parameter In params
+                            If Not p.Name.StartsWith("d") Then ' Skip model params like d0, d1
+                                availableParams.Add(p.Name)
+                            End If
+                        Next
+                    Catch
+                    End Try
+                    UtilsLib.LogWarn("ApplyParameters: Parameter '" & kvp.Key & "' not found in " & System.IO.Path.GetFileName(doc.FullFileName))
+                    If availableParams.Count > 0 Then
+                        UtilsLib.LogWarn("  Available user parameters: " & String.Join(", ", availableParams.ToArray()))
+                    End If
+                    Continue For
+                End If
+                
+                Dim oldValue As String = param.Expression
+                param.Expression = kvp.Value
+                UtilsLib.LogInfo("      Set " & kvp.Key & ": " & oldValue & " -> " & kvp.Value)
+            Catch ex As Exception
+                UtilsLib.LogWarn("ApplyParameters: Failed to set " & kvp.Key & " = " & kvp.Value & ": " & ex.Message)
             End Try
         Next
     End Sub
@@ -991,6 +1032,13 @@ Public Module ElementReleaseLib
                     If doc IsNot Nothing Then
                         UtilsLib.LogInfo("    Applying parameters to: " & System.IO.Path.GetFileName(masterPath))
                         ApplyParameters(doc, variantCfg.Parameters)
+                        ' Update master immediately after parameter change
+                        Try
+                            doc.Update()
+                            UtilsLib.LogInfo("    Updated master: " & System.IO.Path.GetFileName(masterPath))
+                        Catch ex As Exception
+                            UtilsLib.LogWarn("    Failed to update master: " & ex.Message)
+                        End Try
                     Else
                         UtilsLib.LogWarn("    Master not loaded: " & System.IO.Path.GetFileName(masterPath))
                     End If

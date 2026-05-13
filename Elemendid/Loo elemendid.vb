@@ -28,6 +28,7 @@
 AddReference "Autodesk.Connectivity.WebServices"
 AddReference "Autodesk.DataManagement.Client.Framework.Vault"
 AddReference "Connectivity.InventorAddin.EdmAddin"
+AddReference "System.Drawing"  ' Required for UI colors (ForeColor, Font)
 
 ' Libraries
 AddVbFile "Lib/RuntimeLib.vb"

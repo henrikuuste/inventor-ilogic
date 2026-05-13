@@ -166,7 +166,7 @@ Dim customView As DrawingView = sheet.DrawingViews.AddBaseView( _
 Before writing ANY Windows Forms code, verify:
 
 - [ ] **No ByRef parameters used in lambda expressions** - use `form.Tag` or `control.Tag` instead
-- [ ] **No System.Drawing types** - no `Size`, `Point`, `Color`, `Font`
+- [ ] **System.Drawing requires explicit reference** - Add `AddReference "System.Drawing"` in main rule for `Color`, `Font`
 - [ ] **No ContextMenuStrip/ToolStripMenuItem** - use Buttons or ComboBox
 - [ ] **All controls fully qualified** - `System.Windows.Forms.TextBox`, not `TextBox`
 - [ ] **Close form before CommandManager.Pick**, reopen after
@@ -357,11 +357,13 @@ Dim lbl As New System.Windows.Forms.Label()
 Dim frm As New System.Windows.Forms.Form()
 ```
 
-### Avoid System.Drawing Types
+### System.Drawing Types Require Explicit Reference
 
-- `Size`, `Point`, `Color`, `Font` from `System.Drawing` may require unavailable assembly references
-- This causes: `Reference required to assembly 'System.Drawing.Common'` or `Type 'System.Drawing.X' is not defined`
-- **Use individual properties instead:**
+- `Size`, `Point`, `Color`, `Font` from `System.Drawing` require explicit assembly reference
+- Without reference: `Reference required to assembly 'System.Drawing.Primitives'` or `Type 'System.Drawing.X' is not defined`
+- **Solution:** Add `AddReference "System.Drawing"` in the main rule file BEFORE any AddVbFile statements
+- Then add `Imports System.Drawing` in your library to use `Color.Gray`, `Font`, etc.
+- **Alternative - Use individual properties instead (if you don't want to add the reference):**
 
 ```vb
 ' BAD - may cause missing assembly errors
@@ -408,6 +410,36 @@ cboOptions.Items.Add("Option 1")
 cboOptions.Items.Add("Option 2")
 frm.Controls.Add(cboOptions)
 ```
+
+### TreeView Bold Font Truncates Text
+
+When setting `NodeFont` to bold on individual TreeView nodes, text gets truncated/clipped because TreeView calculates node widths based on its base `Font` property, not individual node fonts.
+
+**Common workaround (doesn't work reliably):**
+```vb
+' BAD - text still truncated
+node.NodeFont = New Font(treeView.Font, FontStyle.Bold)
+node.Text = node.Text  ' Reassigning text doesn't fix it
+```
+
+**Working solution - invert the approach:**
+```vb
+' GOOD - set TreeView base font to bold
+Private m_RegularFont As Font = Nothing
+
+' When creating TreeView:
+m_RegularFont = New Font(treeView.Font, FontStyle.Regular)
+treeView.Font = New Font(treeView.Font, FontStyle.Bold)
+
+' Root nodes inherit bold automatically (no NodeFont needed)
+Dim rootNode As New TreeNode("Bold Root")
+
+' Child nodes that should NOT be bold:
+Dim childNode As New TreeNode("Regular Child")
+childNode.NodeFont = m_RegularFont
+```
+
+This works because TreeView allocates width based on its own `Font` property. With bold as the base, all nodes have enough space. Regular nodes just get extra padding.
 
 ### Lambda Closures Have Scoping Issues
 
@@ -940,7 +972,7 @@ ctrlDef.Execute()  ' Shows checkout dialog
 | Application ambiguous | Use `System.Windows.Forms.Application` (conflicts with Inventor.Application) |
 | Size/Point/Font not defined | Use Left/Top/Width/Height; use UILib.SetMinimumSize(); use UPPERCASE text for emphasis |
 | ClientSize returns Size struct | Use `frm.Width`/`frm.Height` instead of `frm.ClientSize.Width`/`frm.ClientSize.Height` |
-| Color/Bitmap/Graphics not available | System.Drawing types unavailable in iLogic. Use text prefixes instead of colored icons |
+| Color/Bitmap/Graphics not available | Add `AddReference "System.Drawing"` in main rule, then use `Drawing.Color.X` (not just `Color.X` - ambiguous with Inventor.Color) |
 | SystemColors not declared | Remove BackColor styling or use default colors |
 | Environment.NewLine not available | Use `vbCrLf` instead |
 | ContextMenuStrip/ToolStripMenuItem | Use Buttons or ComboBox instead |
@@ -969,4 +1001,5 @@ ctrlDef.Execute()  ' Shows checkout dialog
 | Parameter name starts with digit | Prefix with letter: `M_00011_Name` instead of `00011_Name` |
 | CommandManager.Pick with no cancel hint | Always include `" - ESC tühistamiseks"` in prompt; wrap in Try/Catch |
 | `SurfaceBody.Volume` missing parameter | Use `body.Volume(0.01)` - requires `PrecisionPercent` parameter |
+| TreeView bold NodeFont truncates text | Set `TreeView.Font` to bold, then set non-bold child nodes to `FontStyle.Regular` |
 
