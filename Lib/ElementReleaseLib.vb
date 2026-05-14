@@ -38,6 +38,13 @@ Public Module ElementReleaseLib
     Public Const DEVELOPMENT_MODE As Boolean = True
     Public Const NUMBERING_SCHEME As String = "Test numbriskeem"
     
+    ' TEMPORARY: Phased feature flags to isolate crash
+    ' Enable one at a time to find the culprit
+    Public Const ENABLE_MULTI_MASTER_DISCOVERY As Boolean = True  ' Master flag
+    Public Const ENABLE_DISCOVER_ALL_MASTERS As Boolean = True    ' Phase 1: DiscoverAllMasters
+    Public Const ENABLE_DETECT_PROJECTED_GEOM As Boolean = True  ' Phase 2: DetectProjectedGeometry
+    Public Const ENABLE_SEARCH_PRODUCT_FAMILY As Boolean = True  ' Phase 3: SearchProductFamilyForIntermediates
+    
     ' ============================================================================
     ' Enums and Data Structures
     ' ============================================================================
@@ -85,6 +92,23 @@ Public Module ElementReleaseLib
         Public Parts As New Dictionary(Of String, PartInfo)(StringComparer.OrdinalIgnoreCase)
         Public Assemblies As New Dictionary(Of String, AssemblyInfo)(StringComparer.OrdinalIgnoreCase)
         Public Drawings As New List(Of DrawingInfo)
+        
+        ' Multi-master support (Phase 1)
+        Public ExternalMasters As New Dictionary(Of String, MasterInfo)(StringComparer.OrdinalIgnoreCase)
+        Public MasterDependencies As New Dictionary(Of String, List(Of String))(StringComparer.OrdinalIgnoreCase)
+        Public IntermediateAssemblies As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        Public ProjectedGeometryChains As New List(Of Tuple(Of String, String, String)) ' (SourcePart, ViaAssembly, TargetPart)
+    End Class
+    
+    ''' <summary>
+    ''' Information about a master file (skeleton/eskiis part) for multi-master support.
+    ''' </summary>
+    Public Class MasterInfo
+        Public FilePath As String
+        Public RelativePath As String         ' Relative to its own Aluselemendid folder
+        Public SourceElement As String        ' Which element it comes from
+        Public DependsOn As New List(Of String) ' Other masters this one references
+        Public IsIntermediate As Boolean      ' True if this is an assembly used for projection
     End Class
     
     Public Class PartInfo
@@ -391,6 +415,64 @@ Public Module ElementReleaseLib
         Return lowerPath.Contains("\oldversions\") OrElse lowerPath.Contains("/oldversions/")
     End Function
     
+    ''' <summary>
+    ''' Check if a file path represents an old Vault version.
+    ''' Detects both OldVersions folder and versioned filenames (e.g., 000114.0025.iam).
+    ''' </summary>
+    Private Function IsVaultOldVersion(filePath As String) As Boolean
+        If String.IsNullOrEmpty(filePath) Then Return False
+        
+        ' Check for OldVersions folder
+        If IsOldVersionsPath(filePath) Then Return True
+        
+        ' Check for versioned filename pattern: 000114.0025.iam (has numeric suffix before extension)
+        Dim fileName As String = System.IO.Path.GetFileNameWithoutExtension(filePath)
+        If fileName.Contains(".") Then
+            Dim parts() As String = fileName.Split("."c)
+            If parts.Length >= 2 Then
+                Dim lastPart As String = parts(parts.Length - 1)
+                ' If the last part (before extension) is all digits, it's a version number
+                If lastPart.All(Function(c) Char.IsDigit(c)) Then
+                    Return True
+                End If
+            End If
+        End If
+        
+        Return False
+    End Function
+    
+    ''' <summary>
+    ''' Get the product family root folder by walking up from sourceRoot to find "Aluselemendid" parent.
+    ''' Falls back to 3 levels up if Aluselemendid not found.
+    ''' </summary>
+    Private Function GetProductFamilyRoot(sourceRoot As String) As String
+        Dim current As String = sourceRoot
+        
+        ' Walk up looking for Aluselemendid folder
+        For i As Integer = 1 To 5
+            If String.IsNullOrEmpty(current) Then Exit For
+            Dim parent As String = System.IO.Path.GetDirectoryName(current)
+            If String.IsNullOrEmpty(parent) Then Exit For
+            
+            Dim folderName As String = System.IO.Path.GetFileName(current)
+            If folderName.Equals("Aluselemendid", StringComparison.OrdinalIgnoreCase) Then
+                Return parent ' Return the folder containing Aluselemendid
+            End If
+            current = parent
+        Next
+        
+        ' Fallback: go up 3 levels from sourceRoot
+        current = sourceRoot
+        For i As Integer = 1 To 3
+            Dim parent As String = System.IO.Path.GetDirectoryName(current)
+            If Not String.IsNullOrEmpty(parent) Then
+                current = parent
+            End If
+        Next
+        
+        Return current
+    End Function
+    
     ' ============================================================================
     ' Phase 2: File Discovery and Classification
     ' ============================================================================
@@ -501,12 +583,140 @@ Public Module ElementReleaseLib
             
             UtilsLib.LogInfo("DiscoverAssemblyTree: Found " & tree.Parts.Count & " parts, " & tree.Assemblies.Count & " assemblies")
             
+            ' ================================================================
+            ' Multi-Master Discovery (Phase 1 of multi-master plan)
+            ' ================================================================
+            If ENABLE_MULTI_MASTER_DISCOVERY Then
+                ' Now discover external masters and build dependency graph
+                
+                ' Get initial master paths from discovered parts
+                Dim initialMasters As New List(Of String)
+                For Each kvp In tree.Parts
+                    If kvp.Value.Role = PartRole.Derived AndAlso Not String.IsNullOrEmpty(kvp.Value.DerivedFromMaster) Then
+                        If Not initialMasters.Contains(kvp.Value.DerivedFromMaster) Then
+                            initialMasters.Add(kvp.Value.DerivedFromMaster)
+                        End If
+                    End If
+                Next
+                
+                UtilsLib.LogInfo("DiscoverAssemblyTree: Starting multi-master discovery with " & initialMasters.Count & " initial masters")
+                
+                ' Phase 1: Recursively discover all masters (including external)
+                If ENABLE_DISCOVER_ALL_MASTERS Then
+                    DiscoverAllMasters(app, tree, initialMasters)
+                    UtilsLib.LogInfo("DiscoverAssemblyTree: DiscoverAllMasters complete")
+                Else
+                    UtilsLib.LogInfo("DiscoverAssemblyTree: DiscoverAllMasters SKIPPED")
+                End If
+                
+                ' Build set of all discovered masters for analysis
+                Dim discoveredMasters As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+                For Each m In initialMasters
+                    discoveredMasters.Add(m)
+                Next
+                For Each kvp In tree.ExternalMasters
+                    discoveredMasters.Add(kvp.Key)
+                Next
+                For Each kvp In tree.MasterDependencies
+                    discoveredMasters.Add(kvp.Key)
+                    For Each dep In kvp.Value
+                        If System.IO.Path.GetExtension(dep).ToLower() = ".ipt" Then
+                            discoveredMasters.Add(dep)
+                        End If
+                    Next
+                Next
+                
+                Dim allMasters As New List(Of String)(discoveredMasters)
+                UtilsLib.LogInfo("DiscoverAssemblyTree: Total masters to check: " & allMasters.Count)
+                
+                ' Detect projected geometry links - collect unresolved references
+                Dim allUnresolved As New List(Of Tuple(Of String, String, String))
+                
+                ' Phase 2: Check intermediate assemblies for projected geometry
+                If ENABLE_DETECT_PROJECTED_GEOM Then
+                    For Each intAsm In tree.IntermediateAssemblies.ToList()
+                        If Not tree.Assemblies.ContainsKey(intAsm) Then
+                            Dim unresolved = DetectProjectedGeometry(app, tree, intAsm, allMasters)
+                            allUnresolved.AddRange(unresolved)
+                        End If
+                    Next
+                    UtilsLib.LogInfo("DiscoverAssemblyTree: DetectProjectedGeometry complete")
+                Else
+                    UtilsLib.LogInfo("DiscoverAssemblyTree: DetectProjectedGeometry SKIPPED")
+                End If
+                
+                ' Phase 3: Search product family for additional intermediate assemblies
+                If ENABLE_SEARCH_PRODUCT_FAMILY Then
+                    If allUnresolved.Count > 0 OrElse tree.MasterDependencies.Count > 0 Then
+                        SearchProductFamilyForIntermediates(app, tree, allUnresolved, discoveredMasters)
+                    End If
+                    UtilsLib.LogInfo("DiscoverAssemblyTree: SearchProductFamilyForIntermediates complete")
+                Else
+                    UtilsLib.LogInfo("DiscoverAssemblyTree: SearchProductFamilyForIntermediates SKIPPED")
+                End If
+                
+                ' Classify which intermediate assemblies are actually needed
+                ClassifyIntermediateAssemblies(tree)
+                
+                UtilsLib.LogInfo("DiscoverAssemblyTree: Multi-master discovery complete")
+                UtilsLib.LogInfo("  External masters: " & tree.ExternalMasters.Count)
+                UtilsLib.LogInfo("  Intermediate assemblies: " & tree.IntermediateAssemblies.Count)
+                UtilsLib.LogInfo("  Projected geometry chains: " & tree.ProjectedGeometryChains.Count)
+                
+                ' Cleanup: Close documents opened during discovery, keep only root assembly
+                CleanupDiscoveryDocuments(app, tree.RootAssemblyPath)
+            Else
+                UtilsLib.LogInfo("DiscoverAssemblyTree: Multi-master discovery DISABLED")
+            End If
+
         Catch ex As Exception
             UtilsLib.LogError("DiscoverAssemblyTree: ERROR - " & ex.Message)
         End Try
-        
+
         Return tree
     End Function
+    
+    ''' <summary>
+    ''' Close documents opened during discovery, keeping only the root assembly open.
+    ''' </summary>
+    Private Sub CleanupDiscoveryDocuments(app As Inventor.Application, rootAssemblyPath As String)
+        Dim closedCount As Integer = 0
+        Dim docsToClose As New List(Of Document)
+        
+        ' Collect documents to close (can't modify collection while iterating)
+        For Each doc As Document In app.Documents
+            Try
+                Dim docPath As String = doc.FullFileName
+                ' Keep the root assembly open
+                If Not docPath.Equals(rootAssemblyPath, StringComparison.OrdinalIgnoreCase) Then
+                    ' Close assemblies that were opened during discovery
+                    If doc.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
+                        docsToClose.Add(doc)
+                    End If
+                End If
+            Catch : End Try
+        Next
+        
+        ' Close collected documents
+        For Each doc In docsToClose
+            Try
+                doc.Close(True) ' True = skip save
+                closedCount += 1
+            Catch : End Try
+        Next
+        
+        ' Re-activate the root assembly
+        Try
+            For Each doc As Document In app.Documents
+                If doc.FullFileName.Equals(rootAssemblyPath, StringComparison.OrdinalIgnoreCase) Then
+                    doc.Activate()
+                    Exit For
+                End If
+            Next
+        Catch : End Try
+        
+        UtilsLib.LogInfo("CleanupDiscoveryDocuments: Closed " & closedCount & " assemblies, keeping root assembly active")
+    End Sub
     
     ''' <summary>
     ''' Recursively discover parts from component occurrences.
@@ -706,6 +916,800 @@ Public Module ElementReleaseLib
         
         UtilsLib.LogInfo("DiscoverDrawings: Found " & drawings.Count & " drawings total")
         Return drawings
+    End Function
+    
+    ' ============================================================================
+    ' Multi-Master Discovery (Phase 1 of multi-master plan)
+    ' ============================================================================
+    
+    ''' <summary>
+    ''' Discover all masters (internal and external) and build dependency graph.
+    ''' This is called after basic assembly tree discovery to find external masters
+    ''' that are referenced via derivation or projected geometry.
+    ''' </summary>
+    Public Sub DiscoverAllMasters(app As Inventor.Application, _
+                                  tree As AssemblyTree, _
+                                  initialMasters As List(Of String))
+        UtilsLib.LogInfo("DiscoverAllMasters: Starting with " & initialMasters.Count & " initial masters")
+        
+        Dim toProcess As New Queue(Of String)
+        Dim discoveredMasters As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        Dim candidateAssemblies As New Dictionary(Of String, List(Of String))(StringComparer.OrdinalIgnoreCase) ' asm -> masters it contains
+        
+        ' Start with known masters
+        For Each m In initialMasters
+            toProcess.Enqueue(m)
+        Next
+        
+        ' Process masters recursively
+        Do While toProcess.Count > 0
+            Dim masterPath As String = toProcess.Dequeue()
+            If discoveredMasters.Contains(masterPath) Then Continue Do
+            discoveredMasters.Add(masterPath)
+            
+            Dim isExternal As Boolean = Not IsInsideSourceRoot(masterPath, tree.SourceRoot)
+            If isExternal Then
+                UtilsLib.LogInfo("DiscoverAllMasters: Found EXTERNAL master: " & masterPath)
+            End If
+            
+            ' Get dependencies of this master
+            Dim deps As New List(Of String)
+            Dim masterDoc As Document = Nothing
+            Dim weOpenedIt As Boolean = False
+            Try
+                ' Check if document is already open
+                For Each doc As Document In app.Documents
+                    If doc.FullFileName.Equals(masterPath, StringComparison.OrdinalIgnoreCase) Then
+                        masterDoc = doc
+                        Exit For
+                    End If
+                Next
+                
+                ' Only open if not already open
+                If masterDoc Is Nothing Then
+                    masterDoc = app.Documents.Open(masterPath, False)
+                    weOpenedIt = True
+                End If
+                
+                If masterDoc.DocumentType = DocumentTypeEnum.kPartDocumentObject Then
+                    Dim partMaster As PartDocument = CType(masterDoc, PartDocument)
+                    Dim refComps = partMaster.ComponentDefinition.ReferenceComponents
+                    
+                    ' DerivedPartComponents - derives from another part (or assembly)
+                    For Each dpc As DerivedPartComponent In refComps.DerivedPartComponents
+                        Try
+                            Dim refFile As String = dpc.ReferencedFile.FullFileName
+                            deps.Add(refFile)
+                            
+                            ' Check if derivation is via an assembly
+                            Try
+                                Dim dpDef As Object = dpc.Definition
+                                Dim fullDocName As String = CStr(CallByName(dpDef, "FullDocumentName", CallType.Get))
+                                If fullDocName.ToLower().Contains(".iam") Then
+                                    Dim asmPath As String = ExtractAssemblyPathFromFullDocName(fullDocName)
+                                    If Not String.IsNullOrEmpty(asmPath) Then
+                                        tree.IntermediateAssemblies.Add(asmPath)
+                                        If Not deps.Contains(asmPath) Then deps.Add(asmPath)
+                                        
+                                        ' Track which masters this assembly contains
+                                        If Not candidateAssemblies.ContainsKey(asmPath) Then
+                                            candidateAssemblies(asmPath) = New List(Of String)
+                                        End If
+                                        If Not candidateAssemblies(asmPath).Contains(masterPath) Then
+                                            candidateAssemblies(asmPath).Add(masterPath)
+                                        End If
+                                    End If
+                                End If
+                            Catch
+                            End Try
+                            
+                            ' Queue for processing if not already discovered
+                            If Not discoveredMasters.Contains(refFile) AndAlso Not toProcess.Contains(refFile) Then
+                                toProcess.Enqueue(refFile)
+                            End If
+                        Catch
+                        End Try
+                    Next
+                    
+                    ' DerivedAssemblyComponents - derives from an assembly (e.g., for projected geometry)
+                    For Each dac As DerivedAssemblyComponent In refComps.DerivedAssemblyComponents
+                        Try
+                            Dim refFile As String = dac.ReferencedFile.FullFileName
+                            deps.Add(refFile)
+                            tree.IntermediateAssemblies.Add(refFile)
+                            
+                            If Not discoveredMasters.Contains(refFile) AndAlso Not toProcess.Contains(refFile) Then
+                                toProcess.Enqueue(refFile)
+                            End If
+                        Catch
+                        End Try
+                    Next
+                    
+                    ' CRITICAL: Check ReferencedDocuments for assemblies
+                    ' Masters with projected geometry will reference the assembly used for projection
+                    For Each refDoc As Document In partMaster.ReferencedDocuments
+                        Try
+                            Dim refPath As String = refDoc.FullFileName
+                            If refDoc.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
+                                tree.IntermediateAssemblies.Add(refPath)
+                                UtilsLib.LogInfo("DiscoverAllMasters: Found intermediate assembly via ReferencedDocuments: " & System.IO.Path.GetFileName(refPath))
+                                
+                                If Not deps.Contains(refPath) Then deps.Add(refPath)
+                                If Not discoveredMasters.Contains(refPath) AndAlso Not toProcess.Contains(refPath) Then
+                                    toProcess.Enqueue(refPath)
+                                End If
+                            ElseIf refDoc.DocumentType = DocumentTypeEnum.kPartDocumentObject Then
+                                ' Could be another master
+                                If Not deps.Contains(refPath) Then deps.Add(refPath)
+                                If Not discoveredMasters.Contains(refPath) AndAlso Not toProcess.Contains(refPath) Then
+                                    toProcess.Enqueue(refPath)
+                                End If
+                            End If
+                        Catch
+                        End Try
+                    Next
+                    
+                    ' Also check ReferencedFileDescriptors for context info (FullDocumentName)
+                    Try
+                        For i As Integer = 1 To partMaster.File.ReferencedFileDescriptors.Count
+                            Try
+                                Dim fd As FileDescriptor = partMaster.File.ReferencedFileDescriptors.Item(i)
+                                Dim refPath As String = fd.FullFileName
+                                
+                                ' Check FullDocumentName for assembly context
+                                Dim fullDocName As String = ""
+                                Try : fullDocName = fd.FullDocumentName : Catch : End Try
+                                
+                                If Not String.IsNullOrEmpty(fullDocName) AndAlso fullDocName.ToLower().Contains(".iam") Then
+                                    Dim asmPath As String = ExtractAssemblyPathFromFullDocName(fullDocName)
+                                    If Not String.IsNullOrEmpty(asmPath) Then
+                                        tree.IntermediateAssemblies.Add(asmPath)
+                                        UtilsLib.LogInfo("DiscoverAllMasters: Found intermediate assembly via FullDocumentName: " & System.IO.Path.GetFileName(asmPath))
+                                        
+                                        If Not deps.Contains(asmPath) Then deps.Add(asmPath)
+                                        If Not discoveredMasters.Contains(asmPath) AndAlso Not toProcess.Contains(asmPath) Then
+                                            toProcess.Enqueue(asmPath)
+                                        End If
+                                    End If
+                                End If
+                            Catch
+                            End Try
+                        Next
+                    Catch
+                    End Try
+                    
+                    ' CRITICAL: Check ReferencingFiles - assemblies that CONTAIN this master
+                    ' This finds intermediate assemblies used for projected geometry
+                    Try
+                        Dim referencingFiles As Object = partMaster.File.ReferencingFiles
+                        If referencingFiles IsNot Nothing Then
+                            For Each rf As Object In referencingFiles
+                                Try
+                                    Dim rfPath As String = CStr(CallByName(rf, "FullFileName", CallType.Get))
+                                    
+                                    ' Skip old Vault versions (OldVersions folder or versioned filenames)
+                                    If IsVaultOldVersion(rfPath) Then Continue For
+                                    
+                                    If rfPath.ToLower().EndsWith(".iam") Then
+                                        tree.IntermediateAssemblies.Add(rfPath)
+                                        UtilsLib.LogInfo("DiscoverAllMasters: Found containing assembly via ReferencingFiles: " & System.IO.Path.GetFileName(rfPath))
+                                        
+                                        If Not candidateAssemblies.ContainsKey(rfPath) Then
+                                            candidateAssemblies(rfPath) = New List(Of String)
+                                        End If
+                                        candidateAssemblies(rfPath).Add(masterPath)
+                                        
+                                        If Not discoveredMasters.Contains(rfPath) AndAlso Not toProcess.Contains(rfPath) Then
+                                            toProcess.Enqueue(rfPath)
+                                        End If
+                                    End If
+                                Catch
+                                End Try
+                            Next
+                        End If
+                    Catch ex As Exception
+                        UtilsLib.LogWarn("DiscoverAllMasters: ReferencingFiles check failed for " & System.IO.Path.GetFileName(masterPath) & ": " & ex.Message)
+                    End Try
+                ElseIf masterDoc.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
+                    Dim asmMaster As AssemblyDocument = CType(masterDoc, AssemblyDocument)
+                    
+                    ' Collect parts in this assembly
+                    For Each occ As ComponentOccurrence In asmMaster.ComponentDefinition.Occurrences.AllLeafOccurrences
+                        Try
+                            Dim occPath As String = occ.Definition.Document.FullFileName
+                            If System.IO.Path.GetExtension(occPath).ToLower() = ".ipt" Then
+                                If Not candidateAssemblies.ContainsKey(masterPath) Then
+                                    candidateAssemblies(masterPath) = New List(Of String)
+                                End If
+                                candidateAssemblies(masterPath).Add(occPath)
+                            End If
+                        Catch
+                        End Try
+                    Next
+                End If
+            Catch ex As Exception
+                UtilsLib.LogWarn("DiscoverAllMasters: Error processing " & System.IO.Path.GetFileName(masterPath) & ": " & ex.Message)
+            Finally
+                ' Only close if WE opened it (don't close documents that were already open)
+                If weOpenedIt AndAlso masterDoc IsNot Nothing Then
+                    Try : masterDoc.Close(True) : Catch : End Try
+                End If
+            End Try
+            
+            ' Store dependencies
+            If deps.Count > 0 Then
+                tree.MasterDependencies(masterPath) = deps
+            End If
+            
+            ' Store external master info
+            If isExternal Then
+                Dim info As New MasterInfo()
+                info.FilePath = masterPath
+                info.RelativePath = System.IO.Path.GetFileName(masterPath)
+                info.SourceElement = ExtractElementName(masterPath)
+                info.DependsOn = deps
+                info.IsIntermediate = System.IO.Path.GetExtension(masterPath).ToLower() = ".iam"
+                tree.ExternalMasters(masterPath) = info
+            End If
+        Loop
+        
+        UtilsLib.LogInfo("DiscoverAllMasters: Discovered " & discoveredMasters.Count & " total masters")
+        UtilsLib.LogInfo("DiscoverAllMasters: " & tree.ExternalMasters.Count & " external masters")
+        UtilsLib.LogInfo("DiscoverAllMasters: " & tree.IntermediateAssemblies.Count & " intermediate assemblies")
+    End Sub
+    
+    ''' <summary>
+    ''' Detect projected geometry links by parsing browser node labels.
+    ''' Must be called with the assembly open and active.
+    ''' Returns list of unresolved references (OccName, PartNum, DependentMasterPath) for further search.
+    ''' 
+    ''' IMPORTANT: Following test script pattern - documents are NOT closed during analysis.
+    ''' This prevents crashes from closing documents that may still be needed.
+    ''' </summary>
+    Public Function DetectProjectedGeometry(app As Inventor.Application, _
+                                            tree As AssemblyTree, _
+                                            assemblyPath As String, _
+                                            mastersToCheck As List(Of String)) As List(Of Tuple(Of String, String, String))
+        Dim unresolvedOccurrences As New List(Of Tuple(Of String, String, String))
+        Dim asmDoc As AssemblyDocument = Nothing
+        
+        Try
+            ' Check if document is already open
+            For Each doc As Document In app.Documents
+                Try
+                    If doc.FullFileName.Equals(assemblyPath, StringComparison.OrdinalIgnoreCase) Then
+                        asmDoc = CType(doc, AssemblyDocument)
+                        Exit For
+                    End If
+                Catch : End Try
+            Next
+            
+            ' Open visibly if not already open (following test script pattern)
+            If asmDoc Is Nothing Then
+                asmDoc = CType(app.Documents.Open(assemblyPath, True), AssemblyDocument)
+            End If
+            
+            ' Activate for browser node access
+            asmDoc.Activate()
+            Try : app.ActiveView.Fit() : Catch : End Try
+            
+            UtilsLib.LogInfo("DetectProjectedGeometry: Analyzing " & System.IO.Path.GetFileName(assemblyPath))
+            
+            ' Build occurrence maps
+            Dim occByName As New Dictionary(Of String, ComponentOccurrence)(StringComparer.OrdinalIgnoreCase)
+            Dim occByPath As New Dictionary(Of String, List(Of ComponentOccurrence))(StringComparer.OrdinalIgnoreCase)
+            
+            For Each occ As ComponentOccurrence In asmDoc.ComponentDefinition.Occurrences.AllLeafOccurrences
+                Try
+                    Dim occPath As String = occ.Definition.Document.FullFileName
+                    occByName(occ.Name) = occ
+                    
+                    If Not occByPath.ContainsKey(occPath) Then
+                        occByPath(occPath) = New List(Of ComponentOccurrence)
+                    End If
+                    occByPath(occPath).Add(occ)
+                Catch
+                End Try
+            Next
+            
+            ' Check each master that's present in this assembly
+            For Each masterPath In mastersToCheck
+                If Not occByPath.ContainsKey(masterPath) Then Continue For
+                
+                Dim masterOccs As List(Of ComponentOccurrence) = occByPath(masterPath)
+                For Each masterOcc In masterOccs
+                    Try
+                        Dim partDef As PartComponentDefinition = CType(masterOcc.Definition, PartComponentDefinition)
+                        
+                        ' Find the browser node for this occurrence's sketches
+                        For Each sk As PlanarSketch In partDef.Sketches
+                            Try
+                                ' Get sketch browser node via the active document's browser pane
+                                Dim sketchNode As BrowserNode = Nothing
+                                Try
+                                    For Each pane As BrowserPane In app.ActiveDocument.BrowserPanes
+                                        Try
+                                            sketchNode = pane.GetBrowserNodeFromObject(sk)
+                                            If sketchNode IsNot Nothing Then Exit For
+                                        Catch : End Try
+                                    Next
+                                Catch : End Try
+                                
+                                If sketchNode Is Nothing Then Continue For
+                                
+                                ' Check child nodes for projected geometry references
+                                For Each childNode As BrowserNode In sketchNode.BrowserNodes
+                                    Try
+                                        Dim label As String = ""
+                                        Try : label = childNode.BrowserNodeDefinition.Label : Catch : End Try
+                                        If String.IsNullOrEmpty(label) Then Continue For
+                                        
+                                        ' Parse "ReferenceXX (OccurrenceName)" format
+                                        If Not label.StartsWith("Reference") OrElse Not label.Contains("(") Then Continue For
+                                        
+                                        Dim parenStart As Integer = label.IndexOf("(")
+                                        Dim parenEnd As Integer = label.LastIndexOf(")")
+                                        If parenEnd <= parenStart Then Continue For
+                                        
+                                        Dim occNameFromLabel As String = label.Substring(parenStart + 1, parenEnd - parenStart - 1)
+                                        
+                                        ' Try to find this occurrence in the assembly
+                                        If occByName.ContainsKey(occNameFromLabel) Then
+                                            ' RESOLVED - occurrence exists in this assembly
+                                            Dim refOcc As ComponentOccurrence = occByName(occNameFromLabel)
+                                            Dim refPath As String = refOcc.Definition.Document.FullFileName
+                                            
+                                            ' Check if it's a cross-master reference
+                                            If mastersToCheck.Any(Function(m) m.Equals(refPath, StringComparison.OrdinalIgnoreCase)) AndAlso _
+                                               Not refPath.Equals(masterPath, StringComparison.OrdinalIgnoreCase) Then
+                                                ' Found a cross-master projected geometry chain!
+                                                Dim chain As New Tuple(Of String, String, String)(refPath, assemblyPath, masterPath)
+                                                
+                                                Dim isDuplicate As Boolean = tree.ProjectedGeometryChains.Any(Function(c) _
+                                                    c.Item1.Equals(chain.Item1, StringComparison.OrdinalIgnoreCase) AndAlso _
+                                                    c.Item2.Equals(chain.Item2, StringComparison.OrdinalIgnoreCase) AndAlso _
+                                                    c.Item3.Equals(chain.Item3, StringComparison.OrdinalIgnoreCase))
+                                                
+                                                If Not isDuplicate Then
+                                                    tree.ProjectedGeometryChains.Add(chain)
+                                                    tree.IntermediateAssemblies.Add(assemblyPath)
+                                                    UtilsLib.LogInfo("DetectProjectedGeometry: Found chain: " & _
+                                                        System.IO.Path.GetFileName(refPath) & " --(" & _
+                                                        System.IO.Path.GetFileName(assemblyPath) & ")--> " & _
+                                                        System.IO.Path.GetFileName(masterPath))
+                                                End If
+                                            End If
+                                        Else
+                                            ' UNRESOLVED - occurrence not in this assembly
+                                            ' Extract part number for later search
+                                            Dim partNum As String = ""
+                                            If occNameFromLabel.Contains("(") Then
+                                                Dim innerStart As Integer = occNameFromLabel.LastIndexOf("(")
+                                                Dim innerEnd As Integer = occNameFromLabel.IndexOf(")", innerStart)
+                                                If innerEnd > innerStart Then
+                                                    partNum = occNameFromLabel.Substring(innerStart + 1, innerEnd - innerStart - 1)
+                                                End If
+                                            ElseIf occNameFromLabel.Contains(":") Then
+                                                partNum = occNameFromLabel.Split(":"c)(0)
+                                            Else
+                                                partNum = occNameFromLabel
+                                            End If
+                                            
+                                            ' Record for later search (if not already recorded)
+                                            Dim unresolvedEntry As New Tuple(Of String, String, String)(occNameFromLabel, partNum, masterPath)
+                                            If Not unresolvedOccurrences.Any(Function(u) u.Item1 = occNameFromLabel AndAlso u.Item3.Equals(masterPath, StringComparison.OrdinalIgnoreCase)) Then
+                                                unresolvedOccurrences.Add(unresolvedEntry)
+                                            End If
+                                        End If
+                                    Catch
+                                    End Try
+                                Next
+                            Catch
+                            End Try
+                        Next
+                    Catch
+                    End Try
+                Next
+            Next
+            
+        Catch ex As Exception
+            UtilsLib.LogWarn("DetectProjectedGeometry: Error analyzing " & System.IO.Path.GetFileName(assemblyPath) & ": " & ex.Message)
+        End Try
+        ' NOTE: Following test script pattern - we do NOT close the document here
+        ' The test script leaves documents open during analysis and never crashes
+        
+        Return unresolvedOccurrences
+    End Function
+    
+    ''' <summary>
+    ''' Classify which assemblies are actually needed for the release.
+    ''' An assembly is needed if it has actual projected geometry (from ProjectedGeometryChains).
+    ''' </summary>
+    Public Sub ClassifyIntermediateAssemblies(tree As AssemblyTree)
+        UtilsLib.LogInfo("ClassifyIntermediateAssemblies: Analyzing " & tree.IntermediateAssemblies.Count & " candidates")
+        
+        ' Assemblies that have actual projected geometry are definitely needed
+        Dim neededAssemblies As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        For Each chain In tree.ProjectedGeometryChains
+            neededAssemblies.Add(chain.Item2) ' ViaAssembly
+        Next
+        
+        ' Filter IntermediateAssemblies to only those that are actually needed
+        Dim toRemove As New List(Of String)
+        For Each asmPath In tree.IntermediateAssemblies
+            If Not neededAssemblies.Contains(asmPath) Then
+                toRemove.Add(asmPath)
+                UtilsLib.LogInfo("ClassifyIntermediateAssemblies: Removing (not needed): " & System.IO.Path.GetFileName(asmPath))
+            End If
+        Next
+        
+        For Each asmPath In toRemove
+            tree.IntermediateAssemblies.Remove(asmPath)
+        Next
+        
+        UtilsLib.LogInfo("ClassifyIntermediateAssemblies: " & tree.IntermediateAssemblies.Count & " assemblies remain needed")
+    End Sub
+    
+    ''' <summary>
+    ''' Search product family folder for assemblies that resolve unresolved projected geometry references.
+    ''' This finds intermediate assemblies that weren't directly referenced but contain the necessary masters.
+    ''' 
+    ''' IMPORTANT: This function mirrors the logic from TestMasterDependencies.vb EXACTLY to avoid crashes.
+    ''' Key patterns from the test script that MUST be preserved:
+    ''' 1. Open documents invisibly first for containment check
+    ''' 2. Activate (not close-reopen) when browser access is needed
+    ''' 3. Do NOT close documents during the loop - the test script leaves them open
+    ''' 4. Use occurrence browser node approach for reference detection
+    ''' </summary>
+    Public Sub SearchProductFamilyForIntermediates(app As Inventor.Application, _
+                                                   tree As AssemblyTree, _
+                                                   unresolvedOccurrences As List(Of Tuple(Of String, String, String)), _
+                                                   discoveredMasters As HashSet(Of String))
+        If unresolvedOccurrences.Count = 0 AndAlso tree.MasterDependencies.Count = 0 Then Return
+        
+        ' Build dependency pairs from unresolved occurrences AND derivation chains
+        Dim dependencyPairs As New List(Of Tuple(Of String, String)) ' (DependentMaster, SourceMaster)
+        
+        ' Add from unresolved occurrences
+        For Each unresolved In unresolvedOccurrences
+            Dim partNum As String = unresolved.Item2
+            Dim dependentMaster As String = unresolved.Item3
+            
+            ' Find the source master by part number
+            For Each masterPath In discoveredMasters
+                If System.IO.Path.GetFileNameWithoutExtension(masterPath) = partNum Then
+                    Dim pair As New Tuple(Of String, String)(dependentMaster, masterPath)
+                    If Not dependencyPairs.Any(Function(p) p.Item1.Equals(pair.Item1, StringComparison.OrdinalIgnoreCase) AndAlso p.Item2.Equals(pair.Item2, StringComparison.OrdinalIgnoreCase)) Then
+                        dependencyPairs.Add(pair)
+                    End If
+                    Exit For
+                End If
+            Next
+        Next
+        
+        ' Add from derivation chains (as fallback when browser node analysis doesn't resolve)
+        For Each kvp In tree.MasterDependencies
+            Dim dependentMaster As String = kvp.Key
+            For Each sourceMaster In kvp.Value
+                If System.IO.Path.GetExtension(sourceMaster).ToLower() = ".ipt" AndAlso _
+                   discoveredMasters.Contains(sourceMaster) Then
+                    Dim pair As New Tuple(Of String, String)(dependentMaster, sourceMaster)
+                    If Not dependencyPairs.Any(Function(p) p.Item1.Equals(pair.Item1, StringComparison.OrdinalIgnoreCase) AndAlso p.Item2.Equals(pair.Item2, StringComparison.OrdinalIgnoreCase)) Then
+                        dependencyPairs.Add(pair)
+                    End If
+                End If
+            Next
+        Next
+        
+        If dependencyPairs.Count = 0 Then Return
+        
+        UtilsLib.LogInfo("SearchProductFamilyForIntermediates: Searching for " & dependencyPairs.Count & " dependency pairs")
+        
+        ' Get product family root folder
+        Dim productFamilyRoot As String = GetProductFamilyRoot(tree.SourceRoot)
+        UtilsLib.LogInfo("SearchProductFamilyForIntermediates: Product family root: " & productFamilyRoot)
+        
+        ' Find all assemblies in the product family
+        Dim allAssemblies As String() = Nothing
+        Try
+            allAssemblies = System.IO.Directory.GetFiles(productFamilyRoot, "*.iam", System.IO.SearchOption.AllDirectories)
+            UtilsLib.LogInfo("SearchProductFamilyForIntermediates: Scanning " & allAssemblies.Length & " assemblies...")
+        Catch ex As Exception
+            UtilsLib.LogWarn("SearchProductFamilyForIntermediates: Error scanning folder: " & ex.Message)
+            Return
+        End Try
+        
+        Dim currentAsmPath As String = tree.RootAssemblyPath
+        Dim testedCount As Integer = 0
+        
+        ' NOTE: Following test script pattern - we do NOT close documents during the loop
+        ' This is critical for stability
+        
+        For Each iamFile In allAssemblies
+            ' Skip already processed or invalid (matches test script exactly)
+            If iamFile.Equals(currentAsmPath, StringComparison.OrdinalIgnoreCase) Then Continue For
+            If tree.IntermediateAssemblies.Contains(iamFile) Then Continue For
+            If IsVaultOldVersion(iamFile) Then Continue For
+            
+            Try
+                ' First, quick check: does this assembly contain BOTH masters of any dependency pair?
+                ' IMPORTANT: Must open VISIBLY - invisible open + activate does not work for browser access
+                Dim extAsm As AssemblyDocument = CType(app.Documents.Open(iamFile, True), AssemblyDocument)
+                Dim containedFiles As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+                For Each refDoc As Document In extAsm.AllReferencedDocuments
+                    containedFiles.Add(refDoc.FullFileName)
+                Next
+                
+                ' Check each dependency pair
+                For Each pair In dependencyPairs
+                    ' Skip if this pair is already resolved
+                    If tree.ProjectedGeometryChains.Any(Function(c) c.Item1.Equals(pair.Item2, StringComparison.OrdinalIgnoreCase) AndAlso c.Item3.Equals(pair.Item1, StringComparison.OrdinalIgnoreCase)) Then
+                        Continue For
+                    End If
+                    
+                    ' Does assembly contain BOTH the dependent and source master?
+                    Dim hasDep As Boolean = containedFiles.Contains(pair.Item1)
+                    Dim hasSrc As Boolean = containedFiles.Contains(pair.Item2)
+                    If Not hasDep OrElse Not hasSrc Then
+                        ' Log why we're skipping (only for first few to avoid spam)
+                        If testedCount < 3 Then
+                            UtilsLib.LogInfo("  Skipping " & System.IO.Path.GetFileName(iamFile) & ": hasDep=" & hasDep & " hasSrc=" & hasSrc)
+                        End If
+                        Continue For
+                    End If
+                    
+                    testedCount += 1
+                    UtilsLib.LogInfo("  Testing: " & System.IO.Path.GetFileName(iamFile))
+                    UtilsLib.LogInfo("    Dependent: " & pair.Item1)
+                    UtilsLib.LogInfo("    Source: " & pair.Item2)
+                    
+                    Try
+                        ' Activate assembly for browser node access (matches test script)
+                        ' Must activate to access browser panes
+                        extAsm.Activate()
+                        app.ActiveView.Fit()
+                    Catch actEx As Exception
+                        UtilsLib.LogWarn("    Failed to activate: " & actEx.Message)
+                        Continue For
+                    End Try
+                    
+                    ' Build occurrence map (matches test script)
+                    Dim occByName As New Dictionary(Of String, ComponentOccurrence)(StringComparer.OrdinalIgnoreCase)
+                    Try
+                        For Each occ As ComponentOccurrence In extAsm.ComponentDefinition.Occurrences.AllLeafOccurrences
+                            Try
+                                occByName(occ.Name) = occ
+                            Catch : End Try
+                        Next
+                    Catch occEx As Exception
+                        UtilsLib.LogWarn("    Failed to get occurrences: " & occEx.Message)
+                        Continue For
+                    End Try
+                    UtilsLib.LogInfo("    Occurrences in assembly: " & occByName.Count)
+                    
+                    ' Find the dependent master occurrence (matches test script - full path match)
+                    Dim dependentOcc As ComponentOccurrence = Nothing
+                    For Each kvp2 In occByName
+                        Try
+                            If kvp2.Value.Definition.Document.FullFileName.Equals(pair.Item1, StringComparison.OrdinalIgnoreCase) Then
+                                dependentOcc = kvp2.Value
+                                UtilsLib.LogInfo("    Found dependent occurrence: " & kvp2.Key)
+                                Exit For
+                            End If
+                        Catch : End Try
+                    Next
+                    
+                    If dependentOcc Is Nothing Then
+                        UtilsLib.LogInfo("    Dependent master not found as occurrence")
+                        Continue For
+                    End If
+                    
+                    ' Check if projected geometry references RESOLVE in this assembly
+                    Dim partDef As PartComponentDefinition = Nothing
+                    Try
+                        partDef = CType(dependentOcc.Definition, PartComponentDefinition)
+                    Catch castEx As Exception
+                        UtilsLib.LogWarn("    Failed to get PartComponentDefinition: " & castEx.Message)
+                        Continue For
+                    End Try
+                    
+                    Dim referencesResolved As Boolean = False
+                    Dim sourceOccName As String = ""
+                    
+                    ' Find the browser node for this occurrence (matches test script approach)
+                    ' In assembly context, the part's sketches are under the occurrence node
+                    ' Match by occurrence name since COM object comparison with Is may not work
+                    Dim occBrowserNode As BrowserNode = Nothing
+                    Dim dependentOccName As String = dependentOcc.Name
+                    UtilsLib.LogInfo("    Looking for browser node of: " & dependentOccName)
+                    Try
+                        For Each pane As BrowserPane In app.ActiveDocument.BrowserPanes
+                            Try
+                                For Each topNode As BrowserNode In pane.TopNode.BrowserNodes
+                                    Try
+                                        Dim nodeLabel As String = topNode.BrowserNodeDefinition.Label
+                                        ' Match occurrence name (e.g., "Nurk - Eskiis (000131):1")
+                                        If nodeLabel.Equals(dependentOccName, StringComparison.OrdinalIgnoreCase) Then
+                                            occBrowserNode = topNode
+                                            Exit For
+                                        End If
+                                    Catch : End Try
+                                Next
+                            Catch : End Try
+                            If occBrowserNode IsNot Nothing Then Exit For
+                        Next
+                    Catch : End Try
+                    
+                    If occBrowserNode Is Nothing Then
+                        UtilsLib.LogInfo("    Occurrence browser node not found - trying sketch approach")
+                    Else
+                        UtilsLib.LogInfo("    Found occurrence browser node: " & occBrowserNode.BrowserNodeDefinition.Label)
+                    End If
+                    
+                    ' Check sketches for browser nodes with cross-part references
+                    ' Method 1: Look through the occurrence's browser nodes for sketches (matches test script)
+                    Dim sketchesChecked As Integer = 0
+                    
+                    If occBrowserNode IsNot Nothing Then
+                        ' Recursively find sketch nodes under the occurrence
+                        For Each childNode As BrowserNode In occBrowserNode.BrowserNodes
+                            Try
+                                Dim childLabel As String = childNode.BrowserNodeDefinition.Label
+                                
+                                ' Check if this node has reference children
+                                For Each refNode As BrowserNode In childNode.BrowserNodes
+                                    Try
+                                        Dim refLabel As String = refNode.BrowserNodeDefinition.Label
+                                        If refLabel.StartsWith("Reference") AndAlso refLabel.Contains("(") Then
+                                            sketchesChecked += 1
+                                            
+                                            ' Extract occurrence name from label
+                                            Dim parenStart As Integer = refLabel.IndexOf("(")
+                                            Dim parenEnd As Integer = refLabel.LastIndexOf(")")
+                                            If parenEnd > parenStart Then
+                                                Dim occNameFromLabel As String = refLabel.Substring(parenStart + 1, parenEnd - parenStart - 1)
+                                                
+                                                ' Does this occurrence exist in the assembly?
+                                                If occByName.ContainsKey(occNameFromLabel) Then
+                                                    Dim refOcc As ComponentOccurrence = occByName(occNameFromLabel)
+                                                    Dim refPath As String = refOcc.Definition.Document.FullFileName
+                                                    
+                                                    ' Does it point to our source master?
+                                                    If refPath.Equals(pair.Item2, StringComparison.OrdinalIgnoreCase) Then
+                                                        referencesResolved = True
+                                                        sourceOccName = occNameFromLabel
+                                                        UtilsLib.LogInfo("    ** REFERENCE RESOLVED: " & refLabel & " -> " & occNameFromLabel)
+                                                        Exit For
+                                                    End If
+                                                End If
+                                            End If
+                                        End If
+                                    Catch : End Try
+                                Next
+                                
+                                If referencesResolved Then Exit For
+                            Catch : End Try
+                        Next
+                    End If
+                    
+                    ' Method 2: If no occurrence browser node, try the old approach with sketches (matches test script)
+                    If Not referencesResolved AndAlso occBrowserNode Is Nothing Then
+                        For Each sk As PlanarSketch In partDef.Sketches
+                            Try
+                                ' Try to find this sketch's browser node by matching name
+                                Dim sketchName As String = sk.Name
+                                Dim sketchNode As BrowserNode = Nothing
+                                
+                                Try
+                                    For Each pane As BrowserPane In app.ActiveDocument.BrowserPanes
+                                        Try
+                                            For Each topNode As BrowserNode In pane.TopNode.BrowserNodes
+                                                Try
+                                                    Dim nodeLabel As String = topNode.BrowserNodeDefinition.Label
+                                                    If nodeLabel.Contains(sketchName) Then
+                                                        sketchNode = topNode
+                                                        Exit For
+                                                    End If
+                                                Catch : End Try
+                                            Next
+                                        Catch : End Try
+                                        If sketchNode IsNot Nothing Then Exit For
+                                    Next
+                                Catch : End Try
+                                
+                                If sketchNode Is Nothing Then Continue For
+                                sketchesChecked += 1
+                                
+                                ' Check child nodes for reference labels
+                                For Each childNode As BrowserNode In sketchNode.BrowserNodes
+                                    Try
+                                        Dim label As String = childNode.BrowserNodeDefinition.Label
+                                        If label.StartsWith("Reference") AndAlso label.Contains("(") Then
+                                            Dim parenStart As Integer = label.IndexOf("(")
+                                            Dim parenEnd As Integer = label.LastIndexOf(")")
+                                            If parenEnd > parenStart Then
+                                                Dim occNameFromLabel As String = label.Substring(parenStart + 1, parenEnd - parenStart - 1)
+                                                
+                                                If occByName.ContainsKey(occNameFromLabel) Then
+                                                    Dim refOcc As ComponentOccurrence = occByName(occNameFromLabel)
+                                                    Dim refPath As String = refOcc.Definition.Document.FullFileName
+                                                    
+                                                    If refPath.Equals(pair.Item2, StringComparison.OrdinalIgnoreCase) Then
+                                                        referencesResolved = True
+                                                        sourceOccName = occNameFromLabel
+                                                        Exit For
+                                                    End If
+                                                End If
+                                            End If
+                                        End If
+                                    Catch : End Try
+                                Next
+                                
+                                If referencesResolved Then Exit For
+                            Catch : End Try
+                        Next
+                    End If
+                    
+                    UtilsLib.LogInfo("    Sketches/nodes checked: " & sketchesChecked)
+                    
+                    If referencesResolved Then
+                        UtilsLib.LogInfo("    ** VERIFIED: References resolve in this assembly!")
+                        UtilsLib.LogInfo("       Source occurrence: " & sourceOccName)
+                        tree.IntermediateAssemblies.Add(iamFile)
+                        
+                        Dim chain As New Tuple(Of String, String, String)(pair.Item2, iamFile, pair.Item1)
+                        If Not tree.ProjectedGeometryChains.Any(Function(c) c.Item1.Equals(chain.Item1, StringComparison.OrdinalIgnoreCase) AndAlso c.Item2.Equals(chain.Item2, StringComparison.OrdinalIgnoreCase) AndAlso c.Item3.Equals(chain.Item3, StringComparison.OrdinalIgnoreCase)) Then
+                            tree.ProjectedGeometryChains.Add(chain)
+                        End If
+                        UtilsLib.LogInfo("       *** CHAIN: " & System.IO.Path.GetFileName(pair.Item2) & " --(via " & System.IO.Path.GetFileName(iamFile) & ")--> " & System.IO.Path.GetFileName(pair.Item1))
+                    Else
+                        UtilsLib.LogInfo("    (references do not resolve)")
+                    End If
+                Next
+            Catch openEx As Exception
+                UtilsLib.LogWarn("  Error testing " & System.IO.Path.GetFileName(iamFile) & ": " & openEx.Message)
+            End Try
+            ' NOTE: Following test script pattern - we do NOT close extAsm here
+            ' The test script leaves documents open and never crashes
+        Next
+        
+        UtilsLib.LogInfo("SearchProductFamilyForIntermediates: Tested " & testedCount & " candidate assemblies")
+    End Sub
+    
+    ''' <summary>
+    ''' Extract assembly path from FullDocumentName format.
+    ''' Format: "C:\path\to\file.ipt|C:\path\to\assembly.iam"
+    ''' </summary>
+    Private Function ExtractAssemblyPathFromFullDocName(fullDocName As String) As String
+        If fullDocName.Contains("|") Then
+            Dim parts() As String = fullDocName.Split("|"c)
+            For Each part In parts
+                If part.ToLower().EndsWith(".iam") Then
+                    Return part.Trim()
+                End If
+            Next
+        End If
+        Return ""
+    End Function
+    
+    ''' <summary>
+    ''' Extract element name from a file path (assumes Aluselemendid folder structure).
+    ''' </summary>
+    Private Function ExtractElementName(filePath As String) As String
+        Try
+            Dim dir As String = System.IO.Path.GetDirectoryName(filePath)
+            Dim parts() As String = dir.Split(System.IO.Path.DirectorySeparatorChar)
+            
+            For i As Integer = parts.Length - 1 To 0 Step -1
+                If parts(i).Equals("Aluselemendid", StringComparison.OrdinalIgnoreCase) Then
+                    If i + 1 < parts.Length Then
+                        Return parts(i + 1)
+                    End If
+                End If
+            Next
+        Catch
+        End Try
+        Return ""
     End Function
     
     ' ============================================================================
@@ -1193,17 +2197,117 @@ Public Module ElementReleaseLib
     ''' <summary>
     ''' Get master document paths from the assembly tree.
     ''' Masters are identified as the source of derivations.
+    ''' Now includes external masters and returns them in dependency order (roots first).
     ''' </summary>
     Public Function GetMasterPaths(tree As AssemblyTree) As List(Of String)
         Dim masters As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
         
+        ' Collect internal masters (from parts in tree)
         For Each kvp In tree.Parts
             If kvp.Value.Role = PartRole.Derived AndAlso Not String.IsNullOrEmpty(kvp.Value.DerivedFromMaster) Then
                 masters.Add(kvp.Value.DerivedFromMaster)
             End If
         Next
         
-        Return masters.ToList()
+        ' Add external masters discovered during multi-master analysis
+        For Each kvp In tree.ExternalMasters
+            masters.Add(kvp.Key)
+        Next
+        
+        ' Return in dependency order (roots first)
+        Return SortMastersByDependency(masters.ToList(), tree.MasterDependencies)
+    End Function
+    
+    ''' <summary>
+    ''' Sort masters by dependency order using topological sort (Kahn's algorithm).
+    ''' Returns list with roots first, then dependents, then intermediate assemblies last.
+    ''' </summary>
+    Public Function SortMastersByDependency(masters As List(Of String), _
+                                            dependencies As Dictionary(Of String, List(Of String))) As List(Of String)
+        ' Build a set of all masters for quick lookup
+        Dim masterSet As New HashSet(Of String)(masters, StringComparer.OrdinalIgnoreCase)
+        
+        ' Separate parts from assemblies (assemblies go last)
+        Dim parts As New List(Of String)
+        Dim assemblies As New List(Of String)
+        
+        For Each m In masters
+            If System.IO.Path.GetExtension(m).ToLower() = ".iam" Then
+                assemblies.Add(m)
+            Else
+                parts.Add(m)
+            End If
+        Next
+        
+        ' Build in-degree map (count of dependencies for each part)
+        Dim inDegree As New Dictionary(Of String, Integer)(StringComparer.OrdinalIgnoreCase)
+        For Each m In parts
+            inDegree(m) = 0
+        Next
+        
+        ' Count incoming edges (dependencies)
+        For Each m In parts
+            If dependencies.ContainsKey(m) Then
+                For Each dep In dependencies(m)
+                    ' Only count if the dependency is also a master we're sorting
+                    If masterSet.Contains(dep) AndAlso inDegree.ContainsKey(dep) Then
+                        ' This master (m) depends on dep, so m has an incoming edge
+                        inDegree(m) += 1
+                    End If
+                Next
+            End If
+        Next
+        
+        ' Start with parts that have no dependencies (in-degree = 0)
+        Dim queue As New Queue(Of String)
+        For Each kvp In inDegree
+            If kvp.Value = 0 Then
+                queue.Enqueue(kvp.Key)
+            End If
+        Next
+        
+        ' Process in topological order
+        Dim sorted As New List(Of String)
+        Dim processed As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        
+        Do While queue.Count > 0
+            Dim current As String = queue.Dequeue()
+            sorted.Add(current)
+            processed.Add(current)
+            
+            ' Find all parts that depend on 'current' and decrease their in-degree
+            For Each kvp In inDegree
+                If processed.Contains(kvp.Key) Then Continue For
+                
+                If dependencies.ContainsKey(kvp.Key) Then
+                    If dependencies(kvp.Key).Any(Function(d) d.Equals(current, StringComparison.OrdinalIgnoreCase)) Then
+                        inDegree(kvp.Key) -= 1
+                        If inDegree(kvp.Key) = 0 Then
+                            queue.Enqueue(kvp.Key)
+                        End If
+                    End If
+                End If
+            Next
+        Loop
+        
+        ' Add any remaining parts (in case of cycles or unprocessed items)
+        For Each m In parts
+            If Not processed.Contains(m) Then
+                sorted.Add(m)
+            End If
+        Next
+        
+        ' Add assemblies at the end
+        sorted.AddRange(assemblies)
+        
+        If sorted.Count > 0 Then
+            UtilsLib.LogInfo("SortMastersByDependency: Order:")
+            For i As Integer = 0 To sorted.Count - 1
+                UtilsLib.LogInfo("  " & (i + 1) & ". " & System.IO.Path.GetFileName(sorted(i)))
+            Next
+        End If
+        
+        Return sorted
     End Function
     
     ' ============================================================================
@@ -1728,6 +2832,94 @@ Public Module ElementReleaseLib
                 Next
             End If
         Next
+        
+        ' ================================================================
+        ' Multi-Master Support: Add external masters and intermediate assemblies
+        ' ================================================================
+        ' External masters are copied to each variant's Eskiis folder
+        ' They're per-variant because each element gets its own copy
+        
+        Dim externalMasterCount As Integer = 0
+        For Each variantCfg As ExcelReaderLib.ElementConfig In variants
+            ' Add external masters
+            For Each kvp In tree.ExternalMasters
+                Dim masterPath As String = kvp.Key
+                Dim masterInfo As MasterInfo = kvp.Value
+                
+                ' Skip if already added for this variant
+                If plan.Files.Any(Function(f) f.SourcePath.Equals(masterPath, StringComparison.OrdinalIgnoreCase) AndAlso f.ForVariants.Contains(variantCfg.ElementName)) Then
+                    Continue For
+                End If
+                
+                Dim masterFileName As String = System.IO.Path.GetFileName(masterPath)
+                Dim newFileName As String = fileNumbers(numberIndex) & System.IO.Path.GetExtension(masterPath)
+                Dim eskiisFolder As String = System.IO.Path.Combine(plan.VariantFolders(variantCfg.ElementName), "Eskiis")
+                Dim masterProps As FileProperties = GetFileProperties(app, masterPath)
+                
+                Dim fileType As FileType = If(System.IO.Path.GetExtension(masterPath).ToLower() = ".iam", FileType.Assembly, FileType.Part)
+                
+                Dim pf As New PlannedFile With {
+                    .SourcePath = masterPath,
+                    .TargetLocalPath = System.IO.Path.Combine(eskiisFolder, newFileName),
+                    .VaultNumber = fileNumbers(numberIndex),
+                    .FileType = fileType,
+                    .IsShared = False,
+                    .IsExisting = False,
+                    .ForVariants = New List(Of String) From {variantCfg.ElementName},
+                    .SourceDescription = masterProps.Description,
+                    .SourceProject = masterProps.Project,
+                    .SourcePartNumber = masterProps.PartNumber,
+                    .IsPlaceholder = True
+                }
+                pf.ProjectedDescription = masterProps.Description
+                pf.ProjectedProject = masterProps.Project
+                plan.Files.Add(pf)
+                numberIndex += 1
+                externalMasterCount += 1
+                
+                UtilsLib.LogInfo("ComputeReleasePlan: Added external master: " & masterFileName & " -> " & variantCfg.ElementName & "/Eskiis/")
+            Next
+            
+            ' Add intermediate assemblies (needed for projected geometry)
+            For Each intAsmPath In tree.IntermediateAssemblies
+                ' Skip if it's also in tree.Assemblies (already handled)
+                If tree.Assemblies.ContainsKey(intAsmPath) Then Continue For
+                
+                ' Skip if already added for this variant
+                If plan.Files.Any(Function(f) f.SourcePath.Equals(intAsmPath, StringComparison.OrdinalIgnoreCase) AndAlso f.ForVariants.Contains(variantCfg.ElementName)) Then
+                    Continue For
+                End If
+                
+                Dim asmFileName As String = System.IO.Path.GetFileName(intAsmPath)
+                Dim newFileName As String = fileNumbers(numberIndex) & ".iam"
+                Dim eskiisFolder As String = System.IO.Path.Combine(plan.VariantFolders(variantCfg.ElementName), "Eskiis")
+                Dim asmProps As FileProperties = GetFileProperties(app, intAsmPath)
+                
+                Dim pf As New PlannedFile With {
+                    .SourcePath = intAsmPath,
+                    .TargetLocalPath = System.IO.Path.Combine(eskiisFolder, newFileName),
+                    .VaultNumber = fileNumbers(numberIndex),
+                    .FileType = FileType.Assembly,
+                    .IsShared = False,
+                    .IsExisting = False,
+                    .ForVariants = New List(Of String) From {variantCfg.ElementName},
+                    .SourceDescription = asmProps.Description,
+                    .SourceProject = asmProps.Project,
+                    .SourcePartNumber = asmProps.PartNumber,
+                    .IsPlaceholder = True
+                }
+                pf.ProjectedDescription = asmProps.Description
+                pf.ProjectedProject = asmProps.Project
+                plan.Files.Add(pf)
+                numberIndex += 1
+                
+                UtilsLib.LogInfo("ComputeReleasePlan: Added intermediate assembly: " & asmFileName & " -> " & variantCfg.ElementName & "/Eskiis/")
+            Next
+        Next
+        
+        If externalMasterCount > 0 Then
+            UtilsLib.LogInfo("ComputeReleasePlan: Added " & externalMasterCount & " external master files")
+        End If
         
         Dim sharedCount As Integer = 0
         Dim variantSpecificCount As Integer = 0
@@ -2639,21 +3831,70 @@ Public Module ElementReleaseLib
                 ' ================================================================
                 UtilsLib.LogInfo("  STAGE 1: Creating file copies...")
                 
-                ' Step 1a: Copy masters first (they need to exist before parts can reference them)
-                UtilsLib.LogInfo("    Copying masters...")
+                ' Step 1a: Copy masters first in DEPENDENCY ORDER (roots first, then dependents)
+                ' This ensures when we copy a master that depends on another master,
+                ' the dependency is already copied and we can update the reference.
+                UtilsLib.LogInfo("    Copying masters in dependency order...")
                 Dim copiedMasters As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
-                For Each file As PlannedFile In context.ReleasePlan.Files
-                    If Not context.MasterPaths.Contains(file.SourcePath) Then Continue For
-                    If Not file.ForVariants.Contains(variantCfg.ElementName) Then Continue For
-                    If file.IsExisting Then Continue For
-                    If processedParts.Contains(file.TargetLocalPath) Then Continue For
-                    
+                
+                ' Get masters for this variant in sorted order (already sorted by GetMasterPaths)
+                Dim mastersForVariant As New List(Of PlannedFile)
+                For Each masterPath In context.MasterPaths
+                    Dim file As PlannedFile = context.ReleasePlan.Files.FirstOrDefault(Function(f) _
+                        f.SourcePath.Equals(masterPath, StringComparison.OrdinalIgnoreCase) AndAlso _
+                        f.ForVariants.Contains(variantCfg.ElementName) AndAlso _
+                        Not f.IsExisting)
+                    If file IsNot Nothing AndAlso Not processedParts.Contains(file.TargetLocalPath) Then
+                        mastersForVariant.Add(file)
+                    End If
+                Next
+                
+                UtilsLib.LogInfo("      Masters to copy: " & mastersForVariant.Count)
+                
+                For Each file As PlannedFile In mastersForVariant
                     Try
                         System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file.TargetLocalPath))
                         
                         ' Open source, SaveAs to target with new GUID
                         Dim masterDoc As Document = app.Documents.Open(file.SourcePath, False)
                         masterDoc.SaveAs(file.TargetLocalPath, False)
+                        UtilsLib.LogInfo("      Copied master: " & System.IO.Path.GetFileName(file.TargetLocalPath))
+                        
+                        ' CRITICAL: Update references to previously copied masters
+                        ' This handles master-to-master dependencies (e.g., 000131 derives from 000130)
+                        Dim updatedRefs As Integer = 0
+                        For Each refDesc As DocumentDescriptor In masterDoc.ReferencedDocumentDescriptors
+                            Try
+                                Dim refPath As String = refDesc.ReferencedFileDescriptor.FullFileName
+                                If copiedMasters.ContainsKey(refPath) Then
+                                    refDesc.ReferencedFileDescriptor.ReplaceReference(copiedMasters(refPath))
+                                    updatedRefs += 1
+                                    UtilsLib.LogInfo("        Updated cross-master ref: " & System.IO.Path.GetFileName(refPath) & " -> " & System.IO.Path.GetFileName(copiedMasters(refPath)))
+                                End If
+                            Catch
+                            End Try
+                        Next
+                        If updatedRefs > 0 Then
+                            UtilsLib.LogInfo("        Updated " & updatedRefs & " cross-master reference(s)")
+                        End If
+                        
+                        ' Also update occurrence references if this is an assembly (intermediate assembly)
+                        If masterDoc.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
+                            Dim asmMaster As AssemblyDocument = CType(masterDoc, AssemblyDocument)
+                            Dim allOccs As New List(Of ComponentOccurrence)
+                            CollectAllOccurrences(asmMaster.ComponentDefinition.Occurrences, allOccs)
+                            
+                            For Each occ As ComponentOccurrence In allOccs
+                                Try
+                                    Dim currentPath As String = occ.Definition.Document.FullFileName
+                                    If copiedMasters.ContainsKey(currentPath) Then
+                                        occ.Replace(copiedMasters(currentPath), True)
+                                        UtilsLib.LogInfo("        Replaced occurrence: " & System.IO.Path.GetFileName(currentPath) & " -> " & System.IO.Path.GetFileName(copiedMasters(currentPath)))
+                                    End If
+                                Catch
+                                End Try
+                            Next
+                        End If
                         
                         ' Set properties on the copy
                         SetDocumentProperties(masterDoc, file.VaultNumber, file.ProjectedDescription)
@@ -2661,7 +3902,6 @@ Public Module ElementReleaseLib
                         
                         copiedMasters(file.SourcePath) = file.TargetLocalPath
                         processedParts.Add(file.TargetLocalPath)
-                        UtilsLib.LogInfo("      Copied master: " & System.IO.Path.GetFileName(file.TargetLocalPath))
                         
                         masterDoc.Close(True)
                         

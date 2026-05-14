@@ -234,7 +234,7 @@ End Function
 ''' </summary>
 Function CalculateRequiredNumbers(context As ElementReleaseLib.ElementReleaseContext) As Integer
     Dim requiredNumbers As Integer = 0
-    
+
     ' Parts: count unique fingerprints
     For Each group2 As ElementReleaseLib.PartGroup In context.PartGroups
         If group2.UniqueFingerprints.Count = 1 Then
@@ -243,12 +243,23 @@ Function CalculateRequiredNumbers(context As ElementReleaseLib.ElementReleaseCon
             requiredNumbers += group2.UniqueFingerprints.Count
         End If
     Next
-    
+
     ' Assemblies: one per variant
     requiredNumbers += context.AssemblyTree.Assemblies.Count * context.Elements.Count
     
-    ' Drawings don't need unique numbers - they use the referenced model's number
+    ' External masters: one per variant (each element gets its own copy)
+    requiredNumbers += context.AssemblyTree.ExternalMasters.Count * context.Elements.Count
     
+    ' Intermediate assemblies: one per variant (each element gets its own copy)
+    ' Only count those not already in tree.Assemblies
+    For Each intAsm In context.AssemblyTree.IntermediateAssemblies
+        If Not context.AssemblyTree.Assemblies.ContainsKey(intAsm) Then
+            requiredNumbers += context.Elements.Count
+        End If
+    Next
+
+    ' Drawings don't need unique numbers - they use the referenced model's number
+
     Return requiredNumbers
 End Function
 
