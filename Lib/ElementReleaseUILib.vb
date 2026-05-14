@@ -52,6 +52,7 @@ Public Module ElementReleaseUILib
         Public Property VaultNumber As String
         Public Property Description As String
         Public Property IsShared As Boolean = False
+        Public Property BaseText As String  ' Original formatted text without status prefix
     End Class
     
     ''' <summary>
@@ -352,10 +353,15 @@ Public Module ElementReleaseUILib
     ''' <summary>
     ''' Populates a unified tree with Ühine (shared) section at top, then elements with their own files
     ''' </summary>
+    ''' <summary>
+    ''' Populates the unified tree view with elements and files
+    ''' </summary>
+    ''' <param name="isExecutionMode">If True, show status prefixes and hide selection markers</param>
     Private Sub PopulateUnifiedTree(tree As TreeView, _
                                     elements As List(Of ExcelReaderLib.ElementConfig), _
                                     plan As ElementReleaseLib.ReleasePlan, _
-                                    context As ElementReleaseLib.ElementReleaseContext)
+                                    context As ElementReleaseLib.ElementReleaseContext, _
+                                    Optional isExecutionMode As Boolean = False)
         tree.BeginUpdate()
         tree.Nodes.Clear()
         
@@ -399,7 +405,7 @@ Public Module ElementReleaseUILib
                                      "Täielik tee: " & sharedFolder
             
             ' Add shared files in folder structure - use type colors (not gray) for Ühine
-            AddFilesToNodeByFolderMerged(sharedNode, sharedFiles, context, forceTypeColors:=True)
+            AddFilesToNodeByFolderMerged(sharedNode, sharedFiles, context, forceTypeColors:=True, showStatusPrefix:=isExecutionMode)
             
             tree.Nodes.Add(sharedNode)
         End If
@@ -435,12 +441,18 @@ Public Module ElementReleaseUILib
             
             ' Show element file count + output folder
             Dim totalFiles As Integer = elemFileCount + sharedFiles.Count
-            Dim elemText As String = "[✓] " & elem.ElementName
+            Dim elemText As String = ""
+            If Not isExecutionMode Then
+                elemText = "[✓] "  ' Selection marker only in preview mode
+            End If
+            elemText &= elem.ElementName
             If paramStr <> "" Then elemText &= " (" & paramStr & ")"
             elemText &= " — " & totalFiles & " faili (" & elemFileCount & " oma + " & sharedFiles.Count & " jagatud) → " & elemRelativePath
             
             Dim elemNode As New TreeNode(elemText)
-            elemNode.Tag = selData
+            If Not isExecutionMode Then
+                elemNode.Tag = selData  ' Selection data only in preview mode
+            End If
             elemNode.ToolTipText = "Elemendi failid luuakse kausta: " & elemFolder & vbCrLf & _
                                    "Kasutab ka " & sharedFiles.Count & " jagatud faili kaustast Ühine"
             
@@ -453,7 +465,7 @@ Public Module ElementReleaseUILib
             
             ' Add all files in unified folder structure
             ' Shared files will be gray with [jagatud] marker, own files get type colors
-            AddFilesToNodeByFolderMerged(elemNode, allFilesForElement, context)
+            AddFilesToNodeByFolderMerged(elemNode, allFilesForElement, context, showStatusPrefix:=isExecutionMode)
             
             tree.Nodes.Add(elemNode)
         Next
@@ -517,10 +529,12 @@ Public Module ElementReleaseUILib
     ''' Adds files to a tree node, organized by folder path, merging shared and own files
     ''' </summary>
     ''' <param name="forceTypeColors">If True, use type-based colors even for shared files (for Ühine section)</param>
+    ''' <param name="showStatusPrefix">If True, add status prefix for execution mode</param>
     Private Sub AddFilesToNodeByFolderMerged(parentNode As TreeNode, _
                                               files As List(Of ElementReleaseLib.PlannedFile), _
                                               context As ElementReleaseLib.ElementReleaseContext, _
-                                              Optional forceTypeColors As Boolean = False)
+                                              Optional forceTypeColors As Boolean = False, _
+                                              Optional showStatusPrefix As Boolean = False)
         ' Group files by their relative folder path
         Dim folderGroups As New Dictionary(Of String, List(Of ElementReleaseLib.PlannedFile))
 
@@ -545,7 +559,7 @@ Public Module ElementReleaseUILib
             If String.IsNullOrEmpty(folderPath) Then
                 ' Root level files - add directly
                 For Each f As ElementReleaseLib.PlannedFile In folderFiles
-                    Dim fileNode As TreeNode = CreateFileNodeWithDescription(f, context, forceTypeColors)
+                    Dim fileNode As TreeNode = CreateFileNodeWithDescription(f, context, forceTypeColors, showStatusPrefix)
                     parentNode.Nodes.Add(fileNode)
                 Next
             Else
@@ -585,7 +599,7 @@ Public Module ElementReleaseUILib
 
                 ' Add files to deepest folder
                 For Each f As ElementReleaseLib.PlannedFile In folderFiles
-                    Dim fileNode As TreeNode = CreateFileNodeWithDescription(f, context, forceTypeColors)
+                    Dim fileNode As TreeNode = CreateFileNodeWithDescription(f, context, forceTypeColors, showStatusPrefix)
                     currentNode.Nodes.Add(fileNode)
                 Next
             End If
@@ -594,12 +608,14 @@ Public Module ElementReleaseUILib
     
     ''' <summary>
     ''' Creates a file node with full property display
-    ''' Format: PartNumber | Description | Type [jagatud]
+    ''' Format: [STATUS] PartNumber | Description | Type [jagatud]
     ''' </summary>
     ''' <param name="forceTypeColors">If True, use type-based colors even for shared files (for Ühine section)</param>
+    ''' <param name="showStatusPrefix">If True, add status prefix for execution mode</param>
     Private Function CreateFileNodeWithDescription(f As ElementReleaseLib.PlannedFile, _
                                                     context As ElementReleaseLib.ElementReleaseContext, _
-                                                    Optional forceTypeColors As Boolean = False) As TreeNode
+                                                    Optional forceTypeColors As Boolean = False, _
+                                                    Optional showStatusPrefix As Boolean = False) As TreeNode
         Dim nodeData As New TreeNodeData()
         nodeData.FilePath = f.TargetLocalPath
         nodeData.VaultNumber = f.VaultNumber
@@ -629,21 +645,32 @@ Public Module ElementReleaseUILib
         If String.IsNullOrEmpty(project) Then project = f.SourceProject
         If String.IsNullOrEmpty(project) Then project = ""
         
-        ' Build display text: Number | Description | Type [jagatud]
+        ' Build display text: [STATUS] Number | Description | Type [jagatud]
         ' Show placeholder indicator if not yet allocated
         Dim numberDisplay As String = f.VaultNumber
         If f.IsPlaceholder Then
             numberDisplay = "[" & f.VaultNumber & "]"  ' Brackets indicate placeholder
         End If
         
-        Dim nodeText As String = numberDisplay & " | " & description & " | " & fileTypeStr
+        ' Build base text (without status prefix) - used for status updates
+        Dim baseText As String = numberDisplay & " | " & description & " | " & fileTypeStr
         If Not String.IsNullOrEmpty(f.SourcePartNumber) AndAlso f.SourcePartNumber <> f.VaultNumber Then
-            nodeText &= " (alg: " & f.SourcePartNumber & ")"
+            baseText &= " (alg: " & f.SourcePartNumber & ")"
         End If
         If f.IsShared Then
-            nodeText &= "  [jagatud]"
+            baseText &= "  [jagatud]"
         End If
         
+        ' Store base text for later status updates
+        nodeData.BaseText = baseText
+        
+        ' Build full node text with optional status prefix
+        Dim nodeText As String = ""
+        If showStatusPrefix Then
+            nodeText = STATUS_PENDING  ' Add status prefix for execution mode
+        End If
+        nodeText &= baseText
+
         Dim fileNode As New TreeNode(nodeText)
         fileNode.Tag = nodeData
         
@@ -1166,6 +1193,10 @@ Public Module ElementReleaseUILib
     Private m_ProgressBar As System.Windows.Forms.ProgressBar = Nothing
     Private m_ProgressLabel As Label = Nothing
     Private m_LogTextBox As RichTextBox = Nothing
+    
+    ' UI update throttling - prevents excessive DoEvents calls during batch processing
+    Private m_LastUIUpdate As DateTime = DateTime.MinValue
+    Private Const UI_THROTTLE_MS As Integer = 2000  ' Update UI max every 2 seconds
     Private m_TotalFiles As Integer = 0
     Private m_CompletedFiles As Integer = 0
     Private m_FailedFiles As Integer = 0
@@ -1174,7 +1205,8 @@ Public Module ElementReleaseUILib
     ''' Creates and shows the execution form that stays open during release
     ''' </summary>
     Public Function ShowExecutionForm(context As ElementReleaseLib.ElementReleaseContext, _
-                                       filteredPlan As ElementReleaseLib.ReleasePlan) As Form
+                                       filteredPlan As ElementReleaseLib.ReleasePlan, _
+                                       selectedElements As List(Of ExcelReaderLib.ElementConfig)) As Form
         
         Dim frm As New Form()
         frm.Text = StringsLib.TITLE_ELEMENT_RELEASE & " - " & context.ElementName
@@ -1232,10 +1264,15 @@ Public Module ElementReleaseUILib
         filesTree.ShowRootLines = True
         filesTree.FullRowSelect = True
         filesTree.HideSelection = False
+        filesTree.ShowNodeToolTips = True
+        filesTree.Scrollable = True
+        ' Set TreeView base font to bold (same as preview)
+        m_RegularFont = New Font(filesTree.Font, FontStyle.Regular)
+        filesTree.Font = New Font(filesTree.Font, FontStyle.Bold)
         treePanel.Controls.Add(filesTree)
         
-        ' Populate the tree
-        PopulateExecutionTree(filesTree, filteredPlan, context)
+        ' Populate the tree using unified structure (same as preview, with status indicators)
+        PopulateUnifiedTree(filesTree, selectedElements, filteredPlan, context, isExecutionMode:=True)
         
         ' Set control order
         treePanel.Controls.SetChildIndex(filesTree, 0)
@@ -1306,74 +1343,6 @@ Public Module ElementReleaseUILib
     End Function
     
     ''' <summary>
-    ''' Populates the execution tree with files grouped by target folder
-    ''' </summary>
-    Private Sub PopulateExecutionTree(tree As TreeView, plan As ElementReleaseLib.ReleasePlan, _
-                                       context As ElementReleaseLib.ElementReleaseContext)
-        tree.BeginUpdate()
-        tree.Nodes.Clear()
-        
-        Dim rootNode As New TreeNode("Failid (" & plan.Files.Count & ")")
-        tree.Nodes.Add(rootNode)
-        
-        ' Group by element/shared
-        Dim sharedNode As New TreeNode("Ühine (Jagatud)")
-        
-        Dim elementNodes As New Dictionary(Of String, TreeNode)
-        
-        For Each f As ElementReleaseLib.PlannedFile In plan.Files
-            Dim nodeData As New TreeNodeData()
-            nodeData.FilePath = f.TargetLocalPath
-            nodeData.VaultNumber = f.VaultNumber
-            nodeData.Status = FileStatus.Pending
-            
-            Select Case f.FileType
-                Case ElementReleaseLib.FileType.Part
-                    nodeData.FileType = "Part"
-                Case ElementReleaseLib.FileType.Assembly
-                    nodeData.FileType = "Assembly"
-                Case ElementReleaseLib.FileType.Drawing
-                    nodeData.FileType = "Drawing"
-            End Select
-            
-            Dim fileName As String = System.IO.Path.GetFileName(f.TargetLocalPath)
-            Dim nodeText As String = STATUS_PENDING & f.VaultNumber & " - " & fileName
-            
-            Dim fileNode As New TreeNode(nodeText)
-            fileNode.Tag = nodeData
-            fileNode.ToolTipText = f.TargetLocalPath
-            
-            If f.IsShared Then
-                nodeData.ElementName = "Ühine"
-                sharedNode.Nodes.Add(fileNode)
-            Else
-                For Each elemName In f.ForVariants
-                    If Not elementNodes.ContainsKey(elemName) Then
-                        Dim elemNode As New TreeNode(elemName)
-                        elementNodes(elemName) = elemNode
-                    End If
-                    nodeData.ElementName = elemName
-                    elementNodes(elemName).Nodes.Add(fileNode)
-                    Exit For
-                Next
-            End If
-        Next
-        
-        If sharedNode.Nodes.Count > 0 Then
-            rootNode.Nodes.Add(sharedNode)
-        End If
-        
-        For Each elemNode In elementNodes.Values
-            If elemNode.Nodes.Count > 0 Then
-                rootNode.Nodes.Add(elemNode)
-            End If
-        Next
-        
-        rootNode.ExpandAll()
-        tree.EndUpdate()
-    End Sub
-    
-    ''' <summary>
     ''' Updates a file's status in the execution tree
     ''' </summary>
     Public Sub UpdateFileStatus(targetPath As String, status As FileStatus, Optional message As String = Nothing)
@@ -1387,7 +1356,13 @@ Public Module ElementReleaseUILib
             nodeData.Status = status
             
             ' Update node text with status prefix and set color
-            Dim baseText As String = nodeData.VaultNumber & " - " & System.IO.Path.GetFileName(nodeData.FilePath)
+            ' Use stored BaseText to preserve original formatting (description, type, etc.)
+            Dim baseText As String = nodeData.BaseText
+            If String.IsNullOrEmpty(baseText) Then
+                ' Fallback if BaseText wasn't set
+                baseText = nodeData.VaultNumber & " - " & System.IO.Path.GetFileName(nodeData.FilePath)
+            End If
+            
             Select Case status
                 Case FileStatus.InProgress
                     node.Text = STATUS_INPROGRESS & baseText
@@ -1425,7 +1400,11 @@ Public Module ElementReleaseUILib
             m_LogTextBox.ScrollToCaret()
         End If
         
-        System.Windows.Forms.Application.DoEvents()
+        ' Throttled UI update - only call DoEvents every few seconds to improve performance
+        If (DateTime.Now - m_LastUIUpdate).TotalMilliseconds > UI_THROTTLE_MS Then
+            System.Windows.Forms.Application.DoEvents()
+            m_LastUIUpdate = DateTime.Now
+        End If
     End Sub
     
     Private Function FindNodeByPath(nodes As TreeNodeCollection, targetPath As String) As TreeNode
@@ -1453,7 +1432,12 @@ Public Module ElementReleaseUILib
         If m_LogTextBox Is Nothing OrElse m_LogTextBox.IsDisposed Then Return
         m_LogTextBox.AppendText(message & vbCrLf)
         m_LogTextBox.ScrollToCaret()
-        System.Windows.Forms.Application.DoEvents()
+        
+        ' Throttled UI update
+        If (DateTime.Now - m_LastUIUpdate).TotalMilliseconds > UI_THROTTLE_MS Then
+            System.Windows.Forms.Application.DoEvents()
+            m_LastUIUpdate = DateTime.Now
+        End If
     End Sub
     
     ''' <summary>

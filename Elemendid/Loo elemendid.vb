@@ -186,8 +186,8 @@ Sub Main()
     ' Step 13: Show execution form and execute release with progress tracking
     Logger.Info("Loo elemendid: Executing release...")
     
-    ' Show execution form with file tree
-    Dim execForm As Form = ElementReleaseUILib.ShowExecutionForm(context, context.ReleasePlan)
+    ' Show execution form with file tree (same structure as preview)
+    Dim execForm As Form = ElementReleaseUILib.ShowExecutionForm(context, context.ReleasePlan, context.Elements)
     
     ' Log start
     ElementReleaseUILib.LogMessage("Väljastamine alustatud: " & DateTime.Now.ToString("HH:mm:ss"))
@@ -228,11 +228,14 @@ Function ExecuteReleaseWithProgress(app As Inventor.Application, _
 End Function
 
 ''' <summary>
-''' Calculate required file numbers based on context
+''' Calculate required file numbers based on context.
+''' NOTE: Drawings do NOT get unique numbers - they derive their number from
+''' the referenced part/assembly (with optional suffix preserved).
 ''' </summary>
 Function CalculateRequiredNumbers(context As ElementReleaseLib.ElementReleaseContext) As Integer
     Dim requiredNumbers As Integer = 0
     
+    ' Parts: count unique fingerprints
     For Each group2 As ElementReleaseLib.PartGroup In context.PartGroups
         If group2.UniqueFingerprints.Count = 1 Then
             requiredNumbers += 1
@@ -241,37 +244,10 @@ Function CalculateRequiredNumbers(context As ElementReleaseLib.ElementReleaseCon
         End If
     Next
     
+    ' Assemblies: one per variant
     requiredNumbers += context.AssemblyTree.Assemblies.Count * context.Elements.Count
     
-    ' Drawings - only count those that need unique numbers
-    Dim canShareDrawings As Boolean = (context.Elements.Count >= 2)
-    For Each dwgInfo As ElementReleaseLib.DrawingInfo In context.AssemblyTree.Drawings
-        Dim dwgFileName As String = System.IO.Path.GetFileNameWithoutExtension(dwgInfo.DrawingPath)
-        Dim primaryModelPath As String = If(dwgInfo.ReferencedModelPaths.Count > 0, dwgInfo.ReferencedModelPaths(0), "")
-        Dim modelNumber As String = System.IO.Path.GetFileNameWithoutExtension(primaryModelPath)
-        Dim shareNumberWithModel As Boolean = Not String.IsNullOrEmpty(modelNumber) AndAlso _
-            dwgFileName.StartsWith(modelNumber, StringComparison.OrdinalIgnoreCase)
-        
-        If shareNumberWithModel Then
-            Continue For
-        End If
-        
-        Dim allRefsShared As Boolean = canShareDrawings
-        If canShareDrawings Then
-            For Each refPath In dwgInfo.ReferencedModelPaths
-                Dim grp As ElementReleaseLib.PartGroup = FindPartGroupByPath(context.PartGroups, refPath)
-                If grp Is Nothing OrElse grp.UniqueFingerprints.Count > 1 Then
-                    allRefsShared = False
-                    Exit For
-                End If
-            Next
-        End If
-        If allRefsShared Then
-            requiredNumbers += 1
-        Else
-            requiredNumbers += context.Elements.Count
-        End If
-    Next
+    ' Drawings don't need unique numbers - they use the referenced model's number
     
     Return requiredNumbers
 End Function

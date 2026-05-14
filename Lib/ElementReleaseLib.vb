@@ -842,6 +842,7 @@ Public Module ElementReleaseLib
     ''' </summary>
     Public Sub RestoreMasterParameters(app As Inventor.Application, _
                                         snapshot As Dictionary(Of String, Dictionary(Of String, String)))
+        Dim restoredCount As Integer = 0
         For Each kvp In snapshot
             Dim doc As Document = Nothing
             Try
@@ -854,7 +855,10 @@ Public Module ElementReleaseLib
             Catch
             End Try
             
-            If doc Is Nothing Then Continue For
+            If doc Is Nothing Then
+                UtilsLib.LogInfo("    Master not open, skipping: " & System.IO.Path.GetFileName(kvp.Key))
+                Continue For
+            End If
             
             Dim params As Parameters = Nothing
             Try
@@ -868,13 +872,43 @@ Public Module ElementReleaseLib
             
             If params Is Nothing Then Continue For
             
+            Dim paramCount As Integer = 0
             For Each paramKvp In kvp.Value
                 Try
                     params.Item(paramKvp.Key).Expression = paramKvp.Value
+                    paramCount += 1
                 Catch
                 End Try
             Next
+            
+            If paramCount > 0 Then
+                UtilsLib.LogInfo("    Restored " & paramCount & " params in: " & System.IO.Path.GetFileName(kvp.Key))
+                restoredCount += 1
+            End If
         Next
+        UtilsLib.LogInfo("    Total masters restored: " & restoredCount & "/" & snapshot.Count)
+    End Sub
+    
+    ''' <summary>
+    ''' Set document properties (Part Number, Description, Title).
+    ''' </summary>
+    Public Sub SetDocumentProperties(doc As Document, partNumber As String, Optional description As String = Nothing)
+        Try
+            Dim designProps = doc.PropertySets.Item("Design Tracking Properties")
+            designProps.Item("Part Number").Value = partNumber
+            
+            If Not String.IsNullOrEmpty(description) Then
+                designProps.Item("Description").Value = description
+            End If
+        Catch
+        End Try
+        
+        Try
+            Dim summaryProps = doc.PropertySets.Item("Inventor Summary Information")
+            Dim title As String = If(Not String.IsNullOrEmpty(description), description, partNumber)
+            summaryProps.Item("Title").Value = title
+        Catch
+        End Try
     End Sub
     
     ''' <summary>
@@ -1359,7 +1393,7 @@ Public Module ElementReleaseLib
     ''' Call this AFTER user confirms release, not before UI.
     ''' </summary>
     Public Function AllocateRealNumbers(plan As ReleasePlan, targetRoot As String) As Boolean
-        ' Count how many real numbers we need
+        ' Count how many real numbers we need (parts and assemblies only, not drawings)
         Dim count As Integer = 0
         For Each f As PlannedFile In plan.Files
             If f.IsPlaceholder AndAlso Not f.IsExisting Then
@@ -1376,12 +1410,20 @@ Public Module ElementReleaseLib
             Return False
         End If
         
-        ' Replace placeholders with real numbers
+        ' Map of placeholder -> real number (for updating drawings)
+        Dim numberMap As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
+        
+        ' Replace placeholders with real numbers for parts and assemblies
         Dim numberIndex As Integer = 0
         For Each f As PlannedFile In plan.Files
             If f.IsPlaceholder AndAlso Not f.IsExisting Then
                 Dim oldNumber As String = f.VaultNumber
                 Dim newNumber As String = realNumbers(numberIndex)
+                
+                ' Track mapping for drawings
+                If Not numberMap.ContainsKey(oldNumber) Then
+                    numberMap.Add(oldNumber, newNumber)
+                End If
                 
                 ' Update VaultNumber
                 f.VaultNumber = newNumber
@@ -1397,7 +1439,28 @@ Public Module ElementReleaseLib
             End If
         Next
         
-        UtilsLib.LogInfo("AllocateRealNumbers: Allocated " & numberIndex & " numbers")
+        ' Now update drawings to use the new model numbers
+        ' Drawings don't get their own numbers - they use their referenced model's number
+        Dim drawingsUpdated As Integer = 0
+        For Each f As PlannedFile In plan.Files
+            If f.FileType = FileType.Drawing AndAlso Not f.IsExisting Then
+                Dim oldNumber As String = f.VaultNumber
+                If numberMap.ContainsKey(oldNumber) Then
+                    Dim newNumber As String = numberMap(oldNumber)
+                    f.VaultNumber = newNumber
+                    
+                    ' Update target path (replace old number with new in filename)
+                    If f.TargetLocalPath.Contains(oldNumber) Then
+                        f.TargetLocalPath = f.TargetLocalPath.Replace(oldNumber, newNumber)
+                    End If
+                    
+                    UtilsLib.LogInfo("  Drawing: " & oldNumber & " -> " & newNumber)
+                    drawingsUpdated += 1
+                End If
+            End If
+        Next
+        
+        UtilsLib.LogInfo("AllocateRealNumbers: Allocated " & numberIndex & " numbers, updated " & drawingsUpdated & " drawings")
         Return True
     End Function
     
@@ -1477,9 +1540,12 @@ Public Module ElementReleaseLib
                     allVariantNames.Add(vc.ElementName)
                 Next
                 Dim partProps As FileProperties = GetFileProperties(app, group.PartPath)
+                ' Construct path with new filename (not original filename)
+                Dim newFileNameShared As String = fileNumbers(numberIndex) & System.IO.Path.GetExtension(group.PartPath)
+                Dim relDirShared As String = System.IO.Path.GetDirectoryName(group.RelativePath)
                 Dim pf As New PlannedFile With {
                     .SourcePath = group.PartPath,
-                    .TargetLocalPath = System.IO.Path.Combine(plan.SharedFolder, group.RelativePath),
+                    .TargetLocalPath = System.IO.Path.Combine(plan.SharedFolder, relDirShared, newFileNameShared),
                     .VaultNumber = fileNumbers(numberIndex),
                     .FileType = FileType.Part,
                     .IsShared = True,
@@ -1564,23 +1630,23 @@ Public Module ElementReleaseLib
         Next
         
         For Each dwgInfo As DrawingInfo In tree.Drawings
-            ' Get drawing filename and check if it starts with the model number
+            ' Get drawing filename and primary referenced model
             Dim dwgFileName As String = System.IO.Path.GetFileNameWithoutExtension(dwgInfo.DrawingPath)
             Dim primaryModelPath As String = If(dwgInfo.ReferencedModelPaths.Count > 0, dwgInfo.ReferencedModelPaths(0), "")
-            Dim modelNumber As String = System.IO.Path.GetFileNameWithoutExtension(primaryModelPath)
+            Dim sourceModelNumber As String = System.IO.Path.GetFileNameWithoutExtension(primaryModelPath)
             
-            ' Extract suffix from drawing filename (anything after the model number)
-            ' e.g., "00005_sheet2" with model "00005" -> suffix "_sheet2"
+            ' Extract suffix/prefix from drawing filename
+            ' The drawing number should be: [new model number] + [suffix]
+            ' e.g., "00005_sheet2.idw" referencing "00005.ipt" -> "01234_sheet2.idw" when model becomes "01234.ipt"
+            ' e.g., "00005.idw" referencing "00005.iam" -> "01234.idw" when model becomes "01234.iam"
             Dim dwgSuffix As String = ""
-            Dim shareNumberWithModel As Boolean = False
-            If Not String.IsNullOrEmpty(modelNumber) AndAlso dwgFileName.StartsWith(modelNumber, StringComparison.OrdinalIgnoreCase) Then
-                shareNumberWithModel = True
-                dwgSuffix = dwgFileName.Substring(modelNumber.Length)
+            If Not String.IsNullOrEmpty(sourceModelNumber) AndAlso dwgFileName.StartsWith(sourceModelNumber, StringComparison.OrdinalIgnoreCase) Then
+                dwgSuffix = dwgFileName.Substring(sourceModelNumber.Length)
             End If
             
             ' A drawing can only be shared if:
-            ' 1. We have 2+ moodulid to share between
-            ' 2. All its referenced parts have the same geometry across all moodulid
+            ' 1. We have 2+ variants to share between
+            ' 2. All its referenced parts have the same geometry across all variants
             Dim allRefsShared As Boolean = canShare
             If canShare Then
                 For Each refPath In dwgInfo.ReferencedModelPaths
@@ -1593,24 +1659,18 @@ Public Module ElementReleaseLib
             End If
             
             If allRefsShared Then
-                ' Find the released model's number if drawing shares number with model
-                Dim vaultNum As String
-                If shareNumberWithModel AndAlso Not String.IsNullOrEmpty(primaryModelPath) Then
-                    Dim modelFile As PlannedFile = FindPlannedFileBySource(plan.Files, primaryModelPath)
-                    If modelFile IsNot Nothing Then
-                        vaultNum = modelFile.VaultNumber
-                        UtilsLib.LogInfo("Drawing " & dwgFileName & ".idw reuses model number " & vaultNum & " with suffix '" & dwgSuffix & "'")
-                    Else
-                        vaultNum = fileNumbers(numberIndex)
-                        numberIndex += 1
-                    End If
-                Else
-                    vaultNum = fileNumbers(numberIndex)
-                    numberIndex += 1
+                ' SHARED DRAWING: Find the referenced model's vault number
+                ' Drawings don't get their own numbers - they derive from the model they reference
+                Dim modelFile As PlannedFile = FindPlannedFileBySource(plan.Files, primaryModelPath)
+                If modelFile Is Nothing Then
+                    UtilsLib.LogWarn("Drawing " & dwgFileName & ".idw: Could not find referenced model " & System.IO.Path.GetFileName(primaryModelPath))
+                    Continue For
                 End If
                 
-                ' Preserve any suffix from the original drawing filename
+                Dim vaultNum As String = modelFile.VaultNumber
                 Dim newFileName As String = vaultNum & dwgSuffix & ".idw"
+                UtilsLib.LogInfo("Drawing " & dwgFileName & ".idw -> " & newFileName & " (from model " & modelFile.VaultNumber & ")")
+                
                 Dim relDir As String = System.IO.Path.GetDirectoryName(dwgInfo.RelativePath)
                 Dim allVariantNames2 As New List(Of String)
                 For Each vc2 As ExcelReaderLib.ElementConfig In variants
@@ -1628,32 +1688,25 @@ Public Module ElementReleaseLib
                     .SourceDescription = dwgPropsShared.Description,
                     .SourceProject = dwgPropsShared.Project,
                     .SourcePartNumber = dwgPropsShared.PartNumber,
-                    .IsPlaceholder = True
+                    .IsPlaceholder = False  ' Drawing number comes from model, not placeholder
                 }
-                ' Drawings keep their source description
                 pf.ProjectedDescription = dwgPropsShared.Description
                 pf.ProjectedProject = dwgPropsShared.Project
                 plan.Files.Add(pf)
             Else
+                ' VARIANT-SPECIFIC DRAWING: Each variant gets its own copy with that variant's model number
                 For Each variantCfg2 As ExcelReaderLib.ElementConfig In variants
-                    ' Find the released model's number for this variant if drawing shares number
-                    Dim vaultNum As String
-                    If shareNumberWithModel AndAlso Not String.IsNullOrEmpty(primaryModelPath) Then
-                        Dim modelFile As PlannedFile = FindPlannedFileBySourceAndVariant(plan.Files, primaryModelPath, variantCfg2.ElementName)
-                        If modelFile IsNot Nothing Then
-                            vaultNum = modelFile.VaultNumber
-                            UtilsLib.LogInfo("Drawing " & dwgFileName & ".idw (" & variantCfg2.ElementName & ") reuses model number " & vaultNum & " with suffix '" & dwgSuffix & "'")
-                        Else
-                            vaultNum = fileNumbers(numberIndex)
-                            numberIndex += 1
-                        End If
-                    Else
-                        vaultNum = fileNumbers(numberIndex)
-                        numberIndex += 1
+                    ' Find the referenced model's vault number for this variant
+                    Dim modelFile As PlannedFile = FindPlannedFileBySourceAndVariant(plan.Files, primaryModelPath, variantCfg2.ElementName)
+                    If modelFile Is Nothing Then
+                        UtilsLib.LogWarn("Drawing " & dwgFileName & ".idw (" & variantCfg2.ElementName & "): Could not find referenced model")
+                        Continue For
                     End If
                     
-                    ' Preserve any suffix from the original drawing filename
+                    Dim vaultNum As String = modelFile.VaultNumber
                     Dim newFileName As String = vaultNum & dwgSuffix & ".idw"
+                    UtilsLib.LogInfo("Drawing " & dwgFileName & ".idw (" & variantCfg2.ElementName & ") -> " & newFileName & " (from model " & modelFile.VaultNumber & ")")
+                    
                     Dim relDir As String = System.IO.Path.GetDirectoryName(dwgInfo.RelativePath)
                     Dim dwgPropsNonShared As FileProperties = GetFileProperties(app, dwgInfo.DrawingPath)
                     
@@ -1667,9 +1720,8 @@ Public Module ElementReleaseLib
                         .SourceDescription = dwgPropsNonShared.Description,
                         .SourceProject = dwgPropsNonShared.Project,
                         .SourcePartNumber = dwgPropsNonShared.PartNumber,
-                        .IsPlaceholder = True
+                        .IsPlaceholder = False  ' Drawing number comes from model, not placeholder
                     }
-                    ' Drawings keep their source description
                     pf.ProjectedDescription = dwgPropsNonShared.Description
                     pf.ProjectedProject = dwgPropsNonShared.Project
                     plan.Files.Add(pf)
@@ -1878,7 +1930,9 @@ Public Module ElementReleaseLib
 
                 ' Document is now the target file - break ALL external references
                 ' This is critical to ensure released parts don't depend on source/master files
-                BreakAllExternalLinks(partDoc)
+                ' TEMPORARILY DISABLED FOR TESTING - see docs/research/2026-05-13-element-release-failures.md
+                ' BreakAllExternalLinks(partDoc)
+                UtilsLib.LogInfo("  [TEST] Skipping BreakAllExternalLinks - keeping derived links")
 
                 ' Set Part Number and Description in Design Tracking Properties
                 Try
@@ -1918,6 +1972,67 @@ Public Module ElementReleaseLib
             
         Catch ex As Exception
             UtilsLib.LogError("ERROR creating standalone: " & ex.Message)
+            Return False
+        End Try
+    End Function
+    
+    ''' <summary>
+    ''' Create a standalone part from an already-open document with updated geometry.
+    ''' This variant is used when we have the part already loaded with correct parameter values.
+    ''' </summary>
+    Public Function CreateStandalonePartFromDocument(app As Inventor.Application, _
+                                                      partDoc As PartDocument, _
+                                                      targetPath As String, _
+                                                      newPartNumber As String, _
+                                                      Optional projectedDescription As String = Nothing) As Boolean
+        Try
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(targetPath))
+            
+            ' Use SaveAs FIRST to create new file with NEW GUID
+            ' This avoids GUID conflicts when both source and target are open
+            partDoc.SaveAs(targetPath, False)
+            UtilsLib.LogInfo("  SaveAs with new GUID: " & System.IO.Path.GetFileName(targetPath))
+            
+            ' Document is now the target file - break ALL external references
+            ' This is critical to ensure released parts don't depend on source/master files
+            ' TEMPORARILY DISABLED FOR TESTING - see docs/research/2026-05-13-element-release-failures.md
+            ' BreakAllExternalLinks(partDoc)
+            UtilsLib.LogInfo("  [TEST] Skipping BreakAllExternalLinks - keeping derived links")
+            
+            ' Set Part Number and Description in Design Tracking Properties
+            Try
+                Dim designProps = partDoc.PropertySets.Item("Design Tracking Properties")
+                designProps.Item("Part Number").Value = newPartNumber
+                UtilsLib.LogInfo("  Set Part Number: " & newPartNumber)
+                
+                ' Set Description if projected description provided
+                If Not String.IsNullOrEmpty(projectedDescription) Then
+                    designProps.Item("Description").Value = projectedDescription
+                    UtilsLib.LogInfo("  Set Description: " & projectedDescription)
+                End If
+            Catch ex As Exception
+                UtilsLib.LogWarn("  WARNING: Failed to set Part Number: " & ex.Message)
+            End Try
+            
+            ' Also set Title in Summary Information (title blocks often use this)
+            ' Title should be the description, not the part number
+            Try
+                Dim summaryProps = partDoc.PropertySets.Item("Inventor Summary Information")
+                Dim newTitle As String = If(Not String.IsNullOrEmpty(projectedDescription), projectedDescription, newPartNumber)
+                summaryProps.Item("Title").Value = newTitle
+            Catch ex As Exception
+            End Try
+            
+            partDoc.Save()
+            UtilsLib.LogInfo("Created standalone: " & System.IO.Path.GetFileName(targetPath))
+            
+            ' Close the target document (source will be closed at end of ExecuteRelease)
+            partDoc.Close(True)
+            
+            Return True
+            
+        Catch ex As Exception
+            UtilsLib.LogError("ERROR creating standalone from document: " & ex.Message)
             Return False
         End Try
     End Function
@@ -2042,7 +2157,8 @@ Public Module ElementReleaseLib
                                             referenceMap As Dictionary(Of String, String), _
                                             variantParams As Dictionary(Of String, String), _
                                             newPartNumber As String, _
-                                            Optional projectedDescription As String = Nothing) As Boolean
+                                            Optional projectedDescription As String = Nothing, _
+                                            Optional savedTransforms As Dictionary(Of String, Matrix) = Nothing) As Boolean
         Try
             System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(targetPath))
             
@@ -2071,12 +2187,28 @@ Public Module ElementReleaseLib
                 CollectAllOccurrences(asmDoc.ComponentDefinition.Occurrences, occsToProcess)
                 
                 UtilsLib.LogInfo("  Assembly has " & occsToProcess.Count & " component occurrences")
+                
+                ' Build set of target paths to detect already-replaced references
+                Dim targetPaths As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+                For Each kvp In referenceMap
+                    targetPaths.Add(kvp.Value)
+                Next
+                
+                ' Build reverse map: target path -> source path (for transform lookup)
+                Dim reverseMap As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
+                For Each kvp In referenceMap
+                    reverseMap(kvp.Value) = kvp.Key
+                Next
+                
                 For Each occ As ComponentOccurrence In occsToProcess
                     Try
                         Dim currentPath As String = occ.Definition.Document.FullFileName
                         If referenceMap.ContainsKey(currentPath) Then
                             occ.Replace(referenceMap(currentPath), True)
                             UtilsLib.LogInfo("    Replaced: " & System.IO.Path.GetFileName(currentPath) & " -> " & System.IO.Path.GetFileName(referenceMap(currentPath)))
+                        ElseIf targetPaths.Contains(currentPath) Then
+                            ' Already points to a target path (was auto-updated by Inventor after a previous Replace)
+                            UtilsLib.LogInfo("    Already target: " & System.IO.Path.GetFileName(currentPath))
                         Else
                             UtilsLib.LogWarn("    NOT IN MAP: " & currentPath)
                         End If
@@ -2084,6 +2216,51 @@ Public Module ElementReleaseLib
                         UtilsLib.LogWarn("    Replace failed: " & ex.Message)
                     End Try
                 Next
+                
+                ' Apply saved transforms if provided
+                ' This restores the correct positions that were captured when variant params were applied
+                If savedTransforms IsNot Nothing AndAlso savedTransforms.Count > 0 Then
+                    UtilsLib.LogInfo("  Applying saved occurrence transforms...")
+                    Dim appliedCount As Integer = 0
+                    For Each occ As ComponentOccurrence In occsToProcess
+                        Try
+                            Dim currentPath As String = occ.Definition.Document.FullFileName
+                            
+                            ' Try to find the transform using current path (if target) or original path
+                            Dim origPath As String = currentPath
+                            If reverseMap.ContainsKey(currentPath) Then
+                                origPath = reverseMap(currentPath)
+                            End If
+                            
+                            ' Key format: "occName|partPath"
+                            Dim key As String = occ.Name & "|" & origPath
+                            If savedTransforms.ContainsKey(key) Then
+                                occ.Transformation = savedTransforms(key)
+                                appliedCount += 1
+                            End If
+                        Catch
+                        End Try
+                    Next
+                    UtilsLib.LogInfo("    Applied " & appliedCount & "/" & occsToProcess.Count & " transforms")
+                End If
+                
+                ' CRITICAL: Force full assembly update to recalculate constraint positions
+                ' After reference replacements (or SaveAs-induced reference changes), the assembly's
+                ' constraint solver needs to recalculate all positions based on new part geometries.
+                ' Update2(True) forces a recursive update of all components and constraints.
+                Try
+                    UtilsLib.LogInfo("  Updating assembly constraints...")
+                    asmDoc.Update2(True)  ' True = rebuild all
+                    
+                    ' Also explicitly rebuild if needed
+                    Try
+                        asmDoc.ComponentDefinition.RepairComponents(True)  ' Attempt to repair/resolve any constraint issues
+                    Catch
+                        ' RepairComponents may not be available or applicable
+                    End Try
+                Catch ex As Exception
+                    UtilsLib.LogWarn("  Update warning: " & ex.Message)
+                End Try
                 
                 ' Apply variant parameters
                 If variantParams IsNot Nothing Then
@@ -2408,8 +2585,6 @@ Public Module ElementReleaseLib
     Public Function ExecuteRelease(app As Inventor.Application, context As ElementReleaseContext) As Boolean
         UtilsLib.LogInfo("ExecuteRelease: Starting...")
         
-        Dim masterSnapshot = SnapshotMasterParameters(app, context.MasterPaths)
-        
         Try
             If Not DEVELOPMENT_MODE Then
                 UtilsLib.LogInfo("ExecuteRelease: Production mode - would disconnect from Vault here")
@@ -2432,76 +2607,240 @@ Public Module ElementReleaseLib
                 End Try
             Next
             
-            UtilsLib.LogInfo("ExecuteRelease: Creating parts...")
+            ' Track which parts have been created (shared parts only created once)
             Dim processedParts As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
             
-            For Each file As PlannedFile In context.ReleasePlan.Files
-                If file.FileType <> FileType.Part Then Continue For
-                If file.IsExisting Then Continue For
-                
-                ' Safety check: Skip any OldVersions files that might have slipped through
-                If IsOldVersionsPath(file.SourcePath) OrElse IsOldVersionsPath(file.TargetLocalPath) Then
-                    UtilsLib.LogWarn("  Skipping OldVersions file: " & System.IO.Path.GetFileName(file.SourcePath))
-                    Continue For
-                End If
-                
-                ' Skip if already processed (e.g., shared parts used by multiple moodulid)
-                If processedParts.Contains(file.TargetLocalPath) Then Continue For
-                processedParts.Add(file.TargetLocalPath)
-                
-                ' Note: Parameters are applied during assembly creation, not part creation
-                ' Parts get their geometry from derivation, not from assembly parameters
-                Try
-                    ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.InProgress, _
-                        "Creating: " & System.IO.Path.GetFileName(file.TargetLocalPath))
-                Catch : End Try
-                
-                Dim partSuccess As Boolean = CreateStandalonePart(app, file.SourcePath, file.TargetLocalPath, file.VaultNumber, file.ProjectedDescription)
-                
-                Try
-                    If partSuccess Then
-                        ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Completed)
-                    Else
-                        ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Failed, _
-                            "FAILED: " & System.IO.Path.GetFileName(file.TargetLocalPath))
-                    End If
-                Catch : End Try
-            Next
-            
-            UtilsLib.LogInfo("ExecuteRelease: Creating assemblies...")
+            ' ============================================================
+            ' NEW ARCHITECTURE: Copy-First, Modify-Copies-Only
+            ' 
+            ' See docs/research/2026-05-13-element-release-failures.md
+            ' 
+            ' STAGE 1: Create file copies with correct references
+            '   - Copy masters, parts, assemblies to target locations
+            '   - Update references in copies: source files → copied files
+            '   - NO parameter changes yet
+            ' 
+            ' STAGE 2: Apply parameters to COPIES only
+            '   - Open copied master
+            '   - Apply variant parameters
+            '   - Update copied master and assembly
+            '   - Save all
+            ' 
+            ' Key principle: Source files are NEVER modified
+            ' ============================================================
             For Each variantCfg As ExcelReaderLib.ElementConfig In context.Elements
+                UtilsLib.LogInfo("ExecuteRelease: Processing variant '" & variantCfg.ElementName & "'...")
+                
+                ' Build reference map for this variant
                 Dim refMap = BuildReferenceMapForVariant(context, variantCfg.ElementName)
                 
+                ' ================================================================
+                ' STAGE 1: Create file copies (NO parameter changes)
+                ' ================================================================
+                UtilsLib.LogInfo("  STAGE 1: Creating file copies...")
+                
+                ' Step 1a: Copy masters first (they need to exist before parts can reference them)
+                UtilsLib.LogInfo("    Copying masters...")
+                Dim copiedMasters As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
                 For Each file As PlannedFile In context.ReleasePlan.Files
-                    If file.FileType = FileType.Assembly AndAlso file.ForVariants.Contains(variantCfg.ElementName) Then
-                        ' Safety check for OldVersions
-                        If IsOldVersionsPath(file.SourcePath) OrElse IsOldVersionsPath(file.TargetLocalPath) Then
-                            UtilsLib.LogWarn("  Skipping OldVersions file: " & System.IO.Path.GetFileName(file.SourcePath))
-                            Continue For
-                        End If
-                        Try
-                            ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.InProgress, _
-                                "Creating: " & System.IO.Path.GetFileName(file.TargetLocalPath))
-                        Catch : End Try
+                    If Not context.MasterPaths.Contains(file.SourcePath) Then Continue For
+                    If Not file.ForVariants.Contains(variantCfg.ElementName) Then Continue For
+                    If file.IsExisting Then Continue For
+                    If processedParts.Contains(file.TargetLocalPath) Then Continue For
+                    
+                    Try
+                        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file.TargetLocalPath))
                         
-                        Dim asmSuccess As Boolean = CreateAssemblySnapshot(app, file.SourcePath, file.TargetLocalPath, refMap, variantCfg.Parameters, file.VaultNumber, file.ProjectedDescription)
+                        ' Open source, SaveAs to target with new GUID
+                        Dim masterDoc As Document = app.Documents.Open(file.SourcePath, False)
+                        masterDoc.SaveAs(file.TargetLocalPath, False)
+                        
+                        ' Set properties on the copy
+                        SetDocumentProperties(masterDoc, file.VaultNumber, file.ProjectedDescription)
+                        masterDoc.Save()
+                        
+                        copiedMasters(file.SourcePath) = file.TargetLocalPath
+                        processedParts.Add(file.TargetLocalPath)
+                        UtilsLib.LogInfo("      Copied master: " & System.IO.Path.GetFileName(file.TargetLocalPath))
+                        
+                        masterDoc.Close(True)
                         
                         Try
-                            If asmSuccess Then
-                                ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Completed)
-                            Else
-                                ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Failed, _
-                                    "FAILED: " & System.IO.Path.GetFileName(file.TargetLocalPath))
-                            End If
+                            ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Completed)
                         Catch : End Try
+                    Catch ex As Exception
+                        UtilsLib.LogError("      Failed to copy master: " & ex.Message)
+                    End Try
+                Next
+                
+                ' Step 1b: Copy all parts and update their master references
+                UtilsLib.LogInfo("    Copying parts and updating master references...")
+                For Each file As PlannedFile In context.ReleasePlan.Files
+                    If file.FileType <> FileType.Part Then Continue For
+                    If context.MasterPaths.Contains(file.SourcePath) Then Continue For ' Skip masters
+                    If Not file.ForVariants.Contains(variantCfg.ElementName) Then Continue For
+                    If file.IsExisting Then Continue For
+                    If processedParts.Contains(file.TargetLocalPath) Then
+                        UtilsLib.LogInfo("      Already created: " & System.IO.Path.GetFileName(file.TargetLocalPath))
+                        Continue For
                     End If
+                    
+                    Try
+                        ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.InProgress)
+                    Catch : End Try
+                    
+                    Try
+                        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file.TargetLocalPath))
+                        
+                        ' Open source part
+                        Dim partDoc As PartDocument = CType(app.Documents.Open(file.SourcePath, False), PartDocument)
+                        
+                        ' SaveAs to target with new GUID
+                        partDoc.SaveAs(file.TargetLocalPath, False)
+                        UtilsLib.LogInfo("      Copied: " & System.IO.Path.GetFileName(file.TargetLocalPath))
+                        
+                        ' Update references: source master → copied master
+                        For Each refDesc As DocumentDescriptor In partDoc.ReferencedDocumentDescriptors
+                            Try
+                                Dim refPath As String = refDesc.ReferencedFileDescriptor.FullFileName
+                                If copiedMasters.ContainsKey(refPath) Then
+                                    refDesc.ReferencedFileDescriptor.ReplaceReference(copiedMasters(refPath))
+                                    UtilsLib.LogInfo("        Updated ref: " & System.IO.Path.GetFileName(refPath) & " -> " & System.IO.Path.GetFileName(copiedMasters(refPath)))
+                                ElseIf refMap.ContainsKey(refPath) Then
+                                    refDesc.ReferencedFileDescriptor.ReplaceReference(refMap(refPath))
+                                    UtilsLib.LogInfo("        Updated ref: " & System.IO.Path.GetFileName(refPath) & " -> " & System.IO.Path.GetFileName(refMap(refPath)))
+                                End If
+                            Catch ex As Exception
+                                UtilsLib.LogWarn("        Ref update failed: " & ex.Message)
+                            End Try
+                        Next
+                        
+                        ' Set properties on the copy
+                        SetDocumentProperties(partDoc, file.VaultNumber, file.ProjectedDescription)
+                        partDoc.Save()
+                        
+                        processedParts.Add(file.TargetLocalPath)
+                        partDoc.Close(True)
+                        
+                        Try
+                            ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Completed)
+                        Catch : End Try
+                    Catch ex As Exception
+                        UtilsLib.LogError("      Failed to copy part: " & ex.Message)
+                        Try
+                            ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Failed)
+                        Catch : End Try
+                    End Try
+                Next
+                
+                ' Step 1c: Copy assembly and update all part references
+                UtilsLib.LogInfo("    Copying assembly and updating part references...")
+                Dim copiedAsmPath As String = Nothing
+                For Each file As PlannedFile In context.ReleasePlan.Files
+                    If file.FileType <> FileType.Assembly Then Continue For
+                    If Not file.ForVariants.Contains(variantCfg.ElementName) Then Continue For
+                    If file.IsExisting Then Continue For
+                    
+                    Try
+                        ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.InProgress)
+                    Catch : End Try
+                    
+                    Try
+                        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file.TargetLocalPath))
+                        
+                        ' Open source assembly
+                        Dim asmDoc As AssemblyDocument = CType(app.Documents.Open(file.SourcePath, False), AssemblyDocument)
+                        
+                        ' SaveAs to target with new GUID
+                        asmDoc.SaveAs(file.TargetLocalPath, False)
+                        copiedAsmPath = file.TargetLocalPath
+                        UtilsLib.LogInfo("      Copied: " & System.IO.Path.GetFileName(file.TargetLocalPath))
+                        
+                        ' Replace all component references
+                        Dim allOccs As New List(Of ComponentOccurrence)
+                        CollectAllOccurrences(asmDoc.ComponentDefinition.Occurrences, allOccs)
+                        
+                        For Each occ As ComponentOccurrence In allOccs
+                            Try
+                                Dim currentPath As String = occ.Definition.Document.FullFileName
+                                If refMap.ContainsKey(currentPath) Then
+                                    occ.Replace(refMap(currentPath), True)
+                                    UtilsLib.LogInfo("        Replaced: " & System.IO.Path.GetFileName(currentPath) & " -> " & System.IO.Path.GetFileName(refMap(currentPath)))
+                                End If
+                            Catch ex As Exception
+                                UtilsLib.LogWarn("        Replace failed: " & ex.Message)
+                            End Try
+                        Next
+                        
+                        ' Set properties on the copy
+                        SetDocumentProperties(asmDoc, file.VaultNumber, file.ProjectedDescription)
+                        
+                        ' Rename occurrences
+                        Try
+                            OccurrenceNamingLib.RenameAllOccurrences(asmDoc)
+                        Catch : End Try
+                        
+                        asmDoc.Save()
+                        asmDoc.Close(True)
+                        
+                        Try
+                            ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Completed)
+                        Catch : End Try
+                    Catch ex As Exception
+                        UtilsLib.LogError("      Failed to copy assembly: " & ex.Message)
+                        Try
+                            ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Failed)
+                        Catch : End Try
+                    End Try
+                Next
+                
+                ' ================================================================
+                ' STAGE 2: Apply parameters to COPIES only
+                ' ================================================================
+                UtilsLib.LogInfo("  STAGE 2: Applying parameters to copies...")
+                
+                ' Open and update copied masters with variant parameters
+                For Each kvp In copiedMasters
+                    Try
+                        Dim masterDoc As Document = app.Documents.Open(kvp.Value, False)
+                        ApplyParameters(masterDoc, variantCfg.Parameters)
+                        masterDoc.Update()
+                        masterDoc.Save()
+                        UtilsLib.LogInfo("    Applied params and saved: " & System.IO.Path.GetFileName(kvp.Value))
+                        masterDoc.Close(True)
+                    Catch ex As Exception
+                        UtilsLib.LogError("    Failed to apply params to master: " & ex.Message)
+                    End Try
+                Next
+                
+                ' Open copied assembly and update (propagates through references)
+                If copiedAsmPath IsNot Nothing Then
+                    Try
+                        Dim asmDoc As AssemblyDocument = CType(app.Documents.Open(copiedAsmPath, True), AssemblyDocument)
+                        asmDoc.Update2(True)
+                        asmDoc.Save()
+                        UtilsLib.LogInfo("    Updated and saved assembly: " & System.IO.Path.GetFileName(copiedAsmPath))
+                        asmDoc.Close(True)
+                    Catch ex As Exception
+                        UtilsLib.LogError("    Failed to update assembly: " & ex.Message)
+                    End Try
+                End If
+                
+                ' Close all documents before next variant
+                UtilsLib.LogInfo("  Closing all documents...")
+                For i As Integer = app.Documents.Count To 1 Step -1
+                    Try
+                        app.Documents.Item(i).Close(True)
+                    Catch : End Try
                 Next
             Next
             
+            ' ============================================================
+            ' STAGE 3: Create drawings
+            ' ============================================================
             UtilsLib.LogInfo("ExecuteRelease: Creating drawings...")
             For Each file As PlannedFile In context.ReleasePlan.Files
                 If file.FileType = FileType.Drawing Then
-                    ' Safety check for OldVersions
                     If IsOldVersionsPath(file.SourcePath) OrElse IsOldVersionsPath(file.TargetLocalPath) Then
                         UtilsLib.LogWarn("  Skipping OldVersions file: " & System.IO.Path.GetFileName(file.SourcePath))
                         Continue For
@@ -2510,8 +2849,7 @@ Public Module ElementReleaseLib
                     Dim refMap = BuildReferenceMapForVariant(context, variantName)
                     
                     Try
-                        ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.InProgress, _
-                            "Creating: " & System.IO.Path.GetFileName(file.TargetLocalPath))
+                        ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.InProgress)
                     Catch : End Try
                     
                     Dim dwgSuccess As Boolean = CreateDrawingCopy(app, file.SourcePath, file.TargetLocalPath, refMap, file.VaultNumber, file.ProjectedDescription)
@@ -2520,13 +2858,13 @@ Public Module ElementReleaseLib
                         If dwgSuccess Then
                             ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Completed)
                         Else
-                            ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Failed, _
-                                "FAILED: " & System.IO.Path.GetFileName(file.TargetLocalPath))
+                            ElementReleaseUILib.UpdateFileStatus(file.TargetLocalPath, ElementReleaseUILib.FileStatus.Failed)
                         End If
                     Catch : End Try
                 End If
             Next
             
+            ' Old code removed - using new copy-first architecture above
             ' Close ALL documents to completely clear Inventor's caches
             UtilsLib.LogInfo("ExecuteRelease: Closing all documents to clear caches...")
             For i As Integer = app.Documents.Count To 1 Step -1
@@ -2666,16 +3004,31 @@ Public Module ElementReleaseLib
                 ElementReleaseUILib.LogMessage("Verifying created files...")
             Catch : End Try
             Dim verificationPassed As Boolean = VerifyReleasedFiles(app, context)
+
+            ' NOTE: In the new copy-first architecture, we never modify source masters
+            ' so there's nothing to restore. The masterSnapshot variable is unused.
             
             ' Reopen the original source assembly so user is back where they started
-            UtilsLib.LogInfo("ExecuteRelease: Reopening source assembly...")
+            UtilsLib.LogInfo("ExecuteRelease: Reopening documents...")
             Dim originalAssembly As String = context.AssemblyTree.RootAssemblyPath
             Try
                 app.Documents.Open(originalAssembly, True)
-                UtilsLib.LogInfo("  Reopened: " & System.IO.Path.GetFileName(originalAssembly))
+                UtilsLib.LogInfo("  Reopened source: " & System.IO.Path.GetFileName(originalAssembly))
             Catch ex As Exception
                 UtilsLib.LogWarn("  Failed to reopen " & originalAssembly & ": " & ex.Message)
             End Try
+            
+            ' Also open the released assemblies for each element so user can see the results
+            For Each file As PlannedFile In context.ReleasePlan.Files
+                If file.FileType = FileType.Assembly AndAlso Not file.IsExisting Then
+                    Try
+                        app.Documents.Open(file.TargetLocalPath, True)
+                        UtilsLib.LogInfo("  Opened released: " & System.IO.Path.GetFileName(file.TargetLocalPath))
+                    Catch ex As Exception
+                        UtilsLib.LogWarn("  Failed to open " & file.TargetLocalPath & ": " & ex.Message)
+                    End Try
+                End If
+            Next
             
             If verificationPassed Then
                 UtilsLib.LogInfo("ExecuteRelease: Complete - all verifications passed!")
