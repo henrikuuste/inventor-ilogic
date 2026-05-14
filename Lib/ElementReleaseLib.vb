@@ -98,6 +98,9 @@ Public Module ElementReleaseLib
         Public MasterDependencies As New Dictionary(Of String, List(Of String))(StringComparer.OrdinalIgnoreCase)
         Public IntermediateAssemblies As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
         Public ProjectedGeometryChains As New List(Of Tuple(Of String, String, String)) ' (SourcePart, ViaAssembly, TargetPart)
+        
+        ' Assembly state snapshot (visibility, suppression) captured at start
+        Public SourceAssemblyState As AssemblyStateSnapshot
     End Class
     
     ''' <summary>
@@ -129,6 +132,26 @@ Public Module ElementReleaseLib
         Public DrawingPath As String
         Public RelativePath As String
         Public ReferencedModelPaths As New List(Of String)
+    End Class
+    
+    ''' <summary>
+    ''' Snapshot of assembly occurrence states (visibility, suppression).
+    ''' Used to preserve and restore states across the release process.
+    ''' </summary>
+    Public Class AssemblyStateSnapshot
+        Public AssemblyPath As String
+        Public OccurrenceStates As New Dictionary(Of String, OccurrenceState)(StringComparer.OrdinalIgnoreCase)
+        Public ActiveDesignViewRep As String
+        Public ActiveModelState As String
+    End Class
+    
+    ''' <summary>
+    ''' State of a single occurrence in an assembly.
+    ''' </summary>
+    Public Class OccurrenceState
+        Public OccurrenceName As String
+        Public Visible As Boolean
+        Public Suppressed As Boolean
     End Class
     
     ''' <summary>
@@ -509,6 +532,11 @@ Public Module ElementReleaseLib
                 .FilePath = rootAsmPath,
                 .RelativePath = GetRelativePath(sourceRoot, rootAsmPath)
             })
+            
+            ' CRITICAL: Capture visibility/suppression states BEFORE any Update() calls
+            ' Update() can trigger iLogic rules that change these states
+            UtilsLib.LogInfo("DiscoverAssemblyTree: Capturing assembly state before updates...")
+            tree.SourceAssemblyState = CaptureAssemblyState(asmDoc)
             
             ' Force update to ensure all references are resolved
             Try
@@ -1489,11 +1517,27 @@ Public Module ElementReleaseLib
                     
                     ' Find the dependent master occurrence (matches test script - full path match)
                     Dim dependentOcc As ComponentOccurrence = Nothing
+                    Dim targetFileName As String = System.IO.Path.GetFileName(pair.Item1)
+                    UtilsLib.LogInfo("    Looking for: " & targetFileName)
+                    
                     For Each kvp2 In occByName
                         Try
-                            If kvp2.Value.Definition.Document.FullFileName.Equals(pair.Item1, StringComparison.OrdinalIgnoreCase) Then
+                            Dim occPath As String = kvp2.Value.Definition.Document.FullFileName
+                            Dim occFileName As String = System.IO.Path.GetFileName(occPath)
+                            
+                            ' Log first few occurrences for debugging
+                            If dependentOcc Is Nothing Then
+                                UtilsLib.LogInfo("      Occ: " & kvp2.Key & " -> " & occFileName)
+                            End If
+                            
+                            ' Match by full path first, then by filename if needed
+                            If occPath.Equals(pair.Item1, StringComparison.OrdinalIgnoreCase) Then
                                 dependentOcc = kvp2.Value
-                                UtilsLib.LogInfo("    Found dependent occurrence: " & kvp2.Key)
+                                UtilsLib.LogInfo("    Found dependent occurrence (full path): " & kvp2.Key)
+                                Exit For
+                            ElseIf occFileName.Equals(targetFileName, StringComparison.OrdinalIgnoreCase) Then
+                                dependentOcc = kvp2.Value
+                                UtilsLib.LogInfo("    Found dependent occurrence (filename): " & kvp2.Key)
                                 Exit For
                             End If
                         Catch : End Try
@@ -1894,6 +1938,170 @@ Public Module ElementReleaseLib
     End Sub
     
     ''' <summary>
+    ''' Capture visibility and suppression states of all occurrences in an assembly.
+    ''' Also captures active design view representation and model state.
+    ''' </summary>
+    Public Function CaptureAssemblyState(asmDoc As AssemblyDocument) As AssemblyStateSnapshot
+        Dim snapshot As New AssemblyStateSnapshot()
+        snapshot.AssemblyPath = asmDoc.FullFileName
+        
+        Try
+            ' Capture active design view representation
+            Try
+                snapshot.ActiveDesignViewRep = asmDoc.ComponentDefinition.RepresentationsManager.ActiveDesignViewRepresentation.Name
+            Catch
+                snapshot.ActiveDesignViewRep = ""
+            End Try
+            
+            ' Capture active model state (Level of Detail)
+            Try
+                snapshot.ActiveModelState = asmDoc.ComponentDefinition.RepresentationsManager.ActiveLevelOfDetailRepresentation.Name
+            Catch
+                snapshot.ActiveModelState = ""
+            End Try
+            
+            ' Capture occurrence states
+            For Each occ As ComponentOccurrence In asmDoc.ComponentDefinition.Occurrences
+                Try
+                    CaptureOccurrenceStateRecursive(occ, snapshot.OccurrenceStates)
+                Catch
+                End Try
+            Next
+            
+            UtilsLib.LogInfo("CaptureAssemblyState: Captured " & snapshot.OccurrenceStates.Count & " occurrence states from " & System.IO.Path.GetFileName(asmDoc.FullFileName))
+            If Not String.IsNullOrEmpty(snapshot.ActiveDesignViewRep) Then
+                UtilsLib.LogInfo("  Design View: " & snapshot.ActiveDesignViewRep)
+            End If
+            If Not String.IsNullOrEmpty(snapshot.ActiveModelState) Then
+                UtilsLib.LogInfo("  Model State: " & snapshot.ActiveModelState)
+            End If
+        Catch ex As Exception
+            UtilsLib.LogWarn("CaptureAssemblyState: Error - " & ex.Message)
+        End Try
+        
+        Return snapshot
+    End Function
+    
+    ''' <summary>
+    ''' Recursively capture occurrence state including sub-occurrences.
+    ''' </summary>
+    Private Sub CaptureOccurrenceStateRecursive(occ As ComponentOccurrence, states As Dictionary(Of String, OccurrenceState))
+        Try
+            Dim state As New OccurrenceState()
+            state.OccurrenceName = occ.Name
+            state.Visible = occ.Visible
+            state.Suppressed = occ.Suppressed
+            states(occ.Name) = state
+            
+            ' Recurse into sub-assemblies
+            If occ.DefinitionDocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
+                Try
+                    For Each subOcc As ComponentOccurrence In occ.SubOccurrences
+                        CaptureOccurrenceStateRecursive(subOcc, states)
+                    Next
+                Catch
+                End Try
+            End If
+        Catch
+        End Try
+    End Sub
+    
+    ''' <summary>
+    ''' Apply visibility and suppression states from a snapshot to an assembly.
+    ''' Works on both source assemblies and copies.
+    ''' </summary>
+    Public Sub ApplyAssemblyState(app As Inventor.Application, asmDoc As AssemblyDocument, snapshot As AssemblyStateSnapshot)
+        If snapshot Is Nothing OrElse snapshot.OccurrenceStates.Count = 0 Then Return
+        
+        Dim appliedCount As Integer = 0
+        Dim failedCount As Integer = 0
+        
+        Try
+            ' Apply design view representation
+            If Not String.IsNullOrEmpty(snapshot.ActiveDesignViewRep) Then
+                Try
+                    Dim dvReps = asmDoc.ComponentDefinition.RepresentationsManager.DesignViewRepresentations
+                    For Each dvRep As DesignViewRepresentation In dvReps
+                        If dvRep.Name.Equals(snapshot.ActiveDesignViewRep, StringComparison.OrdinalIgnoreCase) Then
+                            dvRep.Activate()
+                            Exit For
+                        End If
+                    Next
+                Catch
+                End Try
+            End If
+            
+            ' Apply model state (Level of Detail)
+            If Not String.IsNullOrEmpty(snapshot.ActiveModelState) Then
+                Try
+                    Dim lodReps = asmDoc.ComponentDefinition.RepresentationsManager.LevelOfDetailRepresentations
+                    For Each lodRep As LevelOfDetailRepresentation In lodReps
+                        If lodRep.Name.Equals(snapshot.ActiveModelState, StringComparison.OrdinalIgnoreCase) Then
+                            lodRep.Activate()
+                            Exit For
+                        End If
+                    Next
+                Catch
+                End Try
+            End If
+            
+            ' Apply occurrence states
+            For Each occ As ComponentOccurrence In asmDoc.ComponentDefinition.Occurrences
+                Try
+                    ApplyOccurrenceStateRecursive(occ, snapshot.OccurrenceStates, appliedCount, failedCount)
+                Catch
+                End Try
+            Next
+            
+            UtilsLib.LogInfo("ApplyAssemblyState: Applied " & appliedCount & " states to " & System.IO.Path.GetFileName(asmDoc.FullFileName) & " (" & failedCount & " not found)")
+        Catch ex As Exception
+            UtilsLib.LogWarn("ApplyAssemblyState: Error - " & ex.Message)
+        End Try
+    End Sub
+    
+    ''' <summary>
+    ''' Recursively apply occurrence state including sub-occurrences.
+    ''' </summary>
+    Private Sub ApplyOccurrenceStateRecursive(occ As ComponentOccurrence, states As Dictionary(Of String, OccurrenceState), ByRef appliedCount As Integer, ByRef failedCount As Integer)
+        Try
+            If states.ContainsKey(occ.Name) Then
+                Dim state As OccurrenceState = states(occ.Name)
+                Try
+                    ' Apply suppression first (can't change visibility if suppressed)
+                    ' Note: Suppressed is read-only, must use Suppress()/Unsuppress() methods
+                    If occ.Suppressed <> state.Suppressed Then
+                        If state.Suppressed Then
+                            occ.Suppress()
+                        Else
+                            occ.Unsuppress()
+                        End If
+                    End If
+                    ' Apply visibility (only if not suppressed)
+                    If Not occ.Suppressed AndAlso occ.Visible <> state.Visible Then
+                        occ.Visible = state.Visible
+                    End If
+                    appliedCount += 1
+                Catch
+                    failedCount += 1
+                End Try
+            Else
+                failedCount += 1
+            End If
+            
+            ' Recurse into sub-assemblies
+            If occ.DefinitionDocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
+                Try
+                    For Each subOcc As ComponentOccurrence In occ.SubOccurrences
+                        ApplyOccurrenceStateRecursive(subOcc, states, appliedCount, failedCount)
+                    Next
+                Catch
+                End Try
+            End If
+        Catch
+        End Try
+    End Sub
+    
+    ''' <summary>
     ''' Set document properties (Part Number, Description, Title).
     ''' </summary>
     Public Sub SetDocumentProperties(doc As Document, partNumber As String, Optional description As String = Nothing)
@@ -1984,10 +2192,121 @@ Public Module ElementReleaseLib
         Next
     End Sub
     
+    ' ============================================================================
+    ' Shared File Copy Helpers (used by both fingerprinting and release)
+    ' ============================================================================
+    ' These functions copy files using the same approach as ExecuteRelease:
+    ' - SaveAs to create new file with new GUID
+    ' - Update references using ReferencedDocumentDescriptors
+    ' - For assemblies, use occ.Replace() for occurrence references
+    
+    ''' <summary>
+    ''' Copy a document using SaveAs and update its references.
+    ''' This is the same approach used by ExecuteRelease.
+    ''' Returns the copied document (still open).
+    ''' </summary>
+    Public Function CopyDocumentWithReferences(app As Inventor.Application, _
+                                                sourcePath As String, _
+                                                targetPath As String, _
+                                                refMap As Dictionary(Of String, String)) As Document
+        ' Create target directory
+        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(targetPath))
+        
+        ' Open source and SaveAs to target (creates new GUID)
+        Dim doc As Document = app.Documents.Open(sourcePath, False)
+        doc.SaveAs(targetPath, False)
+        
+        ' Update references using the reference map
+        UpdateDocumentReferences(doc, refMap)
+        
+        Return doc
+    End Function
+    
+    ''' <summary>
+    ''' Update all references in a document using the reference map.
+    ''' Handles both ReferencedDocumentDescriptors and ComponentOccurrence references.
+    ''' This is the same logic used by ExecuteRelease.
+    ''' </summary>
+    Public Sub UpdateDocumentReferences(doc As Document, refMap As Dictionary(Of String, String))
+        ' Update ReferencedDocumentDescriptors (for derived parts and other references)
+        Try
+            For Each refDesc As DocumentDescriptor In doc.ReferencedDocumentDescriptors
+                Try
+                    Dim refPath As String = refDesc.ReferencedFileDescriptor.FullFileName
+                    If refMap.ContainsKey(refPath) Then
+                        refDesc.ReferencedFileDescriptor.ReplaceReference(refMap(refPath))
+                    End If
+                Catch : End Try
+            Next
+        Catch : End Try
+        
+        ' For assemblies, also replace component occurrences
+        If doc.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
+            Dim asmDoc As AssemblyDocument = CType(doc, AssemblyDocument)
+            Dim allOccs As New List(Of ComponentOccurrence)
+            CollectAllOccurrences(asmDoc.ComponentDefinition.Occurrences, allOccs)
+            
+            For Each occ As ComponentOccurrence In allOccs
+                Try
+                    Dim currentPath As String = occ.Definition.Document.FullFileName
+                    If refMap.ContainsKey(currentPath) Then
+                        occ.Replace(refMap(currentPath), True)
+                    End If
+                Catch : End Try
+            Next
+        End If
+    End Sub
+    
+    ''' <summary>
+    ''' Clean up temporary analysis folder.
+    ''' Closes any open temp documents and deletes the folder.
+    ''' </summary>
+    Public Sub CleanupTempAnalysisFolder(app As Inventor.Application, tempRoot As String)
+        If String.IsNullOrEmpty(tempRoot) OrElse Not System.IO.Directory.Exists(tempRoot) Then
+            Return
+        End If
+        
+        UtilsLib.LogInfo("CleanupTempAnalysisFolder: Cleaning up " & tempRoot)
+        
+        ' Close any documents from the temp folder
+        Dim closedCount As Integer = 0
+        Dim docsToClose As New List(Of Document)
+        
+        For Each doc As Document In app.Documents
+            Try
+                If doc.FullFileName.StartsWith(tempRoot, StringComparison.OrdinalIgnoreCase) Then
+                    docsToClose.Add(doc)
+                End If
+            Catch : End Try
+        Next
+        
+        For Each doc In docsToClose
+            Try
+                doc.Close(True)
+                closedCount += 1
+            Catch : End Try
+        Next
+        
+        ' Delete the temp folder
+        Try
+            System.IO.Directory.Delete(tempRoot, True)
+            UtilsLib.LogInfo("CleanupTempAnalysisFolder: Deleted temp folder, closed " & closedCount & " documents")
+        Catch ex As Exception
+            UtilsLib.LogWarn("CleanupTempAnalysisFolder: Failed to delete " & tempRoot & ": " & ex.Message)
+        End Try
+    End Sub
+    
+    ' ============================================================================
+    ' Safe Fingerprint Analysis via Temporary Copies
+    ' ============================================================================
+    ' Uses the same copy approach as ExecuteRelease (SaveAs + reference updates)
+    ' but copies ALL files to temp folder for fingerprint analysis.
+    ' Source files are NEVER modified.
+    
     ''' <summary>
     ''' Build variant matrix with fingerprints for all parts across all variants.
-    ''' This actually applies parameters and measures geometry changes to determine
-    ''' which parts are shared (same geometry) vs element-specific (geometry changes).
+    ''' Uses TEMPORARY COPIES created with the same approach as ExecuteRelease.
+    ''' This makes the process safe for read-only files, Vault-managed files, and crash-resistant.
     ''' </summary>
     Public Function BuildElementMatrix(app As Inventor.Application, _
                                         tree As AssemblyTree, _
@@ -2000,7 +2319,7 @@ Public Module ElementReleaseLib
             matrix.ElementNames.Add(vc.ElementName)
         Next
         
-        UtilsLib.LogInfo("BuildElementMatrix: Starting fingerprint analysis")
+        UtilsLib.LogInfo("BuildElementMatrix: Starting SAFE fingerprint analysis (using temp copies)")
         UtilsLib.LogInfo("  Parts to analyze: " & matrix.PartPaths.Count)
         UtilsLib.LogInfo("  Elements to test: " & variants.Count)
         UtilsLib.LogInfo("  Master documents: " & masterPaths.Count)
@@ -2008,146 +2327,212 @@ Public Module ElementReleaseLib
             UtilsLib.LogInfo("    - " & System.IO.Path.GetFileName(mp))
         Next
         
-        ' Step 1: Ensure all parts are loaded (open if not)
-        UtilsLib.LogInfo("  Step 1: Ensuring all parts are loaded...")
-        Dim loadedParts As New Dictionary(Of String, PartDocument)(StringComparer.OrdinalIgnoreCase)
-        Dim partsWeOpened As New List(Of String)
+        ' Create unique temp folder
+        Dim tempRoot As String = System.IO.Path.Combine( _
+            System.IO.Path.GetTempPath(), _
+            "ElementReleaseAnalysis", _
+            Guid.NewGuid().ToString())
+        System.IO.Directory.CreateDirectory(tempRoot)
+        UtilsLib.LogInfo("  Temp folder: " & tempRoot)
         
-        For Each partPath In matrix.PartPaths
-            Dim partDoc As PartDocument = Nothing
-            
-            ' Check if already open
-            For Each d As Document In app.Documents
-                If d.FullFileName.Equals(partPath, StringComparison.OrdinalIgnoreCase) Then
-                    If d.DocumentType = DocumentTypeEnum.kPartDocumentObject Then
-                        partDoc = CType(d, PartDocument)
-                    End If
-                    Exit For
-                End If
-            Next
-            
-            ' Open if not loaded
-            If partDoc Is Nothing Then
-                Try
-                    UtilsLib.LogInfo("    Opening: " & System.IO.Path.GetFileName(partPath))
-                    partDoc = CType(app.Documents.Open(partPath, True), PartDocument)
-                    partsWeOpened.Add(partPath)
-                Catch ex As Exception
-                    UtilsLib.LogWarn("    Failed to open: " & System.IO.Path.GetFileName(partPath) & " - " & ex.Message)
-                End Try
-            End If
-            
-            If partDoc IsNot Nothing Then
-                loadedParts(partPath) = partDoc
-            End If
+        ' Build path map: source path -> temp path
+        Dim pathMap As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
+        
+        ' Collect ALL files to copy (no shared/unique distinction - we don't have fingerprints yet)
+        Dim filesToCopy As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        filesToCopy.Add(tree.RootAssemblyPath)
+        For Each partPath In tree.Parts.Keys
+            filesToCopy.Add(partPath)
         Next
-        UtilsLib.LogInfo("  Loaded " & loadedParts.Count & " of " & matrix.PartPaths.Count & " parts")
+        For Each masterPath In masterPaths
+            filesToCopy.Add(masterPath)
+        Next
+        For Each kvp In tree.ExternalMasters
+            filesToCopy.Add(kvp.Key)
+        Next
+        For Each intAsm In tree.IntermediateAssemblies
+            filesToCopy.Add(intAsm)
+        Next
         
-        ' Step 2: Snapshot current master parameters
-        UtilsLib.LogInfo("  Step 2: Snapshotting master parameters...")
-        Dim snapshot = SnapshotMasterParameters(app, masterPaths)
+        ' Generate temp paths (use hash-based subfolders to avoid name collisions)
+        For Each sourcePath In filesToCopy
+            Dim sourceDir As String = System.IO.Path.GetDirectoryName(sourcePath)
+            Dim sourceDirHash As String = Math.Abs(sourceDir.GetHashCode()).ToString()
+            Dim targetDir As String = System.IO.Path.Combine(tempRoot, sourceDirHash)
+            Dim fileName As String = System.IO.Path.GetFileName(sourcePath)
+            Dim targetPath As String = System.IO.Path.Combine(targetDir, fileName)
+            pathMap(sourcePath) = targetPath
+        Next
         
         Try
-            ' Step 3: For each element, apply parameters and compute fingerprints
-            For Each variantCfg As ExcelReaderLib.ElementConfig In variants
-                UtilsLib.LogInfo("  Step 3: Analyzing element '" & variantCfg.ElementName & "'")
+            ' ================================================================
+            ' STAGE 1: Create file copies (same approach as ExecuteRelease)
+            ' ================================================================
+            UtilsLib.LogInfo("  STAGE 1: Creating temp file copies...")
+            
+            ' Track copied files for reference updates
+            Dim copiedFiles As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
+            
+            ' Step 1a: Copy masters in DEPENDENCY ORDER (roots first, then dependents)
+            ' This is the same order as ExecuteRelease
+            UtilsLib.LogInfo("    Copying masters in dependency order...")
+            For Each masterPath In masterPaths
+                If Not pathMap.ContainsKey(masterPath) Then Continue For
+                Dim targetPath As String = pathMap(masterPath)
                 
-                ' Log the parameters being applied
-                For Each kvp In variantCfg.Parameters
-                    UtilsLib.LogInfo("    Parameter: " & kvp.Key & " = " & kvp.Value)
-                Next
+                Try
+                    Dim masterDoc As Document = CopyDocumentWithReferences(app, masterPath, targetPath, copiedFiles)
+                    masterDoc.Save()
+                    copiedFiles(masterPath) = targetPath
+                    UtilsLib.LogInfo("      Copied master: " & System.IO.Path.GetFileName(masterPath))
+                    masterDoc.Close(True)
+                Catch ex As Exception
+                    UtilsLib.LogWarn("      Failed to copy master: " & System.IO.Path.GetFileName(masterPath) & " - " & ex.Message)
+                End Try
+            Next
+            
+            ' Step 1b: Copy intermediate assemblies (they reference masters)
+            UtilsLib.LogInfo("    Copying intermediate assemblies...")
+            For Each intAsmPath In tree.IntermediateAssemblies
+                If Not pathMap.ContainsKey(intAsmPath) Then Continue For
+                If copiedFiles.ContainsKey(intAsmPath) Then Continue For ' Already copied as master
+                Dim targetPath As String = pathMap(intAsmPath)
                 
-                ' Apply parameters to all masters
-                For Each masterPath In masterPaths
-                    Dim doc As Document = Nothing
-                    For Each d As Document In app.Documents
-                        If d.FullFileName.Equals(masterPath, StringComparison.OrdinalIgnoreCase) Then
-                            doc = d
-                            Exit For
+                Try
+                    Dim intAsmDoc As Document = CopyDocumentWithReferences(app, intAsmPath, targetPath, copiedFiles)
+                    intAsmDoc.Save()
+                    copiedFiles(intAsmPath) = targetPath
+                    UtilsLib.LogInfo("      Copied intermediate: " & System.IO.Path.GetFileName(intAsmPath))
+                    intAsmDoc.Close(True)
+                Catch ex As Exception
+                    UtilsLib.LogWarn("      Failed to copy intermediate: " & System.IO.Path.GetFileName(intAsmPath) & " - " & ex.Message)
+                End Try
+            Next
+            
+            ' Step 1c: Copy all parts and update their references to masters
+            UtilsLib.LogInfo("    Copying parts...")
+            For Each partPath In tree.Parts.Keys
+                If Not pathMap.ContainsKey(partPath) Then Continue For
+                If copiedFiles.ContainsKey(partPath) Then Continue For ' Already copied as master
+                Dim targetPath As String = pathMap(partPath)
+                
+                Try
+                    Dim partDoc As Document = CopyDocumentWithReferences(app, partPath, targetPath, copiedFiles)
+                    partDoc.Save()
+                    copiedFiles(partPath) = targetPath
+                    partDoc.Close(True)
+                Catch ex As Exception
+                    UtilsLib.LogWarn("      Failed to copy part: " & System.IO.Path.GetFileName(partPath) & " - " & ex.Message)
+                End Try
+            Next
+            UtilsLib.LogInfo("      Copied " & (copiedFiles.Count - masterPaths.Count - tree.IntermediateAssemblies.Count) & " parts")
+            
+            ' Step 1d: Copy main assembly and update all references
+            UtilsLib.LogInfo("    Copying main assembly...")
+            Dim tempAsmPath As String = pathMap(tree.RootAssemblyPath)
+            Dim tempAsmDoc As AssemblyDocument = Nothing
+            
+            Try
+                tempAsmDoc = CType(CopyDocumentWithReferences(app, tree.RootAssemblyPath, tempAsmPath, copiedFiles), AssemblyDocument)
+                tempAsmDoc.Save()
+                copiedFiles(tree.RootAssemblyPath) = tempAsmPath
+                UtilsLib.LogInfo("      Copied assembly: " & System.IO.Path.GetFileName(tree.RootAssemblyPath))
+            Catch ex As Exception
+                UtilsLib.LogError("      Failed to copy assembly: " & ex.Message)
+                Throw
+            End Try
+            
+            ' ================================================================
+            ' STAGE 2: Apply parameters and compute fingerprints
+            ' ================================================================
+            UtilsLib.LogInfo("  STAGE 2: Analyzing variants...")
+            
+            ' Open the temp assembly visibly for analysis
+            tempAsmDoc = CType(app.Documents.Open(tempAsmPath, True), AssemblyDocument)
+            
+            ' Build map of original part paths to temp part documents
+            Dim tempParts As New Dictionary(Of String, PartDocument)(StringComparer.OrdinalIgnoreCase)
+            For Each originalPartPath In matrix.PartPaths
+                If copiedFiles.ContainsKey(originalPartPath) Then
+                    Dim tempPartPath As String = copiedFiles(originalPartPath)
+                    Try
+                        ' Check if already open
+                        Dim tempPartDoc As PartDocument = Nothing
+                        For Each d As Document In app.Documents
+                            If d.FullFileName.Equals(tempPartPath, StringComparison.OrdinalIgnoreCase) Then
+                                If d.DocumentType = DocumentTypeEnum.kPartDocumentObject Then
+                                    tempPartDoc = CType(d, PartDocument)
+                                End If
+                                Exit For
+                            End If
+                        Next
+                        If tempPartDoc Is Nothing Then
+                            tempPartDoc = CType(app.Documents.Open(tempPartPath, False), PartDocument)
                         End If
-                    Next
-                    
-                    If doc IsNot Nothing Then
-                        UtilsLib.LogInfo("    Applying parameters to: " & System.IO.Path.GetFileName(masterPath))
-                        ApplyParameters(doc, variantCfg.Parameters)
-                        ' Update master immediately after parameter change
-                        Try
-                            doc.Update()
-                            UtilsLib.LogInfo("    Updated master: " & System.IO.Path.GetFileName(masterPath))
-                        Catch ex As Exception
-                            UtilsLib.LogWarn("    Failed to update master: " & ex.Message)
-                        End Try
-                    Else
-                        UtilsLib.LogWarn("    Master not loaded: " & System.IO.Path.GetFileName(masterPath))
+                        tempParts(originalPartPath) = tempPartDoc
+                    Catch : End Try
+                End If
+            Next
+            UtilsLib.LogInfo("    Loaded " & tempParts.Count & " temp parts for analysis")
+            
+            ' Process each variant
+            For Each variantCfg As ExcelReaderLib.ElementConfig In variants
+                UtilsLib.LogInfo("    Analyzing element '" & variantCfg.ElementName & "'")
+                
+                ' Apply parameters to temp masters (same as ExecuteRelease STAGE 2)
+                For Each masterPath In masterPaths
+                    If copiedFiles.ContainsKey(masterPath) Then
+                        Dim tempMasterPath As String = copiedFiles(masterPath)
+                        Dim tempDoc As Document = Nothing
+                        
+                        ' Find or open temp master
+                        For Each d As Document In app.Documents
+                            If d.FullFileName.Equals(tempMasterPath, StringComparison.OrdinalIgnoreCase) Then
+                                tempDoc = d
+                                Exit For
+                            End If
+                        Next
+                        If tempDoc Is Nothing Then
+                            Try
+                                tempDoc = app.Documents.Open(tempMasterPath, False)
+                            Catch : End Try
+                        End If
+                        
+                        If tempDoc IsNot Nothing Then
+                            ApplyParameters(tempDoc, variantCfg.Parameters)
+                            tempDoc.Update()
+                            tempDoc.Save()
+                        End If
                     End If
                 Next
                 
-                ' Update the entire assembly tree to propagate changes
-                UtilsLib.LogInfo("    Updating assembly to propagate parameter changes...")
-                Try
-                    ' Update the active document (main assembly)
-                    app.ActiveDocument.Update()
-                    
-                    ' Also update each part individually to ensure derived geometry updates
-                    For Each kvp In loadedParts
-                        Try
-                            kvp.Value.Update()
-                        Catch
-                        End Try
-                    Next
-                Catch ex As Exception
-                    UtilsLib.LogWarn("    Update warning: " & ex.Message)
-                End Try
+                ' Update temp assembly to propagate changes (same as ExecuteRelease)
+                tempAsmDoc.Update2(True)
+                tempAsmDoc.Save()
                 
-                ' Compute fingerprints for all parts with this parameter configuration
+                ' Compute fingerprints for all parts
                 Dim variantFps As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
-                UtilsLib.LogInfo("    Computing fingerprints...")
-                
-                For Each partPath In matrix.PartPaths
+                For Each originalPartPath In matrix.PartPaths
                     Dim fp As String
-                    
-                    If loadedParts.ContainsKey(partPath) Then
-                        Dim partDoc As PartDocument = loadedParts(partPath)
-                        fp = ComputeGeometryFingerprint(partDoc)
-                        UtilsLib.LogInfo("      " & System.IO.Path.GetFileName(partPath) & ": " & fp)
+                    If tempParts.ContainsKey(originalPartPath) Then
+                        fp = ComputeGeometryFingerprint(tempParts(originalPartPath))
+                        UtilsLib.LogInfo("      " & System.IO.Path.GetFileName(originalPartPath) & ": " & fp)
                     Else
                         fp = "NOT_LOADED"
-                        UtilsLib.LogWarn("      " & System.IO.Path.GetFileName(partPath) & ": NOT_LOADED")
+                        UtilsLib.LogWarn("      " & System.IO.Path.GetFileName(originalPartPath) & ": NOT_LOADED")
                     End If
-                    
-                    variantFps(partPath) = fp
+                    variantFps(originalPartPath) = fp
                 Next
                 
                 matrix.Fingerprints.Add(variantCfg.ElementName, variantFps)
             Next
         Finally
-            ' Step 4: Restore original master parameters
-            UtilsLib.LogInfo("  Step 4: Restoring original master parameters...")
-            RestoreMasterParameters(app, snapshot)
-            Try
-                app.ActiveDocument.Update()
-                For Each kvp In loadedParts
-                    Try
-                        kvp.Value.Update()
-                    Catch
-                    End Try
-                Next
-            Catch
-            End Try
-            
-            ' Close parts we opened (only those we opened, not pre-existing)
-            UtilsLib.LogInfo("  Step 5: Closing parts we opened...")
-            For Each partPath In partsWeOpened
-                Try
-                    If loadedParts.ContainsKey(partPath) Then
-                        loadedParts(partPath).Close(True) ' Close without saving
-                    End If
-                Catch
-                End Try
-            Next
+            ' Cleanup - close temp documents and delete temp folder
+            UtilsLib.LogInfo("  Cleaning up temp files...")
+            CleanupTempAnalysisFolder(app, tempRoot)
         End Try
         
-        ' Step 5: Log fingerprint comparison summary
+        ' Log fingerprint comparison summary
         UtilsLib.LogInfo("BuildElementMatrix: Fingerprint comparison summary:")
         For Each partPath In matrix.PartPaths
             Dim fps As New HashSet(Of String)
@@ -2164,6 +2549,7 @@ Public Module ElementReleaseLib
         Next
         
         UtilsLib.LogInfo("BuildElementMatrix: Complete - " & matrix.PartPaths.Count & " parts x " & matrix.ElementNames.Count & " elements")
+        UtilsLib.LogInfo("  Source files were NOT modified during analysis")
         Return matrix
     End Function
     
@@ -4251,24 +4637,54 @@ Public Module ElementReleaseLib
             ' Reopen the original source assembly so user is back where they started
             UtilsLib.LogInfo("ExecuteRelease: Reopening documents...")
             Dim originalAssembly As String = context.AssemblyTree.RootAssemblyPath
+            Dim sourceAsmDoc As AssemblyDocument = Nothing
             Try
-                app.Documents.Open(originalAssembly, True)
+                sourceAsmDoc = CType(app.Documents.Open(originalAssembly, True), AssemblyDocument)
                 UtilsLib.LogInfo("  Reopened source: " & System.IO.Path.GetFileName(originalAssembly))
+                
+                ' CRITICAL: Restore visibility/suppression states to source assembly
+                ' These may have been changed by Update() calls during fingerprinting
+                If context.AssemblyTree.SourceAssemblyState IsNot Nothing Then
+                    UtilsLib.LogInfo("  Restoring source assembly state...")
+                    ApplyAssemblyState(app, sourceAsmDoc, context.AssemblyTree.SourceAssemblyState)
+                    sourceAsmDoc.Save()
+                    UtilsLib.LogInfo("  Source assembly state restored and saved")
+                End If
             Catch ex As Exception
                 UtilsLib.LogWarn("  Failed to reopen " & originalAssembly & ": " & ex.Message)
             End Try
             
-            ' Also open the released assemblies for each element so user can see the results
+            ' Open only the MAIN released assembly for each element (not all assemblies)
+            ' The main assembly is the one that was copied FROM the root assembly, not intermediate assemblies
+            ' Also apply the same visibility/suppression states from the source
+            UtilsLib.LogInfo("  Looking for assemblies copied from: " & originalAssembly)
+            
+            Dim releasedAsmCount As Integer = 0
             For Each file As PlannedFile In context.ReleasePlan.Files
                 If file.FileType = FileType.Assembly AndAlso Not file.IsExisting Then
-                    Try
-                        app.Documents.Open(file.TargetLocalPath, True)
-                        UtilsLib.LogInfo("  Opened released: " & System.IO.Path.GetFileName(file.TargetLocalPath))
-                    Catch ex As Exception
-                        UtilsLib.LogWarn("  Failed to open " & file.TargetLocalPath & ": " & ex.Message)
-                    End Try
+                    ' Check if this assembly was copied from the root assembly (main element assembly)
+                    Dim isMainElementAsm As Boolean = file.SourcePath.Equals(originalAssembly, StringComparison.OrdinalIgnoreCase)
+                    UtilsLib.LogInfo("    " & System.IO.Path.GetFileName(file.TargetLocalPath) & " from " & System.IO.Path.GetFileName(file.SourcePath) & " -> " & If(isMainElementAsm, "MAIN", "intermediate"))
+                    
+                    If isMainElementAsm Then
+                        Try
+                            Dim releasedAsmDoc As AssemblyDocument = CType(app.Documents.Open(file.TargetLocalPath, True), AssemblyDocument)
+                            UtilsLib.LogInfo("  Opened released: " & file.TargetLocalPath)
+                            releasedAsmCount += 1
+                            
+                            ' Apply visibility/suppression states from source to this copy
+                            If context.AssemblyTree.SourceAssemblyState IsNot Nothing Then
+                                ApplyAssemblyState(app, releasedAsmDoc, context.AssemblyTree.SourceAssemblyState)
+                                releasedAsmDoc.Save()
+                                UtilsLib.LogInfo("  Applied source state to released assembly")
+                            End If
+                        Catch ex As Exception
+                            UtilsLib.LogWarn("  Failed to open " & file.TargetLocalPath & ": " & ex.Message)
+                        End Try
+                    End If
                 End If
             Next
+            UtilsLib.LogInfo("  Opened " & releasedAsmCount & " released assemblies")
             
             If verificationPassed Then
                 UtilsLib.LogInfo("ExecuteRelease: Complete - all verifications passed!")
