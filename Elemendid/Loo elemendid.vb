@@ -43,6 +43,7 @@ AddVbFile "Lib/ElementReleaseUILib.vb"
 
 Imports System.Windows.Forms
 Imports Inventor
+Imports System.Collections.Generic
 
 Sub Main()
     If Not AppRuntime.Initialize(ThisApplication) Then Return
@@ -130,13 +131,12 @@ Sub Main()
     Dim requiredNumbers As Integer = CalculateRequiredNumbers(context)
     Logger.Info("Loo elemendid: Required file numbers: " & requiredNumbers)
     
-    ' Step 8: Generate PLACEHOLDER numbers for preview (not real Vault numbers yet)
-    ' Real numbers are allocated only AFTER user confirms release
-    Logger.Info("Loo elemendid: Generating placeholder numbers for preview...")
+    ' Step 8: Placeholder numbers for plan construction (replaced by manifest reuse where applicable)
+    Logger.Info("Loo elemendid: Generating placeholder numbers for plan...")
     Dim placeholderNumbers As List(Of String) = ElementReleaseLib.GeneratePlaceholderNumbers(requiredNumbers)
     
-    ' Step 9: Compute release plan with placeholders (reads iProperties from source files)
-    Logger.Info("Loo elemendid: Computing release plan preview...")
+    ' Step 9: Compute release plan, then apply manifest reuse so preview shows real targets vs new numbers
+    Logger.Info("Loo elemendid: Computing release plan...")
     context.ReleasePlan = ElementReleaseLib.ComputeReleasePlan(
         app, _
         context.AssemblyTree, _
@@ -145,8 +145,28 @@ Sub Main()
         context.TargetRoot, _
         placeholderNumbers)
     
-    ' Step 10: Show comprehensive UI for element selection and confirmation
-    ' UI shows PLACEHOLDER numbers and PROJECTED properties (what files will become)
+    Dim releaseManifestPath As String = ElementReleaseLib.GetReleaseManifestPath(context.SourceRoot)
+    Dim releaseManifest As ElementReleaseLib.ReleaseManifest = ElementReleaseLib.ReadManifest(releaseManifestPath)
+    ElementReleaseLib.ApplyReleaseManifestReuse(app, context.ReleasePlan, context.TargetRoot, releaseManifest, context.AssemblyTree)
+    
+    Dim reusePreview As Integer = 0
+    Dim newPreview As Integer = 0
+    For Each pf As ElementReleaseLib.PlannedFile In context.ReleasePlan.Files
+        If pf.IsReuse Then reusePreview += 1
+        If pf.IsPlaceholder Then newPreview += 1
+    Next
+    Logger.Info("Loo elemendid: Preview — taaskasutus: " & reusePreview & ", uued numbrid (eelvaade): " & newPreview)
+    
+    Dim allVariantNames As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+    For Each el As ExcelReaderLib.ElementConfig In context.Elements
+        allVariantNames.Add(el.ElementName)
+    Next
+    context.RemovedFiles = ElementReleaseLib.FindRemovedFilesFromManifest(releaseManifest, context.ReleasePlan, allVariantNames)
+    If context.RemovedFiles.Count > 0 Then
+        UtilsLib.LogWarn("Loo elemendid: " & context.RemovedFiles.Count & " faili eelmisest väljastusest puudub praeguses plaanis (orbaanid)")
+    End If
+    
+    ' Step 10: Release UI — tree rows: 🔄 reuse · 📄 new · 🔗 shared
     Logger.Info("Loo elemendid: Showing release UI...")
     Dim uiResult As ElementReleaseUILib.ReleaseUIResult = ElementReleaseUILib.ShowReleaseUI( _
         app, context.Elements, context.ReleasePlan, context)
@@ -173,15 +193,36 @@ Sub Main()
         Return
     End If
     
-    ' Step 12: NOW allocate real file numbers (only after user confirms)
-    ' This is when we actually consume Vault numbers
+    ' Refresh orphan list for actual selection (plan rows already have reuse applied)
+    Dim selectedNames As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+    For Each el As ExcelReaderLib.ElementConfig In context.Elements
+        selectedNames.Add(el.ElementName)
+    Next
+    context.RemovedFiles = ElementReleaseLib.FindRemovedFilesFromManifest(releaseManifest, context.ReleasePlan, selectedNames)
+    If context.RemovedFiles.Count > 0 Then
+        UtilsLib.LogWarn("Loo elemendid: Orbaanid (ei uuendata): " & context.RemovedFiles.Count)
+        For Each rm As ElementReleaseLib.FileMappingEntry In context.RemovedFiles
+            UtilsLib.LogWarn("  - " & rm.TargetName & " (allikas: " & rm.SourceName & ", " & rm.FileType & ")")
+        Next
+    End If
+    
+    ' Step 12: Allocate new Vault numbers for any remaining placeholders
     Logger.Info("Loo elemendid: Allocating real file numbers...")
-    If Not ElementReleaseLib.AllocateRealNumbers(context.ReleasePlan, context.TargetRoot) Then
+    If Not ElementReleaseLib.AllocateRealNumbers(context.ReleasePlan, context.TargetRoot, context.SourceRoot) Then
         Logger.Error("Loo elemendid: Failed to allocate file numbers")
         MessageBox.Show("Failinumbrite hankimine ebaõnnestus.", "Loo elemendid")
         Return
     End If
     Logger.Info("Loo elemendid: Real numbers allocated for " & context.ReleasePlan.Files.Count & " files")
+    
+    Dim readOnlyTargets As List(Of String) = ElementReleaseLib.ValidateTargetFilesWritable(context.ReleasePlan)
+    If readOnlyTargets IsNot Nothing AndAlso readOnlyTargets.Count > 0 Then
+        Logger.Error("Loo elemendid: Read-only sihtfailid (Vault checkout?): " & readOnlyTargets.Count)
+        Dim listText As String = String.Join(vbCrLf, readOnlyTargets.ToArray())
+        MessageBox.Show("Järgmised failid on kirjutuskaitstud. Tee Vaultis checkout ja proovi uuesti:" & vbCrLf & vbCrLf & listText, _
+            "Loo elemendid", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+        Return
+    End If
     
     ' Step 13: Show execution form and execute release with progress tracking
     Logger.Info("Loo elemendid: Executing release...")

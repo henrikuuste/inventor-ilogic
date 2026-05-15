@@ -16,7 +16,7 @@ See kaust sisaldab iLogic skripte elementide väljastamiseks Vaulti.
 
 ## Excel faili formaat
 
-Excel fail peab olema nimega `elemendid.xlsx` ja asuma aluselemendi kaustas (`Aluselemendid/{AluselementiNimi}/elemendid.xlsx`).
+Excel fail peab olema nimega `elemendid.xlsx` ja asuma aluselemendi kaustas (`Aluselemendid/{AlusElement}/elemendid.xlsx`).
 
 Tagasiühilduvuse jaoks toetatakse ka vana nimekuju `moodulid.xlsx`.
 
@@ -24,7 +24,7 @@ Tagasiühilduvuse jaoks toetatakse ka vana nimekuju `moodulid.xlsx`.
 
 | Veeru nimi | Kirjeldus |
 |------------|-----------|
-| `ElementiNimi` | Elemendi nimi (kasutatakse kausta nimeks) |
+| `Element` | Elemendi nimi (kasutatakse kausta nimeks) |
 
 Tagasiühilduvuse jaoks toetatakse ka vana veerunime `MooduliNimi`.
 
@@ -43,7 +43,7 @@ Tagasiühilduvuse jaoks toetatakse ka vana veerunime `MooduliNimi`.
 
 ### Näide
 
-| ElementiNimi | Laius | Kõrgus | Sügavus | _Märkus |
+| Element | Laius | Kõrgus | Sügavus | _Märkus |
 |--------------|-------|--------|---------|---------|
 | Kapp-800 | 800 mm | 2100 mm | 600 mm | Standard |
 | Kapp-1000 | 1000 mm | 2100 mm | 600 mm | Lai |
@@ -53,7 +53,7 @@ Tagasiühilduvuse jaoks toetatakse ka vana veerunime `MooduliNimi`.
 
 Kui aluselemendil on ainult üks väljastatud element (parameetreid ei muudeta), loo Excel fail ühe reaga:
 
-| ElementiNimi |
+| Element |
 |--------------|
 | Kapp-A |
 

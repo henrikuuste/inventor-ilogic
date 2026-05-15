@@ -125,7 +125,7 @@ Public Module ElementReleaseUILib
         
         ' Title and stats
         Dim lblTitle As New Label()
-        lblTitle.Text = "VÄLJASTAMISE PLAAN (eelvaade) - " & elements.Count & " elementi, " & plan.Files.Count & " faili"
+        lblTitle.Text = "VÄLJASTAMISE PLAAN — " & elements.Count & " elementi, " & plan.Files.Count & " faili " & GetPlanTitleCategorySuffix(plan)
         lblTitle.Dock = DockStyle.Top
         lblTitle.Height = 25
         headerPanel.Controls.Add(lblTitle)
@@ -327,8 +327,12 @@ Public Module ElementReleaseUILib
         Dim uniqueParts As Integer = 0
         Dim assemblies As Integer = 0
         Dim drawings As Integer = 0
+        Dim reuseCount As Integer = 0
+        Dim newNumberCount As Integer = 0
         
         For Each f As ElementReleaseLib.PlannedFile In plan.Files
+            If f.IsReuse Then reuseCount += 1
+            If f.IsPlaceholder Then newNumberCount += 1
             Select Case f.FileType
                 Case ElementReleaseLib.FileType.Part
                     If f.IsShared Then sharedParts += 1 Else uniqueParts += 1
@@ -339,8 +343,35 @@ Public Module ElementReleaseUILib
             End Select
         Next
         
-        Return String.Format("Jagatud: {0} | Unikaalsed: {1} | Koostud: {2} | Joonised: {3}", _
-            sharedParts, uniqueParts, assemblies, drawings)
+        Return String.Format("Taaskasutus: {0} | Uued numbrid: {1} | Jagatud: {2} | Unikaalsed: {3} | Koostud: {4} | Joonised: {5}", _
+            reuseCount, newNumberCount, sharedParts, uniqueParts, assemblies, drawings)
+    End Function
+    
+    ''' <summary>
+    ''' Category counts for the "VÄLJASTAMISE PLAAN" header line only (same priority as row markers: jagatud, then taaskasutus, then uus).
+    ''' Uses digits only so WinForms default font always renders.
+    ''' </summary>
+    Private Function GetPlanTitleCategorySuffix(plan As ElementReleaseLib.ReleasePlan) As String
+        Dim nShared As Integer = 0
+        Dim nReuse As Integer = 0
+        Dim nNew As Integer = 0
+        Dim nOther As Integer = 0
+        For Each f As ElementReleaseLib.PlannedFile In plan.Files
+            If f.IsShared Then
+                nShared += 1
+            ElseIf f.IsReuse Then
+                nReuse += 1
+            ElseIf f.IsPlaceholder Then
+                nNew += 1
+            Else
+                nOther += 1
+            End If
+        Next
+        Dim core As String = nReuse.ToString() & " taaskasutus | " & nNew.ToString() & " uus | " & nShared.ToString() & " jagatud"
+        If nOther > 0 Then
+            Return "(" & core & " | " & nOther.ToString() & " muu)"
+        End If
+        Return "(" & core & ")"
     End Function
     
     ' Status prefixes for tree nodes (no ImageList due to iLogic constraints)
@@ -464,11 +495,34 @@ Public Module ElementReleaseUILib
             allFilesForElement.AddRange(sharedFiles)
             
             ' Add all files in unified folder structure
-            ' Shared files will be gray with [jagatud] marker, own files get type colors
+            ' Shared files will be gray with 🔗 row marker, own files get type colors
             AddFilesToNodeByFolderMerged(elemNode, allFilesForElement, context, showStatusPrefix:=isExecutionMode)
             
             tree.Nodes.Add(elemNode)
         Next
+        
+        ' Orphaned files from previous release (not in current plan; not deleted automatically)
+        If context IsNot Nothing AndAlso context.RemovedFiles IsNot Nothing AndAlso context.RemovedFiles.Count > 0 Then
+            Dim orphanNode As New TreeNode("EEMALDATUD (eelnev väljastus, " & context.RemovedFiles.Count & " faili)")
+            orphanNode.ForeColor = Drawing.Color.DimGray
+            orphanNode.Tag = "ORPHAN_ROOT"
+            orphanNode.ToolTipText = "Need failid olid eelmises väljastuses, kuid pole enam praeguses plaanis." & vbCrLf &
+                "Neid ei kustutata automaatselt — eemalda käsitsi, kui pole enam vaja."
+            For Each rm As ElementReleaseLib.FileMappingEntry In context.RemovedFiles
+                Dim ext As String = ""
+                Select Case rm.FileType.ToLowerInvariant()
+                    Case "part" : ext = ".ipt"
+                    Case "assembly" : ext = ".iam"
+                    Case "drawing" : ext = ".idw"
+                    Case Else : ext = ""
+                End Select
+                Dim child As New TreeNode(rm.TargetName & ext & "  ←  " & rm.SourceName & "  [" & rm.FileType & If(String.IsNullOrEmpty(rm.ElementVariant), "", ", " & rm.ElementVariant) & "]")
+                child.ForeColor = Drawing.Color.Gray
+                child.Tag = "ORPHAN"
+                orphanNode.Nodes.Add(child)
+            Next
+            tree.Nodes.Add(orphanNode)
+        End If
         
         ' Expand all nodes
         tree.ExpandAll()
@@ -608,7 +662,7 @@ Public Module ElementReleaseUILib
     
     ''' <summary>
     ''' Creates a file node with full property display
-    ''' Format: [STATUS] PartNumber | Description | Type [jagatud]
+    ''' Format: [STATUS] 🔄/📄/🔗 Number | Description | Type
     ''' </summary>
     ''' <param name="forceTypeColors">If True, use type-based colors even for shared files (for Ühine section)</param>
     ''' <param name="showStatusPrefix">If True, add status prefix for execution mode</param>
@@ -645,20 +699,18 @@ Public Module ElementReleaseUILib
         If String.IsNullOrEmpty(project) Then project = f.SourceProject
         If String.IsNullOrEmpty(project) Then project = ""
         
-        ' Build display text: [STATUS] Number | Description | Type [jagatud]
-        ' Show placeholder indicator if not yet allocated
+        ' Build display text: [STATUS] + row emoji (🔗/🔄/📄) + Number | Description | Type
         Dim numberDisplay As String = f.VaultNumber
         If f.IsPlaceholder Then
-            numberDisplay = "[" & f.VaultNumber & "]"  ' Brackets indicate placeholder
+            numberDisplay = "[" & f.VaultNumber & "]"  ' Brackets = new number not allocated yet
         End If
         
-        ' Build base text (without status prefix) - used for status updates
-        Dim baseText As String = numberDisplay & " | " & description & " | " & fileTypeStr
+        Dim rowEmoji As String = GetPlannedFileRowEmoji(f)
+        
+        ' Build base text (without execution status prefix) - used for status updates
+        Dim baseText As String = rowEmoji & numberDisplay & " | " & description & " | " & fileTypeStr
         If Not String.IsNullOrEmpty(f.SourcePartNumber) AndAlso f.SourcePartNumber <> f.VaultNumber Then
             baseText &= " (alg: " & f.SourcePartNumber & ")"
-        End If
-        If f.IsShared Then
-            baseText &= "  [jagatud]"
         End If
         
         ' Store base text for later status updates
@@ -696,8 +748,19 @@ Public Module ElementReleaseUILib
         
         ' Build tooltip with all properties
         Dim tooltip As String = ""
-        If f.IsPlaceholder Then
-            tooltip = "** EELVAADE - number määratakse väljastamisel **" & vbCrLf & vbCrLf
+        If f.IsShared Then
+            tooltip = "🔗 Jagatud fail (Ühine)." & vbCrLf & vbCrLf
+        End If
+        If f.IsReuse Then
+            tooltip &= "🔄 Taaskasutus: kasutatakse olemasolevat Vault numbrit; sihtfail kirjutatakse üle (kui fail juba olemas)." & vbCrLf
+            If System.IO.File.Exists(f.TargetLocalPath) Then
+                tooltip &= "Sihtfail leitud — ülekirjutus väljastamisel." & vbCrLf
+            Else
+                tooltip &= "Sihtfaili pole veel — luuakse väljastamisel." & vbCrLf
+            End If
+            tooltip &= vbCrLf
+        ElseIf f.IsPlaceholder Then
+            tooltip &= "📄 Uus Vault number — määratakse pärast kinnitust (eelvaade: " & f.VaultNumber & ")." & vbCrLf & vbCrLf
         End If
         tooltip &= "Number: " & f.VaultNumber & vbCrLf & _
                    "Kirjeldus: " & description & vbCrLf & _
@@ -712,7 +775,8 @@ Public Module ElementReleaseUILib
             tooltip &= vbCrLf & "Algne kirjeldus: " & f.SourceDescription
         End If
         tooltip &= vbCrLf & "Allikas: " & f.SourcePath & vbCrLf & _
-                   "Sihtkoht: " & f.TargetLocalPath
+                   "Sihtkoht: " & f.TargetLocalPath & vbCrLf & _
+                   "Märge: 🔄 taaskasutus · 📄 uus number · 🔗 jagatud"
         
         fileNode.ToolTipText = tooltip
         
@@ -854,6 +918,16 @@ Public Module ElementReleaseUILib
     End Function
     
     ''' <summary>
+    ''' Leading row marker: 🔗 shared, 🔄 reuse overwrite, 📄 new number (preview).
+    ''' </summary>
+    Private Function GetPlannedFileRowEmoji(f As ElementReleaseLib.PlannedFile) As String
+        If f.IsShared Then Return "🔗 "
+        If f.IsReuse Then Return "🔄 "
+        If f.IsPlaceholder Then Return "📄 "
+        Return ""
+    End Function
+    
+    ''' <summary>
     ''' Gets file type string in Estonian
     ''' </summary>
     Private Function GetFileTypeString(fileType As ElementReleaseLib.FileType) As String
@@ -871,8 +945,7 @@ Public Module ElementReleaseUILib
     
     ''' <summary>
     ''' Creates a tree node for a planned file with full details
-    ''' Format: PartNumber | SourceName | Type | → TargetFileName
-    ''' For shared refs: (jagatud) prefix and lighter formatting
+    ''' Format: 🔄/📄/🔗 + PartNumber | SourceName | Type | → TargetFileName
     ''' </summary>
     Private Function CreateFileNode(f As ElementReleaseLib.PlannedFile, _
                                     context As ElementReleaseLib.ElementReleaseContext, _
@@ -897,23 +970,32 @@ Public Module ElementReleaseUILib
         Dim sourceFileName As String = System.IO.Path.GetFileNameWithoutExtension(f.SourcePath)
         Dim targetFileName As String = System.IO.Path.GetFileName(f.TargetLocalPath)
         
+        Dim rowEmoji As String = GetPlannedFileRowEmoji(f)
+        If isSharedRef AndAlso rowEmoji = "" Then
+            rowEmoji = "🔗 "
+        End If
+        
         ' Build descriptive text with all relevant info
-        ' Format: PartNumber | Description (from source) | Type → TargetFile
         Dim nodeText As String
         If isSharedRef Then
-            ' Shared reference - use special formatting to make it visually distinct
-            nodeText = "    (jagatud) " & f.VaultNumber & " | " & sourceFileName & " | " & fileTypeStr
+            nodeText = "    " & rowEmoji & f.VaultNumber & " | " & sourceFileName & " | " & fileTypeStr
         Else
-            ' Regular file
-            nodeText = f.VaultNumber & " | " & sourceFileName & " | " & fileTypeStr & " → " & targetFileName
+            nodeText = rowEmoji & f.VaultNumber & " | " & sourceFileName & " | " & fileTypeStr & " → " & targetFileName
         End If
         
         Dim fileNode As New TreeNode(nodeText)
         fileNode.Tag = nodeData
-        fileNode.ToolTipText = "Allikas: " & f.SourcePath & vbCrLf & _
-                               "Sihtkoht: " & f.TargetLocalPath & vbCrLf & _
-                               "Part Number: " & f.VaultNumber & vbCrLf & _
-                               "Tüüp: " & fileTypeStr
+        Dim tip As String = ""
+        If f.IsShared Then tip &= "🔗 Jagatud fail (Ühine)." & vbCrLf
+        If f.IsReuse Then tip &= "🔄 Taaskasutus." & vbCrLf
+        If f.IsPlaceholder Then tip &= "📄 Uus number (eelvaade)." & vbCrLf
+        If tip <> "" Then tip &= vbCrLf
+        tip &= "Allikas: " & f.SourcePath & vbCrLf & _
+               "Sihtkoht: " & f.TargetLocalPath & vbCrLf & _
+               "Part Number: " & f.VaultNumber & vbCrLf & _
+               "Tüüp: " & fileTypeStr & vbCrLf & _
+               "Märge: 🔄 taaskasutus · 📄 uus number · 🔗 jagatud"
+        fileNode.ToolTipText = tip
         
         Return fileNode
     End Function
@@ -963,9 +1045,28 @@ Public Module ElementReleaseUILib
             End If
         Next
         
+        Dim reuseSelected As Integer = 0
+        Dim newSelected As Integer = 0
+        For Each f As ElementReleaseLib.PlannedFile In plan.Files
+            Dim fileApplies As Boolean = False
+            If f.IsShared Then
+                fileApplies = (selectedElements > 0)
+            Else
+                For Each varName As String In f.ForVariants
+                    If selectedNames.Contains(varName) Then
+                        fileApplies = True
+                        Exit For
+                    End If
+                Next
+            End If
+            If Not fileApplies Then Continue For
+            If f.IsReuse Then reuseSelected += 1
+            If f.IsPlaceholder Then newSelected += 1
+        Next
+        
         Dim totalFiles As Integer = sharedFileCount + elementFileCount
-        lblStats.Text = String.Format("Valitud: {0} elementi | Faile kokku: {1} (jagatud: {2}, elemendispetsiifilised: {3})", _
-            selectedElements, totalFiles, sharedFileCount, elementFileCount)
+        lblStats.Text = String.Format("Valitud: {0} elementi | Faile kokku: {1} (jagatud: {2}, elemendispetsiifilised: {3}) | Taaskasutus: {4} | Uued nr: {5}", _
+            selectedElements, totalFiles, sharedFileCount, elementFileCount, reuseSelected, newSelected)
         
         ' Update shared node appearance based on selection
         UpdateSharedNodeAppearance(treeView, selectedElements > 0)

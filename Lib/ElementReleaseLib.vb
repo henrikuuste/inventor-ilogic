@@ -27,7 +27,9 @@
 
 Imports Inventor
 Imports System.Collections.Generic
+Imports System.Linq
 Imports System.Windows.Forms
+Imports System.Text.RegularExpressions
 
 Public Module ElementReleaseLib
 
@@ -67,6 +69,21 @@ Public Module ElementReleaseLib
     End Enum
     
     ''' <summary>
+    ''' One released file mapping (no absolute paths). Source/target are filename stems (no extension).
+    ''' </summary>
+    Public Class FileMappingEntry
+        Public SourceName As String
+        Public TargetName As String
+        Public FileType As String
+        Public ElementVariant As String
+        Public IsShared As Boolean
+        Public Fingerprint As String
+        Public ReleaseDate As DateTime
+        ''' <summary>Pipe-separated variant names for shared files (e.g. Nurk|Selg KT 140).</summary>
+        Public UsedByVariantsPipe As String
+    End Class
+    
+    ''' <summary>
     ''' Main context object carrying all release information.
     ''' </summary>
     Public Class ElementReleaseContext
@@ -81,6 +98,10 @@ Public Module ElementReleaseLib
         Public PartGroups As List(Of PartGroup)
         Public ReleasePlan As ReleasePlan
         Public MasterPaths As List(Of String)
+        ''' <summary>
+        ''' Files that existed in a previous manifest for the selected variants but are not in the current plan (user may delete manually).
+        ''' </summary>
+        Public RemovedFiles As New List(Of FileMappingEntry)
     End Class
     
     ''' <summary>
@@ -201,6 +222,10 @@ Public Module ElementReleaseLib
         Public ProjectedDescription As String     ' What Description will be set to
         Public ProjectedProject As String         ' What Project will be set to  
         Public IsPlaceholder As Boolean = True    ' True until real number is assigned
+        ''' <summary>
+        ''' True when reusing a target from a previous release (overwrite same vault/filename).
+        ''' </summary>
+        Public IsReuse As Boolean = False
     End Class
     
     ' ============================================================================
@@ -429,33 +454,36 @@ Public Module ElementReleaseLib
     End Function
     
     ''' <summary>
-    ''' Check if a path contains OldVersions folder (case-insensitive).
-    ''' OldVersions is a special Vault folder that stores previous versions and should not be released.
+    ''' True if path is under a Vault OldVersions folder (any path segment named OldVersions).
     ''' </summary>
     Private Function IsOldVersionsPath(path As String) As Boolean
         If String.IsNullOrEmpty(path) Then Return False
-        Dim lowerPath As String = path.ToLower()
-        Return lowerPath.Contains("\oldversions\") OrElse lowerPath.Contains("/oldversions/")
+        Dim normalized As String = path.Replace("/"c, "\"c)
+        For Each seg As String In normalized.Split("\"c)
+            If seg.Equals("OldVersions", StringComparison.OrdinalIgnoreCase) Then
+                Return True
+            End If
+        Next
+        Return False
     End Function
     
     ''' <summary>
-    ''' Check if a file path represents an old Vault version.
-    ''' Detects both OldVersions folder and versioned filenames (e.g., 000114.0025.iam).
+    ''' True if this path must be excluded from all release file I/O (open, SaveAs, mkdir parent, read/write text, delete file):
+    ''' OldVersions tree segment, or Vault versioned filename (e.g. 000114.0025.iam). Does not stop the host from
+    ''' creating OldVersions beside files on Save — see CleanupVaultOldVersionsAfterSuccessfulRelease.
     ''' </summary>
     Private Function IsVaultOldVersion(filePath As String) As Boolean
         If String.IsNullOrEmpty(filePath) Then Return False
         
-        ' Check for OldVersions folder
         If IsOldVersionsPath(filePath) Then Return True
         
-        ' Check for versioned filename pattern: 000114.0025.iam (has numeric suffix before extension)
+        ' Vault versioned filename: 000114.0025.iam (last dot segment before extension is all digits)
         Dim fileName As String = System.IO.Path.GetFileNameWithoutExtension(filePath)
-        If fileName.Contains(".") Then
+        If fileName.Contains("."c) Then
             Dim parts() As String = fileName.Split("."c)
             If parts.Length >= 2 Then
                 Dim lastPart As String = parts(parts.Length - 1)
-                ' If the last part (before extension) is all digits, it's a version number
-                If lastPart.All(Function(c) Char.IsDigit(c)) Then
+                If lastPart.Length > 0 AndAlso lastPart.All(Function(c) Char.IsDigit(c)) Then
                     Return True
                 End If
             End If
@@ -463,6 +491,368 @@ Public Module ElementReleaseLib
         
         Return False
     End Function
+    
+    ''' <summary>
+    ''' Remove Vault versioning paths from discovery results so they never enter the release plan.
+    ''' </summary>
+    Private Sub PruneVaultVersioningFromAssemblyTree(tree As AssemblyTree)
+        For Each k As String In tree.Parts.Keys.ToList()
+            If IsVaultOldVersion(k) Then tree.Parts.Remove(k)
+        Next
+        For Each k As String In tree.Assemblies.Keys.ToList()
+            If IsVaultOldVersion(k) AndAlso Not k.Equals(tree.RootAssemblyPath, StringComparison.OrdinalIgnoreCase) Then
+                tree.Assemblies.Remove(k)
+            End If
+        Next
+        For i As Integer = tree.Drawings.Count - 1 To 0 Step -1
+            If IsVaultOldVersion(tree.Drawings(i).DrawingPath) Then tree.Drawings.RemoveAt(i)
+        Next
+        For Each p As String In tree.IntermediateAssemblies.ToList()
+            If IsVaultOldVersion(p) Then tree.IntermediateAssemblies.Remove(p)
+        Next
+        For Each k As String In tree.ExternalMasters.Keys.ToList()
+            If IsVaultOldVersion(k) Then tree.ExternalMasters.Remove(k)
+        Next
+        For Each k As String In tree.MasterDependencies.Keys.ToList()
+            If IsVaultOldVersion(k) Then
+                tree.MasterDependencies.Remove(k)
+            Else
+                Dim lst As List(Of String) = tree.MasterDependencies(k)
+                For j As Integer = lst.Count - 1 To 0 Step -1
+                    If IsVaultOldVersion(lst(j)) Then lst.RemoveAt(j)
+                Next
+                If lst.Count = 0 Then tree.MasterDependencies.Remove(k)
+            End If
+        Next
+        For Each info As PartInfo In tree.Parts.Values
+            If Not String.IsNullOrEmpty(info.DerivedFromMaster) AndAlso IsVaultOldVersion(info.DerivedFromMaster) Then
+                info.DerivedFromMaster = ""
+                If info.Role = PartRole.Derived Then info.Role = PartRole.Manual
+            End If
+        Next
+        For i As Integer = tree.ProjectedGeometryChains.Count - 1 To 0 Step -1
+            Dim t As Tuple(Of String, String, String) = tree.ProjectedGeometryChains(i)
+            If IsVaultOldVersion(t.Item1) OrElse IsVaultOldVersion(t.Item2) OrElse IsVaultOldVersion(t.Item3) Then
+                tree.ProjectedGeometryChains.RemoveAt(i)
+            End If
+        Next
+    End Sub
+    
+    ''' <summary>
+    ''' Remove Vault OldVersions path segments so release targets never recreate that folder layout.
+    ''' </summary>
+    Private Function SanitizeRelativePathForRelease(relativePath As String) As String
+        If String.IsNullOrEmpty(relativePath) Then Return ""
+        Dim norm As String = relativePath.Trim().Replace("/"c, "\"c)
+        While norm.StartsWith("\"c)
+            norm = norm.Substring(1)
+        End While
+        Dim rawSegs() As String = norm.Split("\"c)
+        Dim outSegs As New List(Of String)
+        For Each seg As String In rawSegs
+            If String.IsNullOrEmpty(seg) Then Continue For
+            If seg.Equals("OldVersions", StringComparison.OrdinalIgnoreCase) Then Continue For
+            outSegs.Add(seg)
+        Next
+        Return String.Join("\", outSegs.ToArray())
+    End Function
+    
+#Region "Vault-safe filesystem (release)"
+    ' All disk scans, Inventor opens, SaveAs targets, and release-target file I/O MUST go through this region.
+    ' Vault versioning paths (OldVersions folders, revision-suffixed names) do not exist for release logic.
+    '
+    ' Architecture: element release never bulk-copies directory trees. Each released file is created with
+    ' SaveAs (or equivalent) from an explicit planned path list. OldVersions\*.000N.* beside outputs are
+    ' created by the Vault/Inventor host when saving, not by copying source OldVersions; guards cannot
+    ' prevent that host behavior. Optional cleanup removes those host-created backup folders after success.
+    
+    Private Function IsOldVersionsDirectoryLeaf(dirPath As String) As Boolean
+        If String.IsNullOrEmpty(dirPath) Then Return False
+        Return IsOldVersionsDirectoryName(System.IO.Path.GetFileName(dirPath.TrimEnd("\"c)))
+    End Function
+    
+    Private Function IsOldVersionsDirectoryName(leafName As String) As Boolean
+        Return Not String.IsNullOrEmpty(leafName) AndAlso leafName.Equals("OldVersions", StringComparison.OrdinalIgnoreCase)
+    End Function
+    
+    ''' <summary>
+    ''' True if the file exists on disk and is not Vault versioning (OldVersions path or revision suffix before extension).
+    ''' </summary>
+    Private Function ReleasePathExistsOnDisk(fullPath As String) As Boolean
+        If String.IsNullOrEmpty(fullPath) Then Return False
+        If IsVaultOldVersion(fullPath) Then Return False
+        Return System.IO.File.Exists(fullPath)
+    End Function
+    
+    ''' <summary>
+    ''' Creates the parent directory of a release target. Refuses if target or parent is under OldVersions
+    ''' or matches Vault revision-style naming — never create directory chains inside backup trees.
+    ''' </summary>
+    Private Function EnsureParentDirectoryForRelease(targetFullPath As String) As Boolean
+        If String.IsNullOrEmpty(targetFullPath) OrElse IsVaultOldVersion(targetFullPath) Then
+            UtilsLib.LogWarn("EnsureParentDirectoryForRelease: refusing excluded or empty target path")
+            Return False
+        End If
+        Dim par As String = System.IO.Path.GetDirectoryName(targetFullPath)
+        If String.IsNullOrEmpty(par) Then Return True
+        If IsVaultOldVersion(par) Then
+            UtilsLib.LogWarn("EnsureParentDirectoryForRelease: refusing parent under OldVersions or vault-style path: " & par)
+            Return False
+        End If
+        Try
+            System.IO.Directory.CreateDirectory(par)
+            Return True
+        Catch ex As Exception
+            UtilsLib.LogWarn("EnsureParentDirectoryForRelease: failed for " & par & ": " & ex.Message)
+            Return False
+        End Try
+    End Function
+    
+    ''' <summary>
+    ''' True if candidate is the root or a subfolder under root (both normalized with GetFullPath).
+    ''' </summary>
+    Private Function IsPathUnderOrEqualRoot(rootFullTrimmed As String, candidate As String) As Boolean
+        If String.IsNullOrEmpty(candidate) Then Return False
+        Try
+            Dim c As String = System.IO.Path.GetFullPath(candidate).TrimEnd("\"c)
+            If c.Equals(rootFullTrimmed, StringComparison.OrdinalIgnoreCase) Then Return True
+            Return c.StartsWith(rootFullTrimmed & "\", StringComparison.OrdinalIgnoreCase)
+        Catch
+            Return False
+        End Try
+    End Function
+    
+    ''' <summary>
+    ''' Collect every directory named OldVersions under scanRoot. Does not recurse inside an OldVersions folder.
+    ''' </summary>
+    Private Sub CollectOldVersionsSubdirectories(scanRoot As String, acc As List(Of String))
+        If String.IsNullOrEmpty(scanRoot) OrElse Not System.IO.Directory.Exists(scanRoot) Then Return
+        Try
+            For Each subdir As String In System.IO.Directory.EnumerateDirectories(scanRoot)
+                If IsOldVersionsDirectoryName(System.IO.Path.GetFileName(subdir)) Then
+                    acc.Add(subdir)
+                Else
+                    CollectOldVersionsSubdirectories(subdir, acc)
+                End If
+            Next
+        Catch ex As Exception
+            UtilsLib.LogWarn("CollectOldVersionsSubdirectories: " & scanRoot & ": " & ex.Message)
+        End Try
+    End Sub
+    
+    ''' <summary>
+    ''' Removes host-created OldVersions folders next to our Save targets. Release code never copies or opens
+    ''' those paths; Vault still writes them on Save — this is the only deliberate interaction with OldVersions
+    ''' (delete backup trees under planned output roots after all saves complete).
+    ''' </summary>
+    Private Sub CleanupVaultOldVersionsAfterSuccessfulRelease(context As ElementReleaseContext)
+        If context Is Nothing OrElse String.IsNullOrEmpty(context.TargetRoot) OrElse context.ReleasePlan Is Nothing Then Return
+        
+        Dim targetRootFull As String = System.IO.Path.GetFullPath(context.TargetRoot).TrimEnd("\"c)
+        Dim scanRoots As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        
+        For Each vf As String In context.ReleasePlan.VariantFolders.Values
+            If Not String.IsNullOrEmpty(vf) AndAlso IsPathUnderOrEqualRoot(targetRootFull, vf) Then
+                scanRoots.Add(System.IO.Path.GetFullPath(vf))
+            End If
+        Next
+        If Not String.IsNullOrEmpty(context.ReleasePlan.SharedFolder) AndAlso IsPathUnderOrEqualRoot(targetRootFull, context.ReleasePlan.SharedFolder) Then
+            scanRoots.Add(System.IO.Path.GetFullPath(context.ReleasePlan.SharedFolder))
+        End If
+        
+        If scanRoots.Count = 0 Then Return
+        
+        Dim oldVersionDirs As New List(Of String)
+        For Each root As String In scanRoots
+            CollectOldVersionsSubdirectories(root, oldVersionDirs)
+        Next
+        
+        Dim uniq As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        For Each p As String In oldVersionDirs
+            uniq.Add(p)
+        Next
+        
+        If uniq.Count = 0 Then
+            UtilsLib.LogInfo("ExecuteRelease: OldVersions cleanup - no OldVersions folders under release output")
+            Return
+        End If
+        
+        Dim sorted As List(Of String) = uniq.OrderByDescending(Function(p) p.Length).ToList()
+        UtilsLib.LogInfo("ExecuteRelease: Removing " & sorted.Count & " OldVersions folder(s) under release output...")
+        
+        For Each od As String In sorted
+            Try
+                If System.IO.Directory.Exists(od) Then
+                    System.IO.Directory.Delete(od, True)
+                    UtilsLib.LogInfo("ExecuteRelease: Removed OldVersions folder: " & od)
+                End If
+            Catch ex As Exception
+                UtilsLib.LogWarn("ExecuteRelease: Could not remove OldVersions folder " & od & ": " & ex.Message)
+            End Try
+        Next
+    End Sub
+    
+    ''' <summary>
+    ''' Recursively list files matching searchPattern (e.g. "*.idw"). Does not descend into OldVersions folders.
+    ''' Omits Vault-versioned filenames (revision segment before extension).
+    ''' </summary>
+    Private Function ListPathsRecursiveExcludingVault(rootDirectory As String, searchPattern As String) As List(Of String)
+        Dim outList As New List(Of String)
+        If String.IsNullOrEmpty(rootDirectory) OrElse Not System.IO.Directory.Exists(rootDirectory) Then Return outList
+        If IsVaultOldVersion(rootDirectory) Then Return outList
+        
+        Dim stack As New Stack(Of String)
+        stack.Push(rootDirectory)
+        While stack.Count > 0
+            Dim dir As String = stack.Pop()
+            If IsOldVersionsDirectoryLeaf(dir) Then Continue While
+            
+            Try
+                For Each fp As String In System.IO.Directory.EnumerateFiles(dir, searchPattern, System.IO.SearchOption.TopDirectoryOnly)
+                    If Not IsVaultOldVersion(fp) Then outList.Add(fp)
+                Next
+            Catch
+            End Try
+            
+            Try
+                For Each subdir As String In System.IO.Directory.EnumerateDirectories(dir)
+                    If IsOldVersionsDirectoryName(System.IO.Path.GetFileName(subdir)) Then Continue For
+                    stack.Push(subdir)
+                Next
+            Catch
+            End Try
+        End While
+        
+        Return outList
+    End Function
+    
+    ''' <summary>
+    ''' Find first file under root with exact name fileNameWithExt. Does not descend into OldVersions folders.
+    ''' </summary>
+    Private Function FindFirstFileRecursiveExcludingVault(rootDirectory As String, fileNameWithExt As String) As String
+        If String.IsNullOrEmpty(rootDirectory) OrElse String.IsNullOrEmpty(fileNameWithExt) Then Return Nothing
+        If IsVaultOldVersion(rootDirectory) Then Return Nothing
+        If Not System.IO.Directory.Exists(rootDirectory) Then Return Nothing
+        
+        Dim stack As New Stack(Of String)
+        stack.Push(rootDirectory)
+        While stack.Count > 0
+            Dim dir As String = stack.Pop()
+            If IsOldVersionsDirectoryLeaf(dir) Then Continue While
+            
+            Dim candidate As String = System.IO.Path.Combine(dir, fileNameWithExt)
+            Try
+                If System.IO.File.Exists(candidate) AndAlso Not IsVaultOldVersion(candidate) Then Return candidate
+            Catch
+            End Try
+            
+            Try
+                For Each subdir As String In System.IO.Directory.EnumerateDirectories(dir)
+                    If IsOldVersionsDirectoryName(System.IO.Path.GetFileName(subdir)) Then Continue For
+                    stack.Push(subdir)
+                Next
+            Catch
+            End Try
+        End While
+        
+        Return Nothing
+    End Function
+    
+    Private Function TryOpenDocument(app As Inventor.Application, fullPath As String, visible As Boolean) As Document
+        If String.IsNullOrEmpty(fullPath) OrElse IsVaultOldVersion(fullPath) Then
+            UtilsLib.LogWarn("TryOpenDocument: excluded or empty path: " & If(String.IsNullOrEmpty(fullPath), "(empty)", System.IO.Path.GetFileName(fullPath)))
+            Return Nothing
+        End If
+        Try
+            Return app.Documents.Open(fullPath, visible)
+        Catch ex As Exception
+            UtilsLib.LogWarn("TryOpenDocument: failed for " & System.IO.Path.GetFileName(fullPath) & ": " & ex.Message)
+            Return Nothing
+        End Try
+    End Function
+    
+    Private Function TryOpenPartDocument(app As Inventor.Application, fullPath As String, visible As Boolean) As PartDocument
+        Dim d As Document = TryOpenDocument(app, fullPath, visible)
+        If d Is Nothing Then Return Nothing
+        If d.DocumentType <> DocumentTypeEnum.kPartDocumentObject Then
+            Try : d.Close(True) : Catch : End Try
+            UtilsLib.LogWarn("TryOpenPartDocument: not a part document: " & System.IO.Path.GetFileName(fullPath))
+            Return Nothing
+        End If
+        Return CType(d, PartDocument)
+    End Function
+    
+    Private Function TryOpenAssemblyDocument(app As Inventor.Application, fullPath As String, visible As Boolean) As AssemblyDocument
+        Dim d As Document = TryOpenDocument(app, fullPath, visible)
+        If d Is Nothing Then Return Nothing
+        If d.DocumentType <> DocumentTypeEnum.kAssemblyDocumentObject Then
+            Try : d.Close(True) : Catch : End Try
+            UtilsLib.LogWarn("TryOpenAssemblyDocument: not an assembly document: " & System.IO.Path.GetFileName(fullPath))
+            Return Nothing
+        End If
+        Return CType(d, AssemblyDocument)
+    End Function
+    
+    Private Function TryOpenDrawingDocument(app As Inventor.Application, fullPath As String, visible As Boolean) As DrawingDocument
+        Dim d As Document = TryOpenDocument(app, fullPath, visible)
+        If d Is Nothing Then Return Nothing
+        If d.DocumentType <> DocumentTypeEnum.kDrawingDocumentObject Then
+            Try : d.Close(True) : Catch : End Try
+            UtilsLib.LogWarn("TryOpenDrawingDocument: not a drawing document: " & System.IO.Path.GetFileName(fullPath))
+            Return Nothing
+        End If
+        Return CType(d, DrawingDocument)
+    End Function
+    
+    ''' <summary>
+    ''' SaveAs to target path; refuses Vault versioning targets. Creates parent directory.
+    ''' </summary>
+    Private Function TrySaveDocumentAs(doc As Document, targetFullPath As String) As Boolean
+        If doc Is Nothing Then Return False
+        If String.IsNullOrEmpty(targetFullPath) OrElse IsVaultOldVersion(targetFullPath) Then
+            UtilsLib.LogWarn("TrySaveDocumentAs: refusing SaveAs to excluded or empty path")
+            Return False
+        End If
+        If Not EnsureParentDirectoryForRelease(targetFullPath) Then Return False
+        Try
+            doc.SaveAs(targetFullPath, False)
+            Return True
+        Catch ex As Exception
+            UtilsLib.LogWarn("TrySaveDocumentAs: failed for " & System.IO.Path.GetFileName(targetFullPath) & ": " & ex.Message)
+            Return False
+        End Try
+    End Function
+    
+    Private Sub SafeDeleteFileExcludingVault(fullPath As String)
+        If String.IsNullOrEmpty(fullPath) OrElse IsVaultOldVersion(fullPath) Then Return
+        Try
+            System.IO.File.Delete(fullPath)
+        Catch
+        End Try
+    End Sub
+    
+    Private Function TryReadAllTextExcludingVault(filePath As String) As String
+        If String.IsNullOrEmpty(filePath) OrElse IsVaultOldVersion(filePath) Then Return Nothing
+        Try
+            Return System.IO.File.ReadAllText(filePath)
+        Catch
+            Return Nothing
+        End Try
+    End Function
+    
+    Private Sub TryWriteAllTextExcludingVault(filePath As String, contents As String)
+        If String.IsNullOrEmpty(filePath) OrElse IsVaultOldVersion(filePath) Then
+            UtilsLib.LogWarn("TryWriteAllTextExcludingVault: refusing write to excluded path")
+            Return
+        End If
+        If Not EnsureParentDirectoryForRelease(filePath) Then Return
+        Try
+            System.IO.File.WriteAllText(filePath, contents)
+        Catch ex As Exception
+            UtilsLib.LogWarn("TryWriteAllTextExcludingVault: failed: " & ex.Message)
+        End Try
+    End Sub
+#End Region
     
     ''' <summary>
     ''' Get the product family root folder by walking up from sourceRoot to find "Aluselemendid" parent.
@@ -525,7 +915,12 @@ Public Module ElementReleaseLib
             Next
             
             If asmDoc Is Nothing Then
-                asmDoc = CType(app.Documents.Open(rootAsmPath, False), AssemblyDocument)
+                asmDoc = TryOpenAssemblyDocument(app, rootAsmPath, False)
+            End If
+            
+            If asmDoc Is Nothing Then
+                UtilsLib.LogError("DiscoverAssemblyTree: Cannot open root assembly (missing, excluded Vault path, or not an assembly).")
+                Return tree
             End If
             
             tree.Assemblies.Add(rootAsmPath, New AssemblyInfo With {
@@ -554,9 +949,9 @@ Public Module ElementReleaseLib
                     Continue For
                 End If
                 
-                ' Skip OldVersions folder (special Vault folder)
-                If IsOldVersionsPath(refPath) Then
-                    UtilsLib.LogInfo("DiscoverAssemblyTree: Skipping OldVersions file: " & System.IO.Path.GetFileName(refPath))
+                ' Skip Vault versioning (OldVersions folder or versioned filenames)
+                If IsVaultOldVersion(refPath) Then
+                    UtilsLib.LogInfo("DiscoverAssemblyTree: Skipping Vault versioning path: " & System.IO.Path.GetFileName(refPath))
                     Continue For
                 End If
                 
@@ -585,12 +980,13 @@ Public Module ElementReleaseLib
                     Dim refPath As String = fd.FullFileName
                     
                     If Not IsInsideSourceRoot(refPath, sourceRoot) Then Continue For
-                    If IsOldVersionsPath(refPath) Then Continue For
+                    If IsVaultOldVersion(refPath) Then Continue For
                     
                     Dim ext As String = System.IO.Path.GetExtension(refPath).ToLower()
                     
                     If ext = ".ipt" AndAlso Not tree.Parts.ContainsKey(refPath) Then
-                        Dim partDoc As PartDocument = CType(app.Documents.Open(refPath, False), PartDocument)
+                        Dim partDoc As PartDocument = TryOpenPartDocument(app, refPath, False)
+                        If partDoc Is Nothing Then Continue For
                         UtilsLib.LogInfo("DiscoverAssemblyTree: Found via FileDescriptor: " & System.IO.Path.GetFileName(refPath))
                         Dim info As PartInfo = ClassifyPart(partDoc, sourceRoot)
                         tree.Parts.Add(refPath, info)
@@ -608,6 +1004,7 @@ Public Module ElementReleaseLib
             ' Third pass: Iterate through component occurrences to catch any remaining parts
             ' This handles lazy-loaded parts and parts in nested subassemblies
             DiscoverFromOccurrences(app, asmDoc.ComponentDefinition.Occurrences, tree, sourceRoot)
+            PruneVaultVersioningFromAssemblyTree(tree)
             
             UtilsLib.LogInfo("DiscoverAssemblyTree: Found " & tree.Parts.Count & " parts, " & tree.Assemblies.Count & " assemblies")
             
@@ -621,7 +1018,8 @@ Public Module ElementReleaseLib
                 Dim initialMasters As New List(Of String)
                 For Each kvp In tree.Parts
                     If kvp.Value.Role = PartRole.Derived AndAlso Not String.IsNullOrEmpty(kvp.Value.DerivedFromMaster) Then
-                        If Not initialMasters.Contains(kvp.Value.DerivedFromMaster) Then
+                        If IsVaultOldVersion(kvp.Value.DerivedFromMaster) Then Continue For
+                        If Not initialMasters.Exists(Function(p) p.Equals(kvp.Value.DerivedFromMaster, StringComparison.OrdinalIgnoreCase)) Then
                             initialMasters.Add(kvp.Value.DerivedFromMaster)
                         End If
                     End If
@@ -685,6 +1083,7 @@ Public Module ElementReleaseLib
                 
                 ' Classify which intermediate assemblies are actually needed
                 ClassifyIntermediateAssemblies(tree)
+                PruneVaultVersioningFromAssemblyTree(tree)
                 
                 UtilsLib.LogInfo("DiscoverAssemblyTree: Multi-master discovery complete")
                 UtilsLib.LogInfo("  External masters: " & tree.ExternalMasters.Count)
@@ -770,11 +1169,12 @@ Public Module ElementReleaseLib
                     Try
                         If occ.ReferencedFileDescriptor IsNot Nothing Then
                             Dim refPath2 As String = occ.ReferencedFileDescriptor.FullFileName
-                            If IsInsideSourceRoot(refPath2, sourceRoot) AndAlso Not IsOldVersionsPath(refPath2) Then
+                            If IsInsideSourceRoot(refPath2, sourceRoot) AndAlso Not IsVaultOldVersion(refPath2) Then
                                 Dim ext2 As String = System.IO.Path.GetExtension(refPath2).ToLower()
                                 If ext2 = ".ipt" AndAlso Not tree.Parts.ContainsKey(refPath2) Then
                                     ' Open the document to classify it
-                                    Dim partDoc As PartDocument = CType(app.Documents.Open(refPath2, False), PartDocument)
+                                    Dim partDoc As PartDocument = TryOpenPartDocument(app, refPath2, False)
+                                    If partDoc Is Nothing Then Continue For
                                     UtilsLib.LogInfo("DiscoverAssemblyTree: Found suppressed part: " & System.IO.Path.GetFileName(refPath2))
                                     Dim info As PartInfo = ClassifyPart(partDoc, sourceRoot)
                                     tree.Parts.Add(refPath2, info)
@@ -785,7 +1185,8 @@ Public Module ElementReleaseLib
                                         .RelativePath = GetRelativePath(sourceRoot, refPath2)
                                     })
                                     ' Also discover its contents
-                                    Dim subAsmDoc As AssemblyDocument = CType(app.Documents.Open(refPath2, False), AssemblyDocument)
+                                    Dim subAsmDoc As AssemblyDocument = TryOpenAssemblyDocument(app, refPath2, False)
+                                    If subAsmDoc Is Nothing Then Continue For
                                     DiscoverFromOccurrences(app, subAsmDoc.ComponentDefinition.Occurrences, tree, sourceRoot)
                                 End If
                             End If
@@ -804,8 +1205,8 @@ Public Module ElementReleaseLib
                     Continue For
                 End If
                 
-                ' Skip OldVersions folder
-                If IsOldVersionsPath(refPath) Then
+                ' Skip Vault versioning paths
+                If IsVaultOldVersion(refPath) Then
                     Continue For
                 End If
                 
@@ -904,15 +1305,12 @@ Public Module ElementReleaseLib
             If Not System.IO.Directory.Exists(folder) Then Continue For
             
             Try
-                For Each idwPath In System.IO.Directory.GetFiles(folder, "*.idw", System.IO.SearchOption.AllDirectories)
-                    ' Skip OldVersions folder (special Vault folder)
-                    If IsOldVersionsPath(idwPath) Then
-                        UtilsLib.LogInfo("DiscoverDrawings: Skipping OldVersions file: " & System.IO.Path.GetFileName(idwPath))
-                        Continue For
-                    End If
+                Dim idwPaths As List(Of String) = ListPathsRecursiveExcludingVault(folder, "*.idw")
+                For Each idwPath As String In idwPaths
                     
                     Try
-                        Dim drawDoc As DrawingDocument = CType(app.Documents.Open(idwPath, False), DrawingDocument)
+                        Dim drawDoc As DrawingDocument = TryOpenDrawingDocument(app, idwPath, False)
+                        If drawDoc Is Nothing Then Continue For
                         Try
                             Dim refs As New List(Of String)
                             
@@ -973,6 +1371,11 @@ Public Module ElementReleaseLib
         Do While toProcess.Count > 0
             Dim masterPath As String = toProcess.Dequeue()
             If discoveredMasters.Contains(masterPath) Then Continue Do
+            If IsVaultOldVersion(masterPath) Then
+                discoveredMasters.Add(masterPath)
+                UtilsLib.LogInfo("DiscoverAllMasters: Skipping Vault versioning path: " & System.IO.Path.GetFileName(masterPath))
+                Continue Do
+            End If
             discoveredMasters.Add(masterPath)
             
             Dim isExternal As Boolean = Not IsInsideSourceRoot(masterPath, tree.SourceRoot)
@@ -995,11 +1398,13 @@ Public Module ElementReleaseLib
                 
                 ' Only open if not already open
                 If masterDoc Is Nothing Then
-                    masterDoc = app.Documents.Open(masterPath, False)
-                    weOpenedIt = True
+                    masterDoc = TryOpenDocument(app, masterPath, False)
+                    weOpenedIt = (masterDoc IsNot Nothing)
                 End If
                 
-                If masterDoc.DocumentType = DocumentTypeEnum.kPartDocumentObject Then
+                If masterDoc Is Nothing Then
+                    UtilsLib.LogWarn("DiscoverAllMasters: skipped master (open failed or Vault path): " & System.IO.Path.GetFileName(masterPath))
+                ElseIf masterDoc.DocumentType = DocumentTypeEnum.kPartDocumentObject Then
                     Dim partMaster As PartDocument = CType(masterDoc, PartDocument)
                     Dim refComps = partMaster.ComponentDefinition.ReferenceComponents
                     
@@ -1007,7 +1412,7 @@ Public Module ElementReleaseLib
                     For Each dpc As DerivedPartComponent In refComps.DerivedPartComponents
                         Try
                             Dim refFile As String = dpc.ReferencedFile.FullFileName
-                            deps.Add(refFile)
+                            If Not IsVaultOldVersion(refFile) Then deps.Add(refFile)
                             
                             ' Check if derivation is via an assembly
                             Try
@@ -1015,7 +1420,7 @@ Public Module ElementReleaseLib
                                 Dim fullDocName As String = CStr(CallByName(dpDef, "FullDocumentName", CallType.Get))
                                 If fullDocName.ToLower().Contains(".iam") Then
                                     Dim asmPath As String = ExtractAssemblyPathFromFullDocName(fullDocName)
-                                    If Not String.IsNullOrEmpty(asmPath) Then
+                                    If Not String.IsNullOrEmpty(asmPath) AndAlso Not IsVaultOldVersion(asmPath) Then
                                         tree.IntermediateAssemblies.Add(asmPath)
                                         If Not deps.Contains(asmPath) Then deps.Add(asmPath)
                                         
@@ -1031,8 +1436,7 @@ Public Module ElementReleaseLib
                             Catch
                             End Try
                             
-                            ' Queue for processing if not already discovered
-                            If Not discoveredMasters.Contains(refFile) AndAlso Not toProcess.Contains(refFile) Then
+                            If Not IsVaultOldVersion(refFile) AndAlso Not discoveredMasters.Contains(refFile) AndAlso Not toProcess.Contains(refFile) Then
                                 toProcess.Enqueue(refFile)
                             End If
                         Catch
@@ -1043,6 +1447,7 @@ Public Module ElementReleaseLib
                     For Each dac As DerivedAssemblyComponent In refComps.DerivedAssemblyComponents
                         Try
                             Dim refFile As String = dac.ReferencedFile.FullFileName
+                            If IsVaultOldVersion(refFile) Then Continue For
                             deps.Add(refFile)
                             tree.IntermediateAssemblies.Add(refFile)
                             
@@ -1058,6 +1463,7 @@ Public Module ElementReleaseLib
                     For Each refDoc As Document In partMaster.ReferencedDocuments
                         Try
                             Dim refPath As String = refDoc.FullFileName
+                            If IsVaultOldVersion(refPath) Then Continue For
                             If refDoc.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
                                 tree.IntermediateAssemblies.Add(refPath)
                                 UtilsLib.LogInfo("DiscoverAllMasters: Found intermediate assembly via ReferencedDocuments: " & System.IO.Path.GetFileName(refPath))
@@ -1090,7 +1496,7 @@ Public Module ElementReleaseLib
                                 
                                 If Not String.IsNullOrEmpty(fullDocName) AndAlso fullDocName.ToLower().Contains(".iam") Then
                                     Dim asmPath As String = ExtractAssemblyPathFromFullDocName(fullDocName)
-                                    If Not String.IsNullOrEmpty(asmPath) Then
+                                    If Not String.IsNullOrEmpty(asmPath) AndAlso Not IsVaultOldVersion(asmPath) Then
                                         tree.IntermediateAssemblies.Add(asmPath)
                                         UtilsLib.LogInfo("DiscoverAllMasters: Found intermediate assembly via FullDocumentName: " & System.IO.Path.GetFileName(asmPath))
                                         
@@ -1145,6 +1551,7 @@ Public Module ElementReleaseLib
                     For Each occ As ComponentOccurrence In asmMaster.ComponentDefinition.Occurrences.AllLeafOccurrences
                         Try
                             Dim occPath As String = occ.Definition.Document.FullFileName
+                            If IsVaultOldVersion(occPath) Then Continue For
                             If System.IO.Path.GetExtension(occPath).ToLower() = ".ipt" Then
                                 If Not candidateAssemblies.ContainsKey(masterPath) Then
                                     candidateAssemblies(masterPath) = New List(Of String)
@@ -1164,18 +1571,21 @@ Public Module ElementReleaseLib
                 End If
             End Try
             
-            ' Store dependencies
-            If deps.Count > 0 Then
-                tree.MasterDependencies(masterPath) = deps
-            End If
+            ' Store dependencies and external master info (omit Vault versioning paths)
+            Dim depsFiltered As New List(Of String)
+            For Each d As String In deps
+                If Not IsVaultOldVersion(d) AndAlso Not depsFiltered.Exists(Function(x) x.Equals(d, StringComparison.OrdinalIgnoreCase)) Then
+                    depsFiltered.Add(d)
+                End If
+            Next
+            If depsFiltered.Count > 0 Then tree.MasterDependencies(masterPath) = depsFiltered
             
-            ' Store external master info
-            If isExternal Then
+            If isExternal AndAlso Not IsVaultOldVersion(masterPath) Then
                 Dim info As New MasterInfo()
                 info.FilePath = masterPath
                 info.RelativePath = System.IO.Path.GetFileName(masterPath)
                 info.SourceElement = ExtractElementName(masterPath)
-                info.DependsOn = deps
+                info.DependsOn = New List(Of String)(depsFiltered)
                 info.IsIntermediate = System.IO.Path.GetExtension(masterPath).ToLower() = ".iam"
                 tree.ExternalMasters(masterPath) = info
             End If
@@ -1214,7 +1624,12 @@ Public Module ElementReleaseLib
             
             ' Open visibly if not already open (following test script pattern)
             If asmDoc Is Nothing Then
-                asmDoc = CType(app.Documents.Open(assemblyPath, True), AssemblyDocument)
+                asmDoc = TryOpenAssemblyDocument(app, assemblyPath, True)
+            End If
+            
+            If asmDoc Is Nothing Then
+                UtilsLib.LogWarn("DetectProjectedGeometry: cannot open assembly (failed or Vault path): " & System.IO.Path.GetFileName(assemblyPath))
+                Return unresolvedOccurrences
             End If
             
             ' Activate for browser node access
@@ -1300,7 +1715,9 @@ Public Module ElementReleaseLib
                                                 
                                                 If Not isDuplicate Then
                                                     tree.ProjectedGeometryChains.Add(chain)
-                                                    tree.IntermediateAssemblies.Add(assemblyPath)
+                                                    If Not IsVaultOldVersion(assemblyPath) Then
+                                                        tree.IntermediateAssemblies.Add(assemblyPath)
+                                                    End If
                                                     UtilsLib.LogInfo("DetectProjectedGeometry: Found chain: " & _
                                                         System.IO.Path.GetFileName(refPath) & " --(" & _
                                                         System.IO.Path.GetFileName(assemblyPath) & ")--> " & _
@@ -1437,11 +1854,11 @@ Public Module ElementReleaseLib
         Dim productFamilyRoot As String = GetProductFamilyRoot(tree.SourceRoot)
         UtilsLib.LogInfo("SearchProductFamilyForIntermediates: Product family root: " & productFamilyRoot)
         
-        ' Find all assemblies in the product family
-        Dim allAssemblies As String() = Nothing
+        ' Find all assemblies in the product family (never scan Vault OldVersions trees)
+        Dim allAssemblies As List(Of String) = Nothing
         Try
-            allAssemblies = System.IO.Directory.GetFiles(productFamilyRoot, "*.iam", System.IO.SearchOption.AllDirectories)
-            UtilsLib.LogInfo("SearchProductFamilyForIntermediates: Scanning " & allAssemblies.Length & " assemblies...")
+            allAssemblies = ListPathsRecursiveExcludingVault(productFamilyRoot, "*.iam")
+            UtilsLib.LogInfo("SearchProductFamilyForIntermediates: Scanning " & allAssemblies.Count & " assemblies...")
         Catch ex As Exception
             UtilsLib.LogWarn("SearchProductFamilyForIntermediates: Error scanning folder: " & ex.Message)
             Return
@@ -1453,19 +1870,21 @@ Public Module ElementReleaseLib
         ' NOTE: Following test script pattern - we do NOT close documents during the loop
         ' This is critical for stability
         
-        For Each iamFile In allAssemblies
+        For Each iamFile As String In allAssemblies
             ' Skip already processed or invalid (matches test script exactly)
             If iamFile.Equals(currentAsmPath, StringComparison.OrdinalIgnoreCase) Then Continue For
             If tree.IntermediateAssemblies.Contains(iamFile) Then Continue For
-            If IsVaultOldVersion(iamFile) Then Continue For
             
             Try
                 ' First, quick check: does this assembly contain BOTH masters of any dependency pair?
                 ' IMPORTANT: Must open VISIBLY - invisible open + activate does not work for browser access
-                Dim extAsm As AssemblyDocument = CType(app.Documents.Open(iamFile, True), AssemblyDocument)
+                Dim extAsm As AssemblyDocument = TryOpenAssemblyDocument(app, iamFile, True)
+                If extAsm Is Nothing Then Continue For
                 Dim containedFiles As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
                 For Each refDoc As Document In extAsm.AllReferencedDocuments
-                    containedFiles.Add(refDoc.FullFileName)
+                    Dim refFull As String = refDoc.FullFileName
+                    If IsVaultOldVersion(refFull) Then Continue For
+                    containedFiles.Add(refFull)
                 Next
                 
                 ' Check each dependency pair
@@ -1699,7 +2118,9 @@ Public Module ElementReleaseLib
                     If referencesResolved Then
                         UtilsLib.LogInfo("    ** VERIFIED: References resolve in this assembly!")
                         UtilsLib.LogInfo("       Source occurrence: " & sourceOccName)
-                        tree.IntermediateAssemblies.Add(iamFile)
+                        If Not IsVaultOldVersion(iamFile) Then
+                            tree.IntermediateAssemblies.Add(iamFile)
+                        End If
                         
                         Dim chain As New Tuple(Of String, String, String)(pair.Item2, iamFile, pair.Item1)
                         If Not tree.ProjectedGeometryChains.Any(Function(c) c.Item1.Equals(chain.Item1, StringComparison.OrdinalIgnoreCase) AndAlso c.Item2.Equals(chain.Item2, StringComparison.OrdinalIgnoreCase) AndAlso c.Item3.Equals(chain.Item3, StringComparison.OrdinalIgnoreCase)) Then
@@ -2209,12 +2630,17 @@ Public Module ElementReleaseLib
                                                 sourcePath As String, _
                                                 targetPath As String, _
                                                 refMap As Dictionary(Of String, String)) As Document
-        ' Create target directory
-        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(targetPath))
+        If IsVaultOldVersion(sourcePath) OrElse IsVaultOldVersion(targetPath) Then
+            UtilsLib.LogWarn("CopyDocumentWithReferences: refusing copy from/to Vault versioning path")
+            Return Nothing
+        End If
         
-        ' Open source and SaveAs to target (creates new GUID)
-        Dim doc As Document = app.Documents.Open(sourcePath, False)
-        doc.SaveAs(targetPath, False)
+        Dim doc As Document = TryOpenDocument(app, sourcePath, False)
+        If doc Is Nothing Then Return Nothing
+        If Not TrySaveDocumentAs(doc, targetPath) Then
+            Try : doc.Close(True) : Catch : End Try
+            Return Nothing
+        End If
         
         ' Update references using the reference map
         UpdateDocumentReferences(doc, refMap)
@@ -2234,7 +2660,9 @@ Public Module ElementReleaseLib
                 Try
                     Dim refPath As String = refDesc.ReferencedFileDescriptor.FullFileName
                     If refMap.ContainsKey(refPath) Then
-                        refDesc.ReferencedFileDescriptor.ReplaceReference(refMap(refPath))
+                        Dim newPath As String = refMap(refPath)
+                        If IsVaultOldVersion(refPath) OrElse IsVaultOldVersion(newPath) Then Continue For
+                        refDesc.ReferencedFileDescriptor.ReplaceReference(newPath)
                     End If
                 Catch : End Try
             Next
@@ -2250,7 +2678,10 @@ Public Module ElementReleaseLib
                 Try
                     Dim currentPath As String = occ.Definition.Document.FullFileName
                     If refMap.ContainsKey(currentPath) Then
-                        occ.Replace(refMap(currentPath), True)
+                        Dim newPath As String = refMap(currentPath)
+                        If Not IsVaultOldVersion(newPath) Then
+                            occ.Replace(newPath, True)
+                        End If
                     End If
                 Catch : End Try
             Next
@@ -2356,6 +2787,7 @@ Public Module ElementReleaseLib
         
         ' Generate temp paths (use hash-based subfolders to avoid name collisions)
         For Each sourcePath In filesToCopy
+            If IsVaultOldVersion(sourcePath) Then Continue For
             Dim sourceDir As String = System.IO.Path.GetDirectoryName(sourcePath)
             Dim sourceDirHash As String = Math.Abs(sourceDir.GetHashCode()).ToString()
             Dim targetDir As String = System.IO.Path.Combine(tempRoot, sourceDirHash)
@@ -2382,6 +2814,7 @@ Public Module ElementReleaseLib
                 
                 Try
                     Dim masterDoc As Document = CopyDocumentWithReferences(app, masterPath, targetPath, copiedFiles)
+                    If masterDoc Is Nothing Then Continue For
                     masterDoc.Save()
                     copiedFiles(masterPath) = targetPath
                     UtilsLib.LogInfo("      Copied master: " & System.IO.Path.GetFileName(masterPath))
@@ -2400,6 +2833,7 @@ Public Module ElementReleaseLib
                 
                 Try
                     Dim intAsmDoc As Document = CopyDocumentWithReferences(app, intAsmPath, targetPath, copiedFiles)
+                    If intAsmDoc Is Nothing Then Continue For
                     intAsmDoc.Save()
                     copiedFiles(intAsmPath) = targetPath
                     UtilsLib.LogInfo("      Copied intermediate: " & System.IO.Path.GetFileName(intAsmPath))
@@ -2418,6 +2852,7 @@ Public Module ElementReleaseLib
                 
                 Try
                     Dim partDoc As Document = CopyDocumentWithReferences(app, partPath, targetPath, copiedFiles)
+                    If partDoc Is Nothing Then Continue For
                     partDoc.Save()
                     copiedFiles(partPath) = targetPath
                     partDoc.Close(True)
@@ -2433,7 +2868,9 @@ Public Module ElementReleaseLib
             Dim tempAsmDoc As AssemblyDocument = Nothing
             
             Try
-                tempAsmDoc = CType(CopyDocumentWithReferences(app, tree.RootAssemblyPath, tempAsmPath, copiedFiles), AssemblyDocument)
+                Dim copied As Document = CopyDocumentWithReferences(app, tree.RootAssemblyPath, tempAsmPath, copiedFiles)
+                If copied Is Nothing Then Throw New System.InvalidOperationException("CopyDocumentWithReferences returned Nothing for root assembly")
+                tempAsmDoc = CType(copied, AssemblyDocument)
                 tempAsmDoc.Save()
                 copiedFiles(tree.RootAssemblyPath) = tempAsmPath
                 UtilsLib.LogInfo("      Copied assembly: " & System.IO.Path.GetFileName(tree.RootAssemblyPath))
@@ -2448,7 +2885,7 @@ Public Module ElementReleaseLib
             UtilsLib.LogInfo("  STAGE 2: Analyzing variants...")
             
             ' Open the temp assembly visibly for analysis
-            tempAsmDoc = CType(app.Documents.Open(tempAsmPath, True), AssemblyDocument)
+            tempAsmDoc = TryOpenAssemblyDocument(app, tempAsmPath, True)
             
             ' Build map of original part paths to temp part documents
             Dim tempParts As New Dictionary(Of String, PartDocument)(StringComparer.OrdinalIgnoreCase)
@@ -2467,9 +2904,11 @@ Public Module ElementReleaseLib
                             End If
                         Next
                         If tempPartDoc Is Nothing Then
-                            tempPartDoc = CType(app.Documents.Open(tempPartPath, False), PartDocument)
+                            tempPartDoc = TryOpenPartDocument(app, tempPartPath, False)
                         End If
-                        tempParts(originalPartPath) = tempPartDoc
+                        If tempPartDoc IsNot Nothing Then
+                            tempParts(originalPartPath) = tempPartDoc
+                        End If
                     Catch : End Try
                 End If
             Next
@@ -2494,7 +2933,7 @@ Public Module ElementReleaseLib
                         Next
                         If tempDoc Is Nothing Then
                             Try
-                                tempDoc = app.Documents.Open(tempMasterPath, False)
+                                tempDoc = TryOpenDocument(app, tempMasterPath, False)
                             Catch : End Try
                         End If
                         
@@ -2507,8 +2946,10 @@ Public Module ElementReleaseLib
                 Next
                 
                 ' Update temp assembly to propagate changes (same as ExecuteRelease)
-                tempAsmDoc.Update2(True)
-                tempAsmDoc.Save()
+                If tempAsmDoc IsNot Nothing Then
+                    tempAsmDoc.Update2(True)
+                    tempAsmDoc.Save()
+                End If
                 
                 ' Compute fingerprints for all parts
                 Dim variantFps As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
@@ -2591,13 +3032,17 @@ Public Module ElementReleaseLib
         ' Collect internal masters (from parts in tree)
         For Each kvp In tree.Parts
             If kvp.Value.Role = PartRole.Derived AndAlso Not String.IsNullOrEmpty(kvp.Value.DerivedFromMaster) Then
-                masters.Add(kvp.Value.DerivedFromMaster)
+                If Not IsVaultOldVersion(kvp.Value.DerivedFromMaster) Then
+                    masters.Add(kvp.Value.DerivedFromMaster)
+                End If
             End If
         Next
         
         ' Add external masters discovered during multi-master analysis
         For Each kvp In tree.ExternalMasters
-            masters.Add(kvp.Key)
+            If Not IsVaultOldVersion(kvp.Key) Then
+                masters.Add(kvp.Key)
+            End If
         Next
         
         ' Return in dependency order (roots first)
@@ -2703,9 +3148,9 @@ Public Module ElementReleaseLib
     ''' <summary>
     ''' Get file numbers (local dev mode or Vault production mode).
     ''' </summary>
-    Public Function GetFileNumbers(targetRoot As String, count As Integer) As List(Of String)
+    Public Function GetFileNumbers(targetRoot As String, count As Integer, Optional manifestWorkspaceRoot As String = Nothing) As List(Of String)
         If DEVELOPMENT_MODE Then
-            Return GenerateLocalNumbers(count, targetRoot)
+            Return GenerateLocalNumbers(count, targetRoot, manifestWorkspaceRoot)
         Else
             Dim conn = VaultNumberingLib.GetVaultConnection()
             If conn Is Nothing Then
@@ -2722,13 +3167,15 @@ Public Module ElementReleaseLib
     ''' (which are typically numbered below 1000 in test projects).
     ''' Vault would never give duplicate numbers, so this is only for local testing.
     ''' </summary>
-    Public Function GenerateLocalNumbers(count As Integer, outputRoot As String) As List(Of String)
+    ''' <param name="outputRoot">Elemendid root (or folder containing _manifest.json legacy data).</param>
+    ''' <param name="manifestWorkspaceRoot">Element SourceRoot; release manifest is read from parent Aluselemendid when applicable.</param>
+    Public Function GenerateLocalNumbers(count As Integer, outputRoot As String, Optional manifestWorkspaceRoot As String = Nothing) As List(Of String)
         UtilsLib.LogInfo("GenerateLocalNumbers: Generating " & count & " local numbers (development mode)")
         
         ' Start from 1000 to avoid conflicts with existing source files (typically < 1000)
         Dim startNum As Integer = 1000
         Dim manifestPath = outputRoot & "\_manifest.json"
-        If System.IO.File.Exists(manifestPath) Then
+        If ReleasePathExistsOnDisk(manifestPath) Then
             Try
                 Dim manifest = ReadManifest(manifestPath)
                 If manifest IsNot Nothing AndAlso manifest.SharedParts.Count > 0 Then
@@ -2741,6 +3188,21 @@ Public Module ElementReleaseLib
                 End If
             Catch
             End Try
+        End If
+        
+        ' Also advance past numbers from element release manifest (stored under Aluselemendid workspace, not Elemendid)
+        If Not String.IsNullOrWhiteSpace(manifestWorkspaceRoot) Then
+            Dim relManifestPath As String = GetReleaseManifestPath(manifestWorkspaceRoot)
+            If ReleasePathExistsOnDisk(relManifestPath) Then
+                Try
+                    Dim relM = ReadManifest(relManifestPath)
+                    If relM IsNot Nothing Then
+                        Dim maxN As Integer = GetMaxNumericTargetFromManifest(relM)
+                        If maxN >= startNum Then startNum = maxN + 1
+                    End If
+                Catch
+                End Try
+            End If
         End If
         
         Dim numbers As New List(Of String)
@@ -2796,6 +3258,11 @@ Public Module ElementReleaseLib
         props.Project = ""
         props.PartNumber = System.IO.Path.GetFileNameWithoutExtension(filePath)
         
+        If IsVaultOldVersion(filePath) Then
+            m_FilePropertiesCache(filePath) = props
+            Return props
+        End If
+        
         Try
             ' Check if file is already open
             Dim doc As Document = Nothing
@@ -2829,27 +3296,29 @@ Public Module ElementReleaseLib
             Else
                 ' File not open - try to open briefly to read properties
                 Try
-                    If System.IO.File.Exists(filePath) Then
-                        doc = app.Documents.Open(filePath, True) ' Open silently
-                        Try
-                            Dim propSet As PropertySet = doc.PropertySets.Item("Design Tracking Properties")
-                            Dim descProp As Inventor.Property = propSet.Item("Description")
-                            If descProp.Value IsNot Nothing AndAlso Not String.IsNullOrEmpty(descProp.Value.ToString()) Then
-                                props.Description = descProp.Value.ToString()
-                            End If
-                            Dim pnProp As Inventor.Property = propSet.Item("Part Number")
-                            If pnProp.Value IsNot Nothing Then
-                                props.PartNumber = pnProp.Value.ToString()
-                            End If
-                        Catch : End Try
-                        Try
-                            Dim summarySet As PropertySet = doc.PropertySets.Item("Inventor Summary Information")
-                            Dim projProp As Inventor.Property = summarySet.Item("Project")
-                            If projProp.Value IsNot Nothing Then
-                                props.Project = projProp.Value.ToString()
-                            End If
-                        Catch : End Try
-                        doc.Close(True) ' Close without saving
+                    If ReleasePathExistsOnDisk(filePath) Then
+                        doc = TryOpenDocument(app, filePath, True)
+                        If doc IsNot Nothing Then
+                            Try
+                                Dim propSet As PropertySet = doc.PropertySets.Item("Design Tracking Properties")
+                                Dim descProp As Inventor.Property = propSet.Item("Description")
+                                If descProp.Value IsNot Nothing AndAlso Not String.IsNullOrEmpty(descProp.Value.ToString()) Then
+                                    props.Description = descProp.Value.ToString()
+                                End If
+                                Dim pnProp As Inventor.Property = propSet.Item("Part Number")
+                                If pnProp.Value IsNot Nothing Then
+                                    props.PartNumber = pnProp.Value.ToString()
+                                End If
+                            Catch : End Try
+                            Try
+                                Dim summarySet As PropertySet = doc.PropertySets.Item("Inventor Summary Information")
+                                Dim projProp As Inventor.Property = summarySet.Item("Project")
+                                If projProp.Value IsNot Nothing Then
+                                    props.Project = projProp.Value.ToString()
+                                End If
+                            Catch : End Try
+                            doc.Close(True) ' Close without saving
+                        End If
                     End If
                 Catch : End Try
             End If
@@ -2882,10 +3351,13 @@ Public Module ElementReleaseLib
     ''' Allocates real file numbers and updates the release plan.
     ''' Call this AFTER user confirms release, not before UI.
     ''' </summary>
-    Public Function AllocateRealNumbers(plan As ReleasePlan, targetRoot As String) As Boolean
+    ''' <param name="targetRoot">Elemendid output root (for legacy _manifest.json scan in dev mode).</param>
+    ''' <param name="manifestWorkspaceRoot">Element SourceRoot for locating shared Aluselemendid/_release_manifest.json; omit to skip.</param>
+    Public Function AllocateRealNumbers(plan As ReleasePlan, targetRoot As String, Optional manifestWorkspaceRoot As String = Nothing) As Boolean
         ' Count how many real numbers we need (parts and assemblies only, not drawings)
         Dim count As Integer = 0
         For Each f As PlannedFile In plan.Files
+            If IsVaultOldVersion(f.SourcePath) OrElse IsVaultOldVersion(f.TargetLocalPath) Then Continue For
             If f.IsPlaceholder AndAlso Not f.IsExisting Then
                 count += 1
             End If
@@ -2894,7 +3366,7 @@ Public Module ElementReleaseLib
         If count = 0 Then Return True
         
         ' Get real numbers
-        Dim realNumbers As List(Of String) = GetFileNumbers(targetRoot, count)
+        Dim realNumbers As List(Of String) = GetFileNumbers(targetRoot, count, manifestWorkspaceRoot)
         If realNumbers Is Nothing OrElse realNumbers.Count < count Then
             UtilsLib.LogError("AllocateRealNumbers: Failed to get " & count & " numbers")
             Return False
@@ -2906,6 +3378,7 @@ Public Module ElementReleaseLib
         ' Replace placeholders with real numbers for parts and assemblies
         Dim numberIndex As Integer = 0
         For Each f As PlannedFile In plan.Files
+            If IsVaultOldVersion(f.SourcePath) OrElse IsVaultOldVersion(f.TargetLocalPath) Then Continue For
             If f.IsPlaceholder AndAlso Not f.IsExisting Then
                 Dim oldNumber As String = f.VaultNumber
                 Dim newNumber As String = realNumbers(numberIndex)
@@ -2933,6 +3406,7 @@ Public Module ElementReleaseLib
         ' Drawings don't get their own numbers - they use their referenced model's number
         Dim drawingsUpdated As Integer = 0
         For Each f As PlannedFile In plan.Files
+            If IsVaultOldVersion(f.SourcePath) OrElse IsVaultOldVersion(f.TargetLocalPath) Then Continue For
             If f.FileType = FileType.Drawing AndAlso Not f.IsExisting Then
                 Dim oldNumber As String = f.VaultNumber
                 If numberMap.ContainsKey(oldNumber) Then
@@ -3009,6 +3483,7 @@ Public Module ElementReleaseLib
         Dim canShare As Boolean = (variants.Count >= 2)
         
         For Each group In partGroups
+            If IsVaultOldVersion(group.PartPath) Then Continue For
             ' A part is shared if:
             ' 1. We have 2+ moodulid to share between
             ' 2. The part has exactly 1 unique fingerprint (same geometry in all moodulid)
@@ -3032,7 +3507,7 @@ Public Module ElementReleaseLib
                 Dim partProps As FileProperties = GetFileProperties(app, group.PartPath)
                 ' Construct path with new filename (not original filename)
                 Dim newFileNameShared As String = fileNumbers(numberIndex) & System.IO.Path.GetExtension(group.PartPath)
-                Dim relDirShared As String = System.IO.Path.GetDirectoryName(group.RelativePath)
+                Dim relDirShared As String = SanitizeRelativePathForRelease(System.IO.Path.GetDirectoryName(group.RelativePath))
                 Dim pf As New PlannedFile With {
                     .SourcePath = group.PartPath,
                     .TargetLocalPath = System.IO.Path.Combine(plan.SharedFolder, relDirShared, newFileNameShared),
@@ -3057,7 +3532,7 @@ Public Module ElementReleaseLib
                 For Each fpKvp In group.UniqueFingerprints
                     Dim firstVariant = fpKvp.Value(0)
                     Dim newFileName As String = fileNumbers(numberIndex) & System.IO.Path.GetExtension(group.PartPath)
-                    Dim relDir As String = System.IO.Path.GetDirectoryName(group.RelativePath)
+                    Dim relDir As String = SanitizeRelativePathForRelease(System.IO.Path.GetDirectoryName(group.RelativePath))
                     
                     Dim pf As New PlannedFile With {
                         .SourcePath = group.PartPath,
@@ -3084,9 +3559,10 @@ Public Module ElementReleaseLib
         
         For Each variantCfg As ExcelReaderLib.ElementConfig In variants
             For Each asmKvp In tree.Assemblies
+                If IsVaultOldVersion(asmKvp.Key) Then Continue For
                 Dim relativePath = asmKvp.Value.RelativePath
                 Dim newFileName As String = fileNumbers(numberIndex) & ".iam"
-                Dim relDir As String = System.IO.Path.GetDirectoryName(relativePath)
+                Dim relDir As String = SanitizeRelativePathForRelease(System.IO.Path.GetDirectoryName(relativePath))
                 Dim asmProps As FileProperties = GetFileProperties(app, asmKvp.Key)
                 
                 ' Build projected description from element name and parameters
@@ -3120,6 +3596,7 @@ Public Module ElementReleaseLib
         Next
         
         For Each dwgInfo As DrawingInfo In tree.Drawings
+            If IsVaultOldVersion(dwgInfo.DrawingPath) Then Continue For
             ' Get drawing filename and primary referenced model
             Dim dwgFileName As String = System.IO.Path.GetFileNameWithoutExtension(dwgInfo.DrawingPath)
             Dim primaryModelPath As String = If(dwgInfo.ReferencedModelPaths.Count > 0, dwgInfo.ReferencedModelPaths(0), "")
@@ -3161,7 +3638,7 @@ Public Module ElementReleaseLib
                 Dim newFileName As String = vaultNum & dwgSuffix & ".idw"
                 UtilsLib.LogInfo("Drawing " & dwgFileName & ".idw -> " & newFileName & " (from model " & modelFile.VaultNumber & ")")
                 
-                Dim relDir As String = System.IO.Path.GetDirectoryName(dwgInfo.RelativePath)
+                Dim relDir As String = SanitizeRelativePathForRelease(System.IO.Path.GetDirectoryName(dwgInfo.RelativePath))
                 Dim allVariantNames2 As New List(Of String)
                 For Each vc2 As ExcelReaderLib.ElementConfig In variants
                     allVariantNames2.Add(vc2.ElementName)
@@ -3197,7 +3674,7 @@ Public Module ElementReleaseLib
                     Dim newFileName As String = vaultNum & dwgSuffix & ".idw"
                     UtilsLib.LogInfo("Drawing " & dwgFileName & ".idw (" & variantCfg2.ElementName & ") -> " & newFileName & " (from model " & modelFile.VaultNumber & ")")
                     
-                    Dim relDir As String = System.IO.Path.GetDirectoryName(dwgInfo.RelativePath)
+                    Dim relDir As String = SanitizeRelativePathForRelease(System.IO.Path.GetDirectoryName(dwgInfo.RelativePath))
                     Dim dwgPropsNonShared As FileProperties = GetFileProperties(app, dwgInfo.DrawingPath)
                     
                     Dim pf As New PlannedFile With {
@@ -3230,6 +3707,7 @@ Public Module ElementReleaseLib
             ' Add external masters
             For Each kvp In tree.ExternalMasters
                 Dim masterPath As String = kvp.Key
+                If IsVaultOldVersion(masterPath) Then Continue For
                 Dim masterInfo As MasterInfo = kvp.Value
                 
                 ' Skip if already added for this variant
@@ -3268,6 +3746,7 @@ Public Module ElementReleaseLib
             
             ' Add intermediate assemblies (needed for projected geometry)
             For Each intAsmPath In tree.IntermediateAssemblies
+                If IsVaultOldVersion(intAsmPath) Then Continue For
                 ' Skip if it's also in tree.Assemblies (already handled)
                 If tree.Assemblies.ContainsKey(intAsmPath) Then Continue For
                 
@@ -3413,6 +3892,7 @@ Public Module ElementReleaseLib
         
         ' Filter files
         For Each f As PlannedFile In plan.Files
+            If IsVaultOldVersion(f.SourcePath) OrElse IsVaultOldVersion(f.TargetLocalPath) Then Continue For
             Dim includeFile As Boolean = False
             
             If f.IsShared Then
@@ -3482,7 +3962,10 @@ Public Module ElementReleaseLib
                                           newPartNumber As String, _
                                           Optional projectedDescription As String = Nothing) As Boolean
         Try
-            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(targetPath))
+            If IsVaultOldVersion(sourcePartPath) OrElse IsVaultOldVersion(targetPath) Then
+                UtilsLib.LogWarn("CreateStandalonePart: refusing Vault versioning source or target")
+                Return False
+            End If
 
             ' Open source part (might already be open as part of the assembly)
             Dim partDoc As PartDocument = Nothing
@@ -3497,13 +3980,14 @@ Public Module ElementReleaseLib
             Next
 
             If partDoc Is Nothing Then
-                partDoc = CType(app.Documents.Open(sourcePartPath, True), PartDocument)
+                partDoc = TryOpenPartDocument(app, sourcePartPath, True)
             End If
+            If partDoc Is Nothing Then Return False
 
             Try
                 ' Use SaveAs FIRST to create new file with NEW GUID
                 ' This avoids GUID conflicts when both source and target are open
-                partDoc.SaveAs(targetPath, False)
+                If Not TrySaveDocumentAs(partDoc, targetPath) Then Return False
                 UtilsLib.LogInfo("  SaveAs with new GUID: " & System.IO.Path.GetFileName(targetPath))
 
                 ' Document is now the target file - break ALL external references
@@ -3564,11 +4048,14 @@ Public Module ElementReleaseLib
                                                       newPartNumber As String, _
                                                       Optional projectedDescription As String = Nothing) As Boolean
         Try
-            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(targetPath))
+            If IsVaultOldVersion(targetPath) Then
+                UtilsLib.LogWarn("CreateStandalonePartFromDocument: refusing SaveAs to Vault versioning path")
+                Return False
+            End If
             
             ' Use SaveAs FIRST to create new file with NEW GUID
             ' This avoids GUID conflicts when both source and target are open
-            partDoc.SaveAs(targetPath, False)
+            If Not TrySaveDocumentAs(partDoc, targetPath) Then Return False
             UtilsLib.LogInfo("  SaveAs with new GUID: " & System.IO.Path.GetFileName(targetPath))
             
             ' Document is now the target file - break ALL external references
@@ -3738,7 +4225,10 @@ Public Module ElementReleaseLib
                                             Optional projectedDescription As String = Nothing, _
                                             Optional savedTransforms As Dictionary(Of String, Matrix) = Nothing) As Boolean
         Try
-            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(targetPath))
+            If IsVaultOldVersion(sourceAsmPath) OrElse IsVaultOldVersion(targetPath) Then
+                UtilsLib.LogWarn("CreateAssemblySnapshot: refusing Vault versioning source or target")
+                Return False
+            End If
             
             ' Open source assembly (might already be open)
             Dim asmDoc As AssemblyDocument = Nothing
@@ -3753,8 +4243,9 @@ Public Module ElementReleaseLib
             Next
             
             If asmDoc Is Nothing Then
-                asmDoc = CType(app.Documents.Open(sourceAsmPath, True), AssemblyDocument)
+                asmDoc = TryOpenAssemblyDocument(app, sourceAsmPath, True)
             End If
+            If asmDoc Is Nothing Then Return False
             
             Try
                 ' Log the reference map being used
@@ -3782,7 +4273,9 @@ Public Module ElementReleaseLib
                     Try
                         Dim currentPath As String = occ.Definition.Document.FullFileName
                         If referenceMap.ContainsKey(currentPath) Then
-                            occ.Replace(referenceMap(currentPath), True)
+                            Dim repl As String = referenceMap(currentPath)
+                            If IsVaultOldVersion(repl) Then Continue For
+                            occ.Replace(repl, True)
                             UtilsLib.LogInfo("    Replaced: " & System.IO.Path.GetFileName(currentPath) & " -> " & System.IO.Path.GetFileName(referenceMap(currentPath)))
                         ElseIf targetPaths.Contains(currentPath) Then
                             ' Already points to a target path (was auto-updated by Inventor after a previous Replace)
@@ -3894,7 +4387,7 @@ Public Module ElementReleaseLib
                 ' Use SaveAs to create NEW file with NEW GUID (not File.Copy which preserves GUID)
                 ' This allows both source and target to be open simultaneously without conflicts
                 UtilsLib.LogInfo("  DEBUG: Before SaveAs - Doc=" & asmDoc.FullFileName)
-                asmDoc.SaveAs(targetPath, False)
+                If Not TrySaveDocumentAs(asmDoc, targetPath) Then Return False
                 UtilsLib.LogInfo("  SaveAs with new GUID: " & System.IO.Path.GetFileName(targetPath))
                 UtilsLib.LogInfo("  DEBUG: After SaveAs - Doc=" & asmDoc.FullFileName)
                 
@@ -3982,19 +4475,27 @@ Public Module ElementReleaseLib
                                        newPartNumber As String, _
                                        Optional projectedDescription As String = Nothing) As Boolean
         Try
-            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(targetPath))
+            If IsVaultOldVersion(sourceDrawingPath) OrElse IsVaultOldVersion(targetPath) Then
+                UtilsLib.LogWarn("CreateDrawingCopy: refusing Vault versioning source or target")
+                Return False
+            End If
             
             ' Use a temporary path for the intermediate save (before final SaveAs)
             Dim tempPath As String = System.IO.Path.Combine( _
                 System.IO.Path.GetDirectoryName(targetPath), _
                 "_TEMP_" & System.IO.Path.GetFileName(targetPath))
+            If IsVaultOldVersion(tempPath) Then
+                UtilsLib.LogWarn("CreateDrawingCopy: refusing temp path under Vault versioning")
+                Return False
+            End If
             
             ' ============================================================
             ' PHASE 1: Open source, replace references, save to temp file
             ' ============================================================
             
             ' Open source drawing
-            Dim drawDoc As DrawingDocument = CType(app.Documents.Open(sourceDrawingPath, True), DrawingDocument)
+            Dim drawDoc As DrawingDocument = TryOpenDrawingDocument(app, sourceDrawingPath, True)
+            If drawDoc Is Nothing Then Return False
             
             ' Log reference map contents for debugging
             UtilsLib.LogInfo("  Reference map entries (" & referenceMap.Count & " total):")
@@ -4016,6 +4517,7 @@ Public Module ElementReleaseLib
                 Dim oldPath As String = fd.FullFileName
                 If referenceMap.ContainsKey(oldPath) Then
                     Dim newPath As String = referenceMap(oldPath)
+                    If IsVaultOldVersion(newPath) Then Continue For
                     Try
                         fd.ReplaceReference(newPath)
                         UtilsLib.LogInfo("  Replaced: " & System.IO.Path.GetFileName(oldPath) & " -> " & System.IO.Path.GetFileName(newPath))
@@ -4033,7 +4535,10 @@ Public Module ElementReleaseLib
             Next
             
             ' Save to temp file (this commits the reference changes)
-            drawDoc.SaveAs(tempPath, False)
+            If Not TrySaveDocumentAs(drawDoc, tempPath) Then
+                Try : drawDoc.Close(True) : Catch : End Try
+                Return False
+            End If
             UtilsLib.LogInfo("  Saved temp file: " & System.IO.Path.GetFileName(tempPath))
             
             ' CRITICAL: Close the drawing - this clears all internal caches
@@ -4055,7 +4560,11 @@ Public Module ElementReleaseLib
             Next
             
             ' Reopen the temp drawing - this forces Inventor to load fresh references
-            drawDoc = CType(app.Documents.Open(tempPath, True), DrawingDocument)
+            drawDoc = TryOpenDrawingDocument(app, tempPath, True)
+            If drawDoc Is Nothing Then
+                SafeDeleteFileExcludingVault(tempPath)
+                Return False
+            End If
             UtilsLib.LogInfo("  Reopened drawing - references now resolved from disk")
             
             ' Verify the drawing now sees correct properties
@@ -4132,7 +4641,11 @@ Public Module ElementReleaseLib
             Next
             
             ' SaveAs to final path with NEW GUID
-            drawDoc.SaveAs(targetPath, False)
+            If Not TrySaveDocumentAs(drawDoc, targetPath) Then
+                Try : drawDoc.Close(True) : Catch : End Try
+                SafeDeleteFileExcludingVault(tempPath)
+                Return False
+            End If
             UtilsLib.LogInfo("  SaveAs with new GUID: " & System.IO.Path.GetFileName(targetPath))
             
             ' Save to ensure all changes are committed
@@ -4144,10 +4657,7 @@ Public Module ElementReleaseLib
             drawDoc.Close(True)
             
             ' Delete the temp file
-            Try
-                System.IO.File.Delete(tempPath)
-            Catch
-            End Try
+            SafeDeleteFileExcludingVault(tempPath)
             
             Return True
             
@@ -4238,12 +4748,14 @@ Public Module ElementReleaseLib
                 UtilsLib.LogInfo("      Masters to copy: " & mastersForVariant.Count)
                 
                 For Each file As PlannedFile In mastersForVariant
+                    If IsVaultOldVersion(file.SourcePath) OrElse IsVaultOldVersion(file.TargetLocalPath) Then Continue For
                     Try
-                        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file.TargetLocalPath))
-                        
                         ' Open source, SaveAs to target with new GUID
-                        Dim masterDoc As Document = app.Documents.Open(file.SourcePath, False)
-                        masterDoc.SaveAs(file.TargetLocalPath, False)
+                        Dim masterDoc As Document = TryOpenDocument(app, file.SourcePath, False)
+                        If masterDoc Is Nothing OrElse Not TrySaveDocumentAs(masterDoc, file.TargetLocalPath) Then
+                            If masterDoc IsNot Nothing Then Try : masterDoc.Close(True) : Catch : End Try
+                            Continue For
+                        End If
                         UtilsLib.LogInfo("      Copied master: " & System.IO.Path.GetFileName(file.TargetLocalPath))
                         
                         ' CRITICAL: Update references to previously copied masters
@@ -4253,9 +4765,12 @@ Public Module ElementReleaseLib
                             Try
                                 Dim refPath As String = refDesc.ReferencedFileDescriptor.FullFileName
                                 If copiedMasters.ContainsKey(refPath) Then
-                                    refDesc.ReferencedFileDescriptor.ReplaceReference(copiedMasters(refPath))
-                                    updatedRefs += 1
-                                    UtilsLib.LogInfo("        Updated cross-master ref: " & System.IO.Path.GetFileName(refPath) & " -> " & System.IO.Path.GetFileName(copiedMasters(refPath)))
+                                    Dim newP As String = copiedMasters(refPath)
+                                    If Not IsVaultOldVersion(newP) Then
+                                        refDesc.ReferencedFileDescriptor.ReplaceReference(newP)
+                                        updatedRefs += 1
+                                        UtilsLib.LogInfo("        Updated cross-master ref: " & System.IO.Path.GetFileName(refPath) & " -> " & System.IO.Path.GetFileName(newP))
+                                    End If
                                 End If
                             Catch
                             End Try
@@ -4274,7 +4789,9 @@ Public Module ElementReleaseLib
                                 Try
                                     Dim currentPath As String = occ.Definition.Document.FullFileName
                                     If copiedMasters.ContainsKey(currentPath) Then
-                                        occ.Replace(copiedMasters(currentPath), True)
+                                    Dim repl As String = copiedMasters(currentPath)
+                                    If IsVaultOldVersion(repl) Then Continue For
+                                    occ.Replace(repl, True)
                                         UtilsLib.LogInfo("        Replaced occurrence: " & System.IO.Path.GetFileName(currentPath) & " -> " & System.IO.Path.GetFileName(copiedMasters(currentPath)))
                                     End If
                                 Catch
@@ -4303,6 +4820,7 @@ Public Module ElementReleaseLib
                 UtilsLib.LogInfo("    Copying parts and updating master references...")
                 For Each file As PlannedFile In context.ReleasePlan.Files
                     If file.FileType <> FileType.Part Then Continue For
+                    If IsVaultOldVersion(file.SourcePath) OrElse IsVaultOldVersion(file.TargetLocalPath) Then Continue For
                     If context.MasterPaths.Contains(file.SourcePath) Then Continue For ' Skip masters
                     If Not file.ForVariants.Contains(variantCfg.ElementName) Then Continue For
                     If file.IsExisting Then Continue For
@@ -4316,13 +4834,13 @@ Public Module ElementReleaseLib
                     Catch : End Try
                     
                     Try
-                        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file.TargetLocalPath))
-                        
                         ' Open source part
-                        Dim partDoc As PartDocument = CType(app.Documents.Open(file.SourcePath, False), PartDocument)
+                        Dim partDoc As PartDocument = TryOpenPartDocument(app, file.SourcePath, False)
+                        If partDoc Is Nothing OrElse Not TrySaveDocumentAs(partDoc, file.TargetLocalPath) Then
+                            If partDoc IsNot Nothing Then Try : partDoc.Close(True) : Catch : End Try
+                            Continue For
+                        End If
                         
-                        ' SaveAs to target with new GUID
-                        partDoc.SaveAs(file.TargetLocalPath, False)
                         UtilsLib.LogInfo("      Copied: " & System.IO.Path.GetFileName(file.TargetLocalPath))
                         
                         ' Update references: source master → copied master
@@ -4330,11 +4848,17 @@ Public Module ElementReleaseLib
                             Try
                                 Dim refPath As String = refDesc.ReferencedFileDescriptor.FullFileName
                                 If copiedMasters.ContainsKey(refPath) Then
-                                    refDesc.ReferencedFileDescriptor.ReplaceReference(copiedMasters(refPath))
-                                    UtilsLib.LogInfo("        Updated ref: " & System.IO.Path.GetFileName(refPath) & " -> " & System.IO.Path.GetFileName(copiedMasters(refPath)))
+                                    Dim newP As String = copiedMasters(refPath)
+                                    If Not IsVaultOldVersion(newP) Then
+                                        refDesc.ReferencedFileDescriptor.ReplaceReference(newP)
+                                        UtilsLib.LogInfo("        Updated ref: " & System.IO.Path.GetFileName(refPath) & " -> " & System.IO.Path.GetFileName(newP))
+                                    End If
                                 ElseIf refMap.ContainsKey(refPath) Then
-                                    refDesc.ReferencedFileDescriptor.ReplaceReference(refMap(refPath))
-                                    UtilsLib.LogInfo("        Updated ref: " & System.IO.Path.GetFileName(refPath) & " -> " & System.IO.Path.GetFileName(refMap(refPath)))
+                                    Dim newP As String = refMap(refPath)
+                                    If Not IsVaultOldVersion(newP) Then
+                                        refDesc.ReferencedFileDescriptor.ReplaceReference(newP)
+                                        UtilsLib.LogInfo("        Updated ref: " & System.IO.Path.GetFileName(refPath) & " -> " & System.IO.Path.GetFileName(newP))
+                                    End If
                                 End If
                             Catch ex As Exception
                                 UtilsLib.LogWarn("        Ref update failed: " & ex.Message)
@@ -4364,6 +4888,7 @@ Public Module ElementReleaseLib
                 Dim copiedAsmPath As String = Nothing
                 For Each file As PlannedFile In context.ReleasePlan.Files
                     If file.FileType <> FileType.Assembly Then Continue For
+                    If IsVaultOldVersion(file.SourcePath) OrElse IsVaultOldVersion(file.TargetLocalPath) Then Continue For
                     If Not file.ForVariants.Contains(variantCfg.ElementName) Then Continue For
                     If file.IsExisting Then Continue For
                     
@@ -4372,13 +4897,12 @@ Public Module ElementReleaseLib
                     Catch : End Try
                     
                     Try
-                        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file.TargetLocalPath))
-                        
                         ' Open source assembly
-                        Dim asmDoc As AssemblyDocument = CType(app.Documents.Open(file.SourcePath, False), AssemblyDocument)
-                        
-                        ' SaveAs to target with new GUID
-                        asmDoc.SaveAs(file.TargetLocalPath, False)
+                        Dim asmDoc As AssemblyDocument = TryOpenAssemblyDocument(app, file.SourcePath, False)
+                        If asmDoc Is Nothing OrElse Not TrySaveDocumentAs(asmDoc, file.TargetLocalPath) Then
+                            If asmDoc IsNot Nothing Then Try : asmDoc.Close(True) : Catch : End Try
+                            Continue For
+                        End If
                         copiedAsmPath = file.TargetLocalPath
                         UtilsLib.LogInfo("      Copied: " & System.IO.Path.GetFileName(file.TargetLocalPath))
                         
@@ -4390,7 +4914,9 @@ Public Module ElementReleaseLib
                             Try
                                 Dim currentPath As String = occ.Definition.Document.FullFileName
                                 If refMap.ContainsKey(currentPath) Then
-                                    occ.Replace(refMap(currentPath), True)
+                                    Dim repl As String = refMap(currentPath)
+                                    If IsVaultOldVersion(repl) Then Continue For
+                                    occ.Replace(repl, True)
                                     UtilsLib.LogInfo("        Replaced: " & System.IO.Path.GetFileName(currentPath) & " -> " & System.IO.Path.GetFileName(refMap(currentPath)))
                                 End If
                             Catch ex As Exception
@@ -4428,7 +4954,8 @@ Public Module ElementReleaseLib
                 ' Open and update copied masters with variant parameters
                 For Each kvp In copiedMasters
                     Try
-                        Dim masterDoc As Document = app.Documents.Open(kvp.Value, False)
+                        Dim masterDoc As Document = TryOpenDocument(app, kvp.Value, False)
+                        If masterDoc Is Nothing Then Continue For
                         ApplyParameters(masterDoc, variantCfg.Parameters)
                         masterDoc.Update()
                         masterDoc.Save()
@@ -4442,7 +4969,8 @@ Public Module ElementReleaseLib
                 ' Open copied assembly and update (propagates through references)
                 If copiedAsmPath IsNot Nothing Then
                     Try
-                        Dim asmDoc As AssemblyDocument = CType(app.Documents.Open(copiedAsmPath, True), AssemblyDocument)
+                        Dim asmDoc As AssemblyDocument = TryOpenAssemblyDocument(app, copiedAsmPath, True)
+                        If asmDoc Is Nothing Then Continue For
                         asmDoc.Update2(True)
                         asmDoc.Save()
                         UtilsLib.LogInfo("    Updated and saved assembly: " & System.IO.Path.GetFileName(copiedAsmPath))
@@ -4467,8 +4995,8 @@ Public Module ElementReleaseLib
             UtilsLib.LogInfo("ExecuteRelease: Creating drawings...")
             For Each file As PlannedFile In context.ReleasePlan.Files
                 If file.FileType = FileType.Drawing Then
-                    If IsOldVersionsPath(file.SourcePath) OrElse IsOldVersionsPath(file.TargetLocalPath) Then
-                        UtilsLib.LogWarn("  Skipping OldVersions file: " & System.IO.Path.GetFileName(file.SourcePath))
+                    If IsVaultOldVersion(file.SourcePath) OrElse IsVaultOldVersion(file.TargetLocalPath) Then
+                        UtilsLib.LogWarn("  Skipping Vault versioning path: " & System.IO.Path.GetFileName(file.SourcePath))
                         Continue For
                     End If
                     Dim variantName = file.ForVariants(0)
@@ -4536,9 +5064,11 @@ Public Module ElementReleaseLib
             For Each file As PlannedFile In context.ReleasePlan.Files
                 If file.FileType = FileType.Drawing Then Continue For
                 If file.IsExisting Then Continue For
+                If IsVaultOldVersion(file.SourcePath) OrElse IsVaultOldVersion(file.TargetLocalPath) Then Continue For
                 
                 Try
-                    Dim doc As Document = app.Documents.Open(file.TargetLocalPath, True)
+                    Dim doc As Document = TryOpenDocument(app, file.TargetLocalPath, True)
+                    If doc Is Nothing Then Continue For
                     Dim pn As String = doc.PropertySets.Item("Design Tracking Properties").Item("Part Number").Value.ToString()
                     UtilsLib.LogInfo("    " & System.IO.Path.GetFileName(file.TargetLocalPath) & " PN=" & pn)
                     openedModels.Add(doc)
@@ -4552,12 +5082,14 @@ Public Module ElementReleaseLib
             For Each file As PlannedFile In context.ReleasePlan.Files
                 If file.FileType <> FileType.Drawing Then Continue For
                 If file.IsExisting Then Continue For
+                If IsVaultOldVersion(file.SourcePath) OrElse IsVaultOldVersion(file.TargetLocalPath) Then Continue For
                 
                 Dim targetPath As String = file.TargetLocalPath
                 Dim expectedPN As String = file.VaultNumber
                 
                 Try
-                    Dim drawDoc As DrawingDocument = CType(app.Documents.Open(targetPath, True), DrawingDocument)
+                    Dim drawDoc As DrawingDocument = TryOpenDrawingDocument(app, targetPath, True)
+                    If drawDoc Is Nothing Then Continue For
                     
                     ' Check and fix drawing's reference cache
                     ' The ReferencedDocuments collection may have stale cached properties
@@ -4631,6 +5163,16 @@ Public Module ElementReleaseLib
             Catch : End Try
             Dim verificationPassed As Boolean = VerifyReleasedFiles(app, context)
 
+            If verificationPassed Then
+                Try
+                    MergeAndWriteReleaseManifest(context.SourceRoot, context.ElementName, context.ReleasePlan)
+                Catch ex As Exception
+                    UtilsLib.LogWarn("ExecuteRelease: Release manifest write failed: " & ex.Message)
+                End Try
+            Else
+                UtilsLib.LogWarn("ExecuteRelease: Skipping release manifest write (verification had issues)")
+            End If
+
             ' NOTE: In the new copy-first architecture, we never modify source masters
             ' so there's nothing to restore. The masterSnapshot variable is unused.
             
@@ -4639,16 +5181,18 @@ Public Module ElementReleaseLib
             Dim originalAssembly As String = context.AssemblyTree.RootAssemblyPath
             Dim sourceAsmDoc As AssemblyDocument = Nothing
             Try
-                sourceAsmDoc = CType(app.Documents.Open(originalAssembly, True), AssemblyDocument)
-                UtilsLib.LogInfo("  Reopened source: " & System.IO.Path.GetFileName(originalAssembly))
-                
-                ' CRITICAL: Restore visibility/suppression states to source assembly
-                ' These may have been changed by Update() calls during fingerprinting
-                If context.AssemblyTree.SourceAssemblyState IsNot Nothing Then
-                    UtilsLib.LogInfo("  Restoring source assembly state...")
-                    ApplyAssemblyState(app, sourceAsmDoc, context.AssemblyTree.SourceAssemblyState)
-                    sourceAsmDoc.Save()
-                    UtilsLib.LogInfo("  Source assembly state restored and saved")
+                sourceAsmDoc = TryOpenAssemblyDocument(app, originalAssembly, True)
+                If sourceAsmDoc IsNot Nothing Then
+                    UtilsLib.LogInfo("  Reopened source: " & System.IO.Path.GetFileName(originalAssembly))
+                    
+                    ' CRITICAL: Restore visibility/suppression states to source assembly
+                    ' These may have been changed by Update() calls during fingerprinting
+                    If context.AssemblyTree.SourceAssemblyState IsNot Nothing Then
+                        UtilsLib.LogInfo("  Restoring source assembly state...")
+                        ApplyAssemblyState(app, sourceAsmDoc, context.AssemblyTree.SourceAssemblyState)
+                        sourceAsmDoc.Save()
+                        UtilsLib.LogInfo("  Source assembly state restored and saved")
+                    End If
                 End If
             Catch ex As Exception
                 UtilsLib.LogWarn("  Failed to reopen " & originalAssembly & ": " & ex.Message)
@@ -4661,6 +5205,7 @@ Public Module ElementReleaseLib
             
             Dim releasedAsmCount As Integer = 0
             For Each file As PlannedFile In context.ReleasePlan.Files
+                If IsVaultOldVersion(file.SourcePath) OrElse IsVaultOldVersion(file.TargetLocalPath) Then Continue For
                 If file.FileType = FileType.Assembly AndAlso Not file.IsExisting Then
                     ' Check if this assembly was copied from the root assembly (main element assembly)
                     Dim isMainElementAsm As Boolean = file.SourcePath.Equals(originalAssembly, StringComparison.OrdinalIgnoreCase)
@@ -4668,7 +5213,8 @@ Public Module ElementReleaseLib
                     
                     If isMainElementAsm Then
                         Try
-                            Dim releasedAsmDoc As AssemblyDocument = CType(app.Documents.Open(file.TargetLocalPath, True), AssemblyDocument)
+                            Dim releasedAsmDoc As AssemblyDocument = TryOpenAssemblyDocument(app, file.TargetLocalPath, True)
+                            If releasedAsmDoc Is Nothing Then Continue For
                             UtilsLib.LogInfo("  Opened released: " & file.TargetLocalPath)
                             releasedAsmCount += 1
                             
@@ -4687,6 +5233,11 @@ Public Module ElementReleaseLib
             UtilsLib.LogInfo("  Opened " & releasedAsmCount & " released assemblies")
             
             If verificationPassed Then
+                Try
+                    CleanupVaultOldVersionsAfterSuccessfulRelease(context)
+                Catch ex As Exception
+                    UtilsLib.LogWarn("ExecuteRelease: OldVersions cleanup failed: " & ex.Message)
+                End Try
                 UtilsLib.LogInfo("ExecuteRelease: Complete - all verifications passed!")
             Else
                 UtilsLib.LogWarn("ExecuteRelease: Complete - VERIFICATION WARNINGS (see above)")
@@ -4708,11 +5259,12 @@ Public Module ElementReleaseLib
         
         For Each file As PlannedFile In context.ReleasePlan.Files
             If file.IsExisting Then Continue For
+            If IsVaultOldVersion(file.SourcePath) OrElse IsVaultOldVersion(file.TargetLocalPath) Then Continue For
             
             Dim targetPath As String = file.TargetLocalPath
             Dim expectedPN As String = file.VaultNumber
             
-            If Not System.IO.File.Exists(targetPath) Then
+            If Not ReleasePathExistsOnDisk(targetPath) Then
                 UtilsLib.LogError("  VERIFY FAIL: File not created - " & System.IO.Path.GetFileName(targetPath))
                 allPassed = False
                 Continue For
@@ -4720,7 +5272,12 @@ Public Module ElementReleaseLib
             
             Try
                 ' Open file fresh (no caching)
-                Dim doc As Document = app.Documents.Open(targetPath, True)
+                Dim doc As Document = TryOpenDocument(app, targetPath, True)
+                If doc Is Nothing Then
+                    UtilsLib.LogError("  VERIFY FAIL: Could not open (excluded or error) - " & System.IO.Path.GetFileName(targetPath))
+                    allPassed = False
+                    Continue For
+                End If
                 
                 ' Check Part Number
                 Dim actualPN As String = ""
@@ -4807,12 +5364,14 @@ Public Module ElementReleaseLib
         Dim map As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
         
         For Each file As PlannedFile In context.ReleasePlan.Files
+            If IsVaultOldVersion(file.SourcePath) OrElse IsVaultOldVersion(file.TargetLocalPath) Then Continue For
             If file.ForVariants.Contains(variantName) Then
                 map(file.SourcePath) = file.TargetLocalPath
             End If
         Next
         
         For Each file As PlannedFile In context.ReleasePlan.Files
+            If IsVaultOldVersion(file.SourcePath) OrElse IsVaultOldVersion(file.TargetLocalPath) Then Continue For
             If file.IsShared AndAlso Not map.ContainsKey(file.SourcePath) Then
                 map(file.SourcePath) = file.TargetLocalPath
             End If
@@ -4822,11 +5381,41 @@ Public Module ElementReleaseLib
     End Function
     
     ' ============================================================================
-    ' Manifest Operations
+    ' Release manifest (path-independent: source filename stem -> target stem)
     ' ============================================================================
     
+    Public Const RELEASE_MANIFEST_FILE As String = "_release_manifest.json"
+    
+    ''' <summary>
+    ''' Folder that holds _release_manifest.json: the Aluselemendid (or Alusmoodulid) product folder,
+    ''' shared across all base elements. Pass any path under that tree (e.g. Aluselemendid/Nurk).
+    ''' </summary>
+    Public Function GetReleaseManifestFolder(elementSourceRoot As String) As String
+        If String.IsNullOrEmpty(elementSourceRoot) Then Return elementSourceRoot
+        Dim root As String = elementSourceRoot.TrimEnd("\"c)
+        Dim parent As String = System.IO.Path.GetDirectoryName(root)
+        If String.IsNullOrEmpty(parent) Then Return root
+        Dim parentLeaf As String = System.IO.Path.GetFileName(parent)
+        If parentLeaf.Equals("Aluselemendid", StringComparison.OrdinalIgnoreCase) OrElse _
+           parentLeaf.Equals("Alusmoodulid", StringComparison.OrdinalIgnoreCase) Then
+            Return parent
+        End If
+        Return root
+    End Function
+    
+    ''' <summary>
+    ''' Full path to _release_manifest.json under GetReleaseManifestFolder (not under Elemendid).
+    ''' </summary>
+    Public Function GetReleaseManifestPath(elementSourceRoot As String) As String
+        Return System.IO.Path.Combine(GetReleaseManifestFolder(elementSourceRoot), RELEASE_MANIFEST_FILE)
+    End Function
+    
     Public Class ReleaseManifest
+        Public Version As Integer = 2
         Public LastUpdated As DateTime
+        Public ElementName As String
+        Public FileMappings As New List(Of FileMappingEntry)
+        Public SharedFiles As New List(Of FileMappingEntry)
         Public Elements As New List(Of ElementEntry)
         Public SharedParts As New List(Of SharedPartEntry)
     End Class
@@ -4855,11 +5444,266 @@ Public Module ElementReleaseLib
         Public ReleaseDate As DateTime
     End Class
     
+    Private Function GetPlannedFileExtension(f As PlannedFile) As String
+        Select Case f.FileType
+            Case FileType.Part
+                Return ".ipt"
+            Case FileType.Assembly
+                Return ".iam"
+            Case FileType.Drawing
+                Return ".idw"
+            Case Else
+                Return System.IO.Path.GetExtension(f.SourcePath)
+        End Select
+    End Function
+    
+    Private Function PlannedFileTypeString(f As PlannedFile) As String
+        Return f.FileType.ToString()
+    End Function
+    
+    Private Function SourceStemForMatch(f As PlannedFile) As String
+        If Not String.IsNullOrEmpty(f.SourcePartNumber) Then Return f.SourcePartNumber.Trim()
+        Return System.IO.Path.GetFileNameWithoutExtension(f.SourcePath)
+    End Function
+    
+    ''' <summary>
+    ''' Recursively find first file named {targetBase}{ext} under targetRoot, skipping OldVersions.
+    ''' </summary>
+    Public Function FindFileByTargetName(targetRoot As String, targetBase As String, ext As String) As String
+        If String.IsNullOrEmpty(targetRoot) OrElse String.IsNullOrEmpty(targetBase) Then Return Nothing
+        Try
+            Return FindFirstFileRecursiveExcludingVault(targetRoot, targetBase & ext)
+        Catch
+        End Try
+        Return Nothing
+    End Function
+    
+    Private Function FindMappingEntryForPlannedFile(manifest As ReleaseManifest, f As PlannedFile) As FileMappingEntry
+        Dim stem As String = SourceStemForMatch(f)
+        Dim ft As String = PlannedFileTypeString(f)
+        
+        If f.IsShared Then
+            For Each e As FileMappingEntry In manifest.SharedFiles
+                If Not e.SourceName.Equals(stem, StringComparison.OrdinalIgnoreCase) Then Continue For
+                If Not e.FileType.Equals(ft, StringComparison.OrdinalIgnoreCase) Then Continue For
+                If String.IsNullOrEmpty(e.UsedByVariantsPipe) Then Return e
+                For Each v In f.ForVariants
+                    If VariantListContainsPipe(e.UsedByVariantsPipe, v) Then Return e
+                Next
+            Next
+            Return Nothing
+        End If
+        
+        For Each v In f.ForVariants
+            For Each e As FileMappingEntry In manifest.FileMappings
+                If Not e.SourceName.Equals(stem, StringComparison.OrdinalIgnoreCase) Then Continue For
+                If Not e.FileType.Equals(ft, StringComparison.OrdinalIgnoreCase) Then Continue For
+                If e.ElementVariant.Equals(v, StringComparison.OrdinalIgnoreCase) Then Return e
+            Next
+        Next
+        Return Nothing
+    End Function
+    
+    Private Function VariantListContainsPipe(pipeList As String, variantName As String) As Boolean
+        If String.IsNullOrEmpty(pipeList) Then Return True
+        For Each part In pipeList.Split("|"c)
+            If part.Trim().Equals(variantName, StringComparison.OrdinalIgnoreCase) Then Return True
+        Next
+        Return False
+    End Function
+    
+    Private Function GetPrimaryModelPathForDrawing(drawingSourcePath As String, tree As AssemblyTree) As String
+        If tree Is Nothing OrElse tree.Drawings Is Nothing Then Return Nothing
+        For Each di As DrawingInfo In tree.Drawings
+            If di.DrawingPath.Equals(drawingSourcePath, StringComparison.OrdinalIgnoreCase) Then
+                If di.ReferencedModelPaths.Count > 0 Then Return di.ReferencedModelPaths(0)
+                Return Nothing
+            End If
+        Next
+        Return Nothing
+    End Function
+    
+    ''' <summary>
+    ''' Apply mappings from a previous release so target names/paths are reused where possible.
+    ''' </summary>
+    Public Sub ApplyReleaseManifestReuse(app As Inventor.Application, plan As ReleasePlan, targetRoot As String, manifest As ReleaseManifest, tree As AssemblyTree)
+        If manifest Is Nothing OrElse (manifest.FileMappings.Count = 0 AndAlso manifest.SharedFiles.Count = 0) Then
+            UtilsLib.LogInfo("ApplyReleaseManifestReuse: No previous manifest entries")
+            Return
+        End If
+        
+        Dim tr As String = targetRoot.TrimEnd("\"c)
+        
+        For Each f As PlannedFile In plan.Files
+            If IsVaultOldVersion(f.SourcePath) OrElse IsVaultOldVersion(f.TargetLocalPath) Then Continue For
+            Dim entry As FileMappingEntry = FindMappingEntryForPlannedFile(manifest, f)
+            If entry Is Nothing Then Continue For
+            
+            Dim ext As String = GetPlannedFileExtension(f)
+            Dim foundPath As String = FindFileByTargetName(tr, entry.TargetName, ext)
+            Dim newTargetPath As String
+            If Not String.IsNullOrEmpty(foundPath) Then
+                newTargetPath = foundPath
+            Else
+                Dim dir As String = System.IO.Path.GetDirectoryName(f.TargetLocalPath)
+                newTargetPath = System.IO.Path.Combine(dir, entry.TargetName & ext)
+            End If
+            
+            f.VaultNumber = entry.TargetName
+            f.TargetLocalPath = newTargetPath
+            f.IsPlaceholder = False
+            f.IsReuse = True
+            UtilsLib.LogInfo("ApplyReleaseManifestReuse: REUSE " & entry.SourceName & " -> " & entry.TargetName & " (" & f.FileType.ToString() & ")")
+        Next
+        
+        ' Drawings: keep filename in sync with referenced model (after model reuse)
+        For Each f As PlannedFile In plan.Files
+            If IsVaultOldVersion(f.SourcePath) OrElse IsVaultOldVersion(f.TargetLocalPath) Then Continue For
+            If f.FileType <> FileType.Drawing Then Continue For
+            Dim modelPath As String = GetPrimaryModelPathForDrawing(f.SourcePath, tree)
+            If String.IsNullOrEmpty(modelPath) Then Continue For
+            
+            Dim modelFile As PlannedFile = Nothing
+            If f.IsShared Then
+                modelFile = FindPlannedFileBySource(plan.Files, modelPath)
+            Else
+                For Each vn In f.ForVariants
+                    modelFile = FindPlannedFileBySourceAndVariant(plan.Files, modelPath, vn)
+                    If modelFile IsNot Nothing Then Exit For
+                Next
+            End If
+            If modelFile Is Nothing Then Continue For
+            
+            Dim dwgFileName As String = System.IO.Path.GetFileNameWithoutExtension(f.SourcePath)
+            Dim sourceModelNumber As String = System.IO.Path.GetFileNameWithoutExtension(modelPath)
+            Dim dwgSuffix As String = ""
+            If Not String.IsNullOrEmpty(sourceModelNumber) AndAlso dwgFileName.StartsWith(sourceModelNumber, StringComparison.OrdinalIgnoreCase) Then
+                dwgSuffix = dwgFileName.Substring(sourceModelNumber.Length)
+            End If
+            
+            f.VaultNumber = modelFile.VaultNumber
+            Dim newDwgName As String = modelFile.VaultNumber & dwgSuffix & ".idw"
+            Dim ddir As String = System.IO.Path.GetDirectoryName(f.TargetLocalPath)
+            f.TargetLocalPath = System.IO.Path.Combine(ddir, newDwgName)
+            f.IsPlaceholder = False
+            Dim dwgStem As String = System.IO.Path.GetFileNameWithoutExtension(newDwgName)
+            Dim dwgOnDisk As String = FindFileByTargetName(tr, dwgStem, ".idw")
+            If Not String.IsNullOrEmpty(dwgOnDisk) AndAlso System.IO.Path.GetFileName(dwgOnDisk).Equals(newDwgName, StringComparison.OrdinalIgnoreCase) Then
+                f.TargetLocalPath = dwgOnDisk
+                f.IsReuse = True
+            ElseIf ReleasePathExistsOnDisk(f.TargetLocalPath) Then
+                f.IsReuse = True
+            Else
+                f.IsReuse = False
+            End If
+        Next
+    End Sub
+    
+    ''' <summary>
+    ''' Manifest entries for selected variants that no longer appear in the plan (orphaned released files).
+    ''' </summary>
+    Public Function FindRemovedFilesFromManifest(manifest As ReleaseManifest, plan As ReleasePlan, selectedVariantNames As HashSet(Of String)) As List(Of FileMappingEntry)
+        Dim removed As New List(Of FileMappingEntry)
+        If manifest Is Nothing Then Return removed
+        
+        Dim keysInPlan As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        For Each f As PlannedFile In plan.Files
+            Dim stem As String = SourceStemForMatch(f)
+            Dim ft As String = PlannedFileTypeString(f)
+            If f.IsShared Then
+                keysInPlan.Add("S|" & stem & "|" & ft)
+            Else
+                For Each vn In f.ForVariants
+                    keysInPlan.Add("V|" & stem & "|" & ft & "|" & vn)
+                Next
+            End If
+        Next
+        
+        For Each e As FileMappingEntry In manifest.FileMappings
+            If Not selectedVariantNames.Contains(e.ElementVariant) Then Continue For
+            Dim k As String = "V|" & e.SourceName & "|" & e.FileType & "|" & e.ElementVariant
+            If Not keysInPlan.Contains(k) Then removed.Add(CloneMappingEntry(e))
+        Next
+        
+        For Each e As FileMappingEntry In manifest.SharedFiles
+            Dim kShared As String = "S|" & e.SourceName & "|" & e.FileType
+            If keysInPlan.Contains(kShared) Then Continue For
+            Dim anySelectedUses As Boolean = False
+            If Not String.IsNullOrEmpty(e.UsedByVariantsPipe) Then
+                For Each vn In e.UsedByVariantsPipe.Split("|"c)
+                    If selectedVariantNames.Contains(vn.Trim()) Then
+                        anySelectedUses = True
+                        Exit For
+                    End If
+                Next
+            End If
+            If Not anySelectedUses Then Continue For
+            Dim already As Boolean = False
+            For Each r As FileMappingEntry In removed
+                If r.SourceName.Equals(e.SourceName, StringComparison.OrdinalIgnoreCase) AndAlso r.FileType.Equals(e.FileType, StringComparison.OrdinalIgnoreCase) Then
+                    already = True
+                    Exit For
+                End If
+            Next
+            If Not already Then removed.Add(CloneMappingEntry(e))
+        Next
+        
+        Return removed
+    End Function
+    
+    Private Function CloneMappingEntry(e As FileMappingEntry) As FileMappingEntry
+        Dim c As New FileMappingEntry()
+        c.SourceName = e.SourceName
+        c.TargetName = e.TargetName
+        c.FileType = e.FileType
+        c.ElementVariant = e.ElementVariant
+        c.IsShared = e.IsShared
+        c.Fingerprint = e.Fingerprint
+        c.ReleaseDate = e.ReleaseDate
+        c.UsedByVariantsPipe = e.UsedByVariantsPipe
+        Return c
+    End Function
+    
+    ''' <summary>
+    ''' Returns full paths of planned targets that exist on disk and are read-only. Empty = OK to proceed.
+    ''' </summary>
+    Public Function ValidateTargetFilesWritable(plan As ReleasePlan) As List(Of String)
+        Dim bad As New List(Of String)
+        For Each f As PlannedFile In plan.Files
+            If IsVaultOldVersion(f.SourcePath) OrElse IsVaultOldVersion(f.TargetLocalPath) Then Continue For
+            If Not f.IsReuse Then Continue For
+            Dim p As String = f.TargetLocalPath
+            If Not ReleasePathExistsOnDisk(p) Then Continue For
+            Try
+                Dim attrs As System.IO.FileAttributes = System.IO.File.GetAttributes(p)
+                If (attrs And System.IO.FileAttributes.ReadOnly) = System.IO.FileAttributes.ReadOnly Then
+                    bad.Add(p)
+                End If
+            Catch
+            End Try
+        Next
+        Return bad
+    End Function
+    
+    Private Function GetMaxNumericTargetFromManifest(manifest As ReleaseManifest) As Integer
+        Dim maxV As Integer = 0
+        For Each e As FileMappingEntry In manifest.FileMappings
+            Dim n As Integer = 0
+            If Integer.TryParse(e.TargetName, n) AndAlso n > maxV Then maxV = n
+        Next
+        For Each e As FileMappingEntry In manifest.SharedFiles
+            Dim n As Integer = 0
+            If Integer.TryParse(e.TargetName, n) AndAlso n > maxV Then maxV = n
+        Next
+        Return maxV
+    End Function
+    
     Public Function ReadManifest(manifestPath As String) As ReleaseManifest
-        If Not System.IO.File.Exists(manifestPath) Then Return Nothing
+        If Not ReleasePathExistsOnDisk(manifestPath) Then Return Nothing
         
         Try
-            Dim json As String = System.IO.File.ReadAllText(manifestPath)
+            Dim json As String = TryReadAllTextExcludingVault(manifestPath)
+            If String.IsNullOrEmpty(json) Then Return Nothing
             Return DeserializeManifest(json)
         Catch
             Return Nothing
@@ -4870,18 +5714,115 @@ Public Module ElementReleaseLib
         Try
             manifest.LastUpdated = DateTime.Now
             Dim json As String = SerializeManifest(manifest)
-            System.IO.File.WriteAllText(manifestPath, json)
+            TryWriteAllTextExcludingVault(manifestPath, json)
         Catch
         End Try
     End Sub
     
+    Public Sub MergeAndWriteReleaseManifest(elementWorkspaceRoot As String, elementName As String, plan As ReleasePlan)
+        Dim path As String = GetReleaseManifestPath(elementWorkspaceRoot)
+        Dim merged As ReleaseManifest = ReadManifest(path)
+        If merged Is Nothing Then merged = New ReleaseManifest()
+        merged.Version = 2
+        merged.ElementName = elementName
+        merged.LastUpdated = DateTime.Now
+        
+        ' Upsert by key
+        Dim byKey As New Dictionary(Of String, FileMappingEntry)(StringComparer.OrdinalIgnoreCase)
+        For Each e As FileMappingEntry In merged.FileMappings
+            byKey(MappingKey(e)) = e
+        Next
+        For Each e As FileMappingEntry In merged.SharedFiles
+            byKey(MappingKey(e)) = e
+        Next
+        
+        For Each f As PlannedFile In plan.Files
+            If IsVaultOldVersion(f.SourcePath) OrElse IsVaultOldVersion(f.TargetLocalPath) Then Continue For
+            Dim entry As FileMappingEntry = PlannedFileToMappingEntry(f)
+            byKey(MappingKey(entry)) = entry
+        Next
+        
+        merged.FileMappings.Clear()
+        merged.SharedFiles.Clear()
+        For Each kvp In byKey
+            If kvp.Key.StartsWith("S|", StringComparison.OrdinalIgnoreCase) Then
+                merged.SharedFiles.Add(kvp.Value)
+            Else
+                merged.FileMappings.Add(kvp.Value)
+            End If
+        Next
+        
+        WriteManifest(path, merged)
+        UtilsLib.LogInfo("MergeAndWriteReleaseManifest: Wrote " & path & " (" & merged.FileMappings.Count & " variant + " & merged.SharedFiles.Count & " shared)")
+    End Sub
+    
+    Private Function MappingKey(e As FileMappingEntry) As String
+        If e.IsShared OrElse (Not String.IsNullOrEmpty(e.UsedByVariantsPipe) AndAlso String.IsNullOrEmpty(e.ElementVariant)) Then
+            Return "S|" & e.SourceName & "|" & e.FileType
+        End If
+        Return "V|" & e.SourceName & "|" & e.FileType & "|" & e.ElementVariant
+    End Function
+    
+    Private Function PlannedFileToMappingEntry(f As PlannedFile) As FileMappingEntry
+        Dim e As New FileMappingEntry()
+        e.SourceName = System.IO.Path.GetFileNameWithoutExtension(f.SourcePath)
+        e.TargetName = f.VaultNumber
+        e.FileType = PlannedFileTypeString(f)
+        e.IsShared = f.IsShared
+        e.Fingerprint = If(f.Fingerprint, "")
+        e.ReleaseDate = DateTime.Now
+        If f.IsShared Then
+            e.ElementVariant = ""
+            e.UsedByVariantsPipe = String.Join("|", f.ForVariants.ToArray())
+        Else
+            e.ElementVariant = If(f.ForVariants.Count > 0, f.ForVariants(0), "")
+            e.UsedByVariantsPipe = ""
+        End If
+        Return e
+    End Function
+    
     Private Function SerializeManifest(manifest As ReleaseManifest) As String
         Dim sb As New System.Text.StringBuilder()
         sb.AppendLine("{")
+        sb.AppendLine("  ""Version"": " & manifest.Version & ",")
         sb.AppendLine("  ""LastUpdated"": """ & manifest.LastUpdated.ToString("o") & """,")
+        sb.AppendLine("  ""ElementName"": """ & EscapeJson(manifest.ElementName) & """,")
+        sb.AppendLine("  ""FileMappings"": [")
+        For i As Integer = 0 To manifest.FileMappings.Count - 1
+            Dim e = manifest.FileMappings(i)
+            sb.AppendLine("    {")
+            sb.AppendLine("      ""SourceName"": """ & EscapeJson(e.SourceName) & """,")
+            sb.AppendLine("      ""TargetName"": """ & EscapeJson(e.TargetName) & """,")
+            sb.AppendLine("      ""FileType"": """ & EscapeJson(e.FileType) & """,")
+            sb.AppendLine("      ""ElementVariant"": """ & EscapeJson(e.ElementVariant) & """,")
+            sb.AppendLine("      ""IsShared"": " & e.IsShared.ToString().ToLowerInvariant() & ",")
+            sb.AppendLine("      ""Fingerprint"": """ & EscapeJson(e.Fingerprint) & """,")
+            sb.AppendLine("      ""UsedByVariantsPipe"": """ & EscapeJson(e.UsedByVariantsPipe) & """,")
+            sb.AppendLine("      ""ReleaseDate"": """ & e.ReleaseDate.ToString("o") & """")
+            sb.Append("    }")
+            If i < manifest.FileMappings.Count - 1 Then sb.Append(",")
+            sb.AppendLine()
+        Next
+        sb.AppendLine("  ],")
+        sb.AppendLine("  ""SharedFiles"": [")
+        For i As Integer = 0 To manifest.SharedFiles.Count - 1
+            Dim e = manifest.SharedFiles(i)
+            sb.AppendLine("    {")
+            sb.AppendLine("      ""SourceName"": """ & EscapeJson(e.SourceName) & """,")
+            sb.AppendLine("      ""TargetName"": """ & EscapeJson(e.TargetName) & """,")
+            sb.AppendLine("      ""FileType"": """ & EscapeJson(e.FileType) & """,")
+            sb.AppendLine("      ""ElementVariant"": """ & EscapeJson(e.ElementVariant) & """,")
+            sb.AppendLine("      ""IsShared"": true,")
+            sb.AppendLine("      ""Fingerprint"": """ & EscapeJson(e.Fingerprint) & """,")
+            sb.AppendLine("      ""UsedByVariantsPipe"": """ & EscapeJson(e.UsedByVariantsPipe) & """,")
+            sb.AppendLine("      ""ReleaseDate"": """ & e.ReleaseDate.ToString("o") & """")
+            sb.Append("    }")
+            If i < manifest.SharedFiles.Count - 1 Then sb.Append(",")
+            sb.AppendLine()
+        Next
+        sb.AppendLine("  ],")
         sb.AppendLine("  ""Modules"": [],")
         sb.AppendLine("  ""SharedParts"": [")
-        
         For i As Integer = 0 To manifest.SharedParts.Count - 1
             Dim sp = manifest.SharedParts(i)
             sb.AppendLine("    {")
@@ -4894,7 +5835,6 @@ Public Module ElementReleaseLib
             If i < manifest.SharedParts.Count - 1 Then sb.Append(",")
             sb.AppendLine()
         Next
-        
         sb.AppendLine("  ]")
         sb.AppendLine("}")
         Return sb.ToString()
@@ -4902,7 +5842,93 @@ Public Module ElementReleaseLib
     
     Private Function DeserializeManifest(json As String) As ReleaseManifest
         Dim manifest As New ReleaseManifest()
+        If String.IsNullOrEmpty(json) Then Return manifest
+        
+        Dim verM As Match = Regex.Match(json, """Version""\s*:\s*(\d+)")
+        If verM.Success Then Integer.TryParse(verM.Groups(1).Value, manifest.Version)
+        
+        Dim elM As Match = Regex.Match(json, """ElementName""\s*:\s*""([^""]*)""")
+        If elM.Success Then manifest.ElementName = elM.Groups(1).Value
+        
+        Dim luM As Match = Regex.Match(json, """LastUpdated""\s*:\s*""([^""]*)""")
+        If luM.Success Then
+            Dim dt As DateTime
+            If DateTime.TryParse(luM.Groups(1).Value, dt) Then manifest.LastUpdated = dt
+        End If
+        
+        ParseMappingArray(json, "FileMappings", manifest.FileMappings, False)
+        ParseMappingArray(json, "SharedFiles", manifest.SharedFiles, True)
+        
+        ' Legacy SharedParts (VaultNumber) for GenerateLocalNumbers / old _manifest.json
+        Dim spIdx As Integer = json.IndexOf("""SharedParts""", StringComparison.OrdinalIgnoreCase)
+        If spIdx >= 0 Then
+            Dim slice As String = json.Substring(spIdx)
+            Dim arrStart As Integer = slice.IndexOf("["c)
+            If arrStart >= 0 Then
+                For Each objM As Match In Regex.Matches(slice.Substring(arrStart), "\{[^{}]*""VaultNumber""\s*:\s*""([^""]*)""[^{}]*\}")
+                    Dim inner As String = objM.Value
+                    Dim sp2 As New SharedPartEntry()
+                    Dim vn As Match = Regex.Match(inner, """VaultNumber""\s*:\s*""([^""]*)""")
+                    If vn.Success Then sp2.VaultNumber = vn.Groups(1).Value
+                    Dim sn As Match = Regex.Match(inner, """SourcePartNumber""\s*:\s*""([^""]*)""")
+                    If sn.Success Then sp2.SourcePartNumber = sn.Groups(1).Value
+                    manifest.SharedParts.Add(sp2)
+                Next
+            End If
+        End If
+        
         Return manifest
+    End Function
+    
+    Private Sub ParseMappingArray(json As String, arrayName As String, target As List(Of FileMappingEntry), isShared As Boolean)
+        target.Clear()
+        Dim token As String = """" & arrayName & """"
+        Dim idx As Integer = json.IndexOf(token, StringComparison.OrdinalIgnoreCase)
+        If idx < 0 Then Return
+        Dim bracket As Integer = json.IndexOf("["c, idx)
+        If bracket < 0 Then Return
+        Dim depth As Integer = 0
+        Dim i As Integer = bracket
+        Dim objStart As Integer = -1
+        While i < json.Length
+            Dim c As Char = json(i)
+            If c = "["c Then depth += 1
+            If c = "]"c Then
+                depth -= 1
+                If depth = 0 Then Exit While
+            End If
+            If depth = 1 AndAlso c = "{"c Then objStart = i
+            If depth = 1 AndAlso c = "}"c AndAlso objStart >= 0 Then
+                Dim objText As String = json.Substring(objStart, i - objStart + 1)
+                Dim e As FileMappingEntry = ParseMappingObject(objText)
+                e.IsShared = isShared
+                target.Add(e)
+                objStart = -1
+            End If
+            i += 1
+        End While
+    End Sub
+    
+    Private Function ParseMappingObject(objText As String) As FileMappingEntry
+        Dim e As New FileMappingEntry()
+        e.SourceName = RegexMatchString(objText, "SourceName")
+        e.TargetName = RegexMatchString(objText, "TargetName")
+        e.FileType = RegexMatchString(objText, "FileType")
+        e.ElementVariant = RegexMatchString(objText, "ElementVariant")
+        e.Fingerprint = RegexMatchString(objText, "Fingerprint")
+        e.UsedByVariantsPipe = RegexMatchString(objText, "UsedByVariantsPipe")
+        Dim rd As String = RegexMatchString(objText, "ReleaseDate")
+        Dim dt As DateTime
+        If DateTime.TryParse(rd, dt) Then e.ReleaseDate = dt
+        Dim ish As String = RegexMatchString(objText, "IsShared")
+        If ish.Equals("true", StringComparison.OrdinalIgnoreCase) Then e.IsShared = True
+        Return e
+    End Function
+    
+    Private Function RegexMatchString(jsonObj As String, field As String) As String
+        Dim m As Match = Regex.Match(jsonObj, """" & field & """\s*:\s*""([^""]*)""", RegexOptions.IgnoreCase)
+        If m.Success Then Return m.Groups(1).Value.Replace("\\", "\").Replace("\""", """")
+        Return ""
     End Function
     
     Private Function EscapeJson(s As String) As String

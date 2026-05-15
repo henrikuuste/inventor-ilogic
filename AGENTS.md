@@ -986,6 +986,8 @@ ctrlDef.Execute()  ' Shows checkout dialog
 | object.Select() not found | Use `doc.SelectSet.Select(object)` instead |
 | Vault checkout status | Use `doc.ReservedForWriteByMe`, not `doc.IsModifiable` |
 | Vault silent checkout | Not possible; all commands show dialogs |
+| Recursive scans / mkdir / open / SaveAs under product or Elemendid | In `ElementReleaseLib`, use `#Region "Vault-safe filesystem (release)"` only: `EnsureParentDirectoryForRelease`, `ListPathsRecursiveExcludingVault`, `FindFirstFileRecursiveExcludingVault`, `ReleasePathExistsOnDisk`, `TryOpenDocument` / `TryOpenPartDocument` / `TryOpenAssemblyDocument` / `TryOpenDrawingDocument`, `TrySaveDocumentAs`, `TryReadAllTextExcludingVault` / `TryWriteAllTextExcludingVault`, `SafeDeleteFileExcludingVault` — never bulk-copy directory trees; never raw `Directory.GetFiles`/`EnumerateFiles` with `AllDirectories`, `Documents.Open`, `Directory.CreateDirectory`, or `SaveAs` to unvalidated paths |
+| OldVersions folders after successful element release | Release never copies source `OldVersions` (guards + per-file SaveAs only). Vault/Inventor still creates local backup folders on Save; `CleanupVaultOldVersionsAfterSuccessfulRelease` removes those host-created trees under planned variant/`Ühine` output (configure Vault to suppress local versioning if they must never appear) |
 | app.Assets() not found | Use `partDoc.Materials` to enumerate materials |
 | DerivedPartUniformScaleDef.IncludeAll* | Only use `DeriveStyle` and individual `IncludeEntity` |
 | DerivedPartUniformScaleDef.Sketches2D | Use `Sketches` instead (wrap property access in Try/Catch) |

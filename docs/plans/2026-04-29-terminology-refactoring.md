@@ -107,7 +107,7 @@ Public Const SEG_BASE_ELEMENTS As String = "Aluselemendid"
 
 | Current Column | New Column | Notes |
 |----------------|------------|-------|
-| `MooduliNimi` | `ElementiNimi` | Released element name |
+| `MooduliNimi` | `Element` | Released element name |
 
 ### Variable Renaming Patterns
 
@@ -233,7 +233,7 @@ Replace all comments referencing "module" (when meaning element) with "element".
 **Changes**:
 - Rename `ReleaseConfig` → `ElementConfig`
 - Rename `ConfigName` → `ElementName`
-- Update Excel format comments (MooduliNimi → ElementiNimi)
+- Update Excel format comments (MooduliNimi → Element)
 - Keep backward compatibility: accept both column names during transition
 
 ### Success Criteria
@@ -413,13 +413,13 @@ Verify all code uses correct domain terms per UBIQUITOUS_LANGUAGE.md:
 - [ ] "Element" not "Module" when referring to manufactured units
 - [ ] "Detail" not "Component" for parts
 - [ ] "Elemendid" not "Moodulid" for script/output folders
-- [ ] "ElementiNimi" not "MooduliNimi" in Excel columns
+- [ ] "Element" not "MooduliNimi" in Excel columns
 - [ ] Folder paths match new structure
 
 ## Backward Compatibility Notes
 
 During transition, the code should:
-1. Accept both `MooduliNimi` and `ElementiNimi` Excel columns
+1. Accept both `MooduliNimi` and `Element` Excel columns
 2. Log warnings when old terminology detected
 3. Continue to work with existing Vault folder structures until manual migration
 
