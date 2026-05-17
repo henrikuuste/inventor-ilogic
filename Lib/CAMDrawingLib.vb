@@ -2947,6 +2947,11 @@ Public Module CAMDrawingLib
             If doc.DocumentType = DocumentTypeEnum.kDrawingDocumentObject Then
                 Dim drawDoc As DrawingDocument = CType(doc, DrawingDocument)
                 
+                ' Skip unsaved documents (FullDocumentName is Nothing or empty)
+                If String.IsNullOrEmpty(drawDoc.FullDocumentName) Then
+                    Continue For
+                End If
+                
                 ' Skip files in OldVersions backup folders (created by Vault)
                 If drawDoc.FullDocumentName.IndexOf("\OldVersions\", StringComparison.OrdinalIgnoreCase) >= 0 Then
                     Continue For

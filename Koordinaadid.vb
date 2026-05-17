@@ -3,11 +3,16 @@
 ' Koordinaadid - UCS Creation at Bounding Box Positions
 ' 
 ' Creates a User Coordinate System (UCS) at any position on the bounding box
-' of selected assembly components. Supports corners, face centers, edge centers,
-' and the box center. Live preview updates as user changes options.
+' of selected components (assembly) or bodies (part). Supports corners, face 
+' centers, edge centers, and the box center. Live preview updates as user 
+' changes options.
+'
+' Supports:
+' - Assembly documents (.iam): Select component occurrences
+' - Part documents (.ipt): Select solid or surface bodies
 '
 ' Usage:
-' 1. Select one or more occurrences in an assembly
+' 1. Select one or more occurrences (assembly) or bodies (part)
 ' 2. Run this rule
 ' 3. Choose position (X/Y/Z: Min/Keskpunkt/Max)
 ' 4. Choose orientation (which global axes map to UCS axes)
@@ -33,49 +38,123 @@ Sub Main()
         Exit Sub
     End If
     
-    If doc.DocumentType <> DocumentTypeEnum.kAssemblyDocumentObject Then
-        Logger.Error("Koordinaadid: Not an assembly document")
-        MessageBox.Show("See reegel töötab ainult koostudokumentides (.iam).", "Koordinaadid")
+    Dim isAssembly As Boolean = (doc.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject)
+    Dim isPart As Boolean = (doc.DocumentType = DocumentTypeEnum.kPartDocumentObject)
+    
+    If Not isAssembly AndAlso Not isPart Then
+        Logger.Error("Koordinaadid: Unsupported document type")
+        MessageBox.Show("See reegel töötab ainult osade (.ipt) ja koostude (.iam) dokumentides.", "Koordinaadid")
         Exit Sub
     End If
     
-    Dim asmDoc As AssemblyDocument = CType(doc, AssemblyDocument)
-    Dim asmDef As AssemblyComponentDefinition = asmDoc.ComponentDefinition
-    
-    ' Get selected occurrences
-    Dim selectedOccs As New System.Collections.Generic.List(Of ComponentOccurrence)
-    
-    For Each selObj As Object In asmDoc.SelectSet
-        If TypeOf selObj Is ComponentOccurrence Then
-            selectedOccs.Add(CType(selObj, ComponentOccurrence))
-        End If
-    Next
-    
-    If selectedOccs.Count = 0 Then
-        Logger.Error("Koordinaadid: No occurrences selected")
-        MessageBox.Show("Palun vali vähemalt üks komponent.", "Koordinaadid")
-        Exit Sub
-    End If
-    
-    Logger.Info("Koordinaadid: " & selectedOccs.Count.ToString() & " occurrence(s) selected")
-    
-    ' Calculate combined bounding box
+    ' Calculate bounding box based on document type
     Dim minX As Double = Double.MaxValue
     Dim minY As Double = Double.MaxValue
     Dim minZ As Double = Double.MaxValue
     Dim maxX As Double = Double.MinValue
     Dim maxY As Double = Double.MinValue
     Dim maxZ As Double = Double.MinValue
+    Dim selectionCount As Integer = 0
+    Dim compDef As Object = Nothing
     
-    For Each occ As ComponentOccurrence In selectedOccs
-        Dim occBox As Box = occ.RangeBox
-        If occBox.MinPoint.X < minX Then minX = occBox.MinPoint.X
-        If occBox.MinPoint.Y < minY Then minY = occBox.MinPoint.Y
-        If occBox.MinPoint.Z < minZ Then minZ = occBox.MinPoint.Z
-        If occBox.MaxPoint.X > maxX Then maxX = occBox.MaxPoint.X
-        If occBox.MaxPoint.Y > maxY Then maxY = occBox.MaxPoint.Y
-        If occBox.MaxPoint.Z > maxZ Then maxZ = occBox.MaxPoint.Z
-    Next
+    If isAssembly Then
+        Dim asmDoc As AssemblyDocument = CType(doc, AssemblyDocument)
+        compDef = asmDoc.ComponentDefinition
+        
+        ' Get selected occurrences
+        Dim selectedOccs As New System.Collections.Generic.List(Of ComponentOccurrence)
+        
+        For Each selObj As Object In asmDoc.SelectSet
+            If TypeOf selObj Is ComponentOccurrence Then
+                selectedOccs.Add(CType(selObj, ComponentOccurrence))
+            End If
+        Next
+        
+        If selectedOccs.Count = 0 Then
+            Logger.Error("Koordinaadid: No occurrences selected")
+            MessageBox.Show("Palun vali vähemalt üks komponent.", "Koordinaadid")
+            Exit Sub
+        End If
+        
+        selectionCount = selectedOccs.Count
+        Logger.Info("Koordinaadid: " & selectionCount.ToString() & " occurrence(s) selected")
+        
+        ' Calculate combined bounding box from occurrences
+        For Each occ As ComponentOccurrence In selectedOccs
+            Dim occBox As Box = occ.RangeBox
+            If occBox.MinPoint.X < minX Then minX = occBox.MinPoint.X
+            If occBox.MinPoint.Y < minY Then minY = occBox.MinPoint.Y
+            If occBox.MinPoint.Z < minZ Then minZ = occBox.MinPoint.Z
+            If occBox.MaxPoint.X > maxX Then maxX = occBox.MaxPoint.X
+            If occBox.MaxPoint.Y > maxY Then maxY = occBox.MaxPoint.Y
+            If occBox.MaxPoint.Z > maxZ Then maxZ = occBox.MaxPoint.Z
+        Next
+    Else
+        ' Part document
+        Dim partDoc As PartDocument = CType(doc, PartDocument)
+        compDef = partDoc.ComponentDefinition
+        Dim partDef As PartComponentDefinition = CType(compDef, PartComponentDefinition)
+        
+        ' Get selected bodies (solid or surface)
+        ' Also handle face/edge selections by getting their parent body
+        Dim selectedBodies As New System.Collections.Generic.List(Of SurfaceBody)
+        Dim addedBodies As New System.Collections.Generic.HashSet(Of String)
+        
+        For Each selObj As Object In partDoc.SelectSet
+            Dim body As SurfaceBody = Nothing
+            
+            If TypeOf selObj Is SurfaceBody Then
+                body = CType(selObj, SurfaceBody)
+            ElseIf TypeOf selObj Is Face Then
+                ' Get body from selected face
+                Dim face As Face = CType(selObj, Face)
+                body = face.SurfaceBody
+            ElseIf TypeOf selObj Is Edge Then
+                ' Get body from selected edge
+                Dim edge As Edge = CType(selObj, Edge)
+                body = edge.Faces(1).SurfaceBody
+            End If
+            
+            ' Add body if not already added (avoid duplicates)
+            If body IsNot Nothing Then
+                Dim bodyKey As String = body.Name & "_" & body.GetHashCode().ToString()
+                If Not addedBodies.Contains(bodyKey) Then
+                    selectedBodies.Add(body)
+                    addedBodies.Add(bodyKey)
+                End If
+            End If
+        Next
+        
+        ' If no bodies selected, use all bodies in the part
+        If selectedBodies.Count = 0 Then
+            For Each body As SurfaceBody In partDef.SurfaceBodies
+                selectedBodies.Add(body)
+            Next
+            
+            If selectedBodies.Count = 0 Then
+                Logger.Error("Koordinaadid: No bodies found in part")
+                MessageBox.Show("Osas ei leitud ühtegi keha.", "Koordinaadid")
+                Exit Sub
+            End If
+            
+            Logger.Info("Koordinaadid: No selection - using all " & selectedBodies.Count.ToString() & " body/bodies in part")
+        Else
+            Logger.Info("Koordinaadid: " & selectedBodies.Count.ToString() & " body/bodies selected")
+        End If
+        
+        selectionCount = selectedBodies.Count
+        
+        ' Calculate combined bounding box from bodies
+        For Each body As SurfaceBody In selectedBodies
+            Dim bodyBox As Box = body.RangeBox
+            If bodyBox.MinPoint.X < minX Then minX = bodyBox.MinPoint.X
+            If bodyBox.MinPoint.Y < minY Then minY = bodyBox.MinPoint.Y
+            If bodyBox.MinPoint.Z < minZ Then minZ = bodyBox.MinPoint.Z
+            If bodyBox.MaxPoint.X > maxX Then maxX = bodyBox.MaxPoint.X
+            If bodyBox.MaxPoint.Y > maxY Then maxY = bodyBox.MaxPoint.Y
+            If bodyBox.MaxPoint.Z > maxZ Then maxZ = bodyBox.MaxPoint.Z
+        Next
+    End If
     
     Logger.Info("Koordinaadid: Bounding box calculated - " & _
                 "X: " & (minX * 10).ToString("0.0") & " to " & (maxX * 10).ToString("0.0") & " mm, " & _
@@ -83,7 +162,7 @@ Sub Main()
                 "Z: " & (minZ * 10).ToString("0.0") & " to " & (maxZ * 10).ToString("0.0") & " mm")
     
     ' Run the UCS creation dialog
-    RunUcsDialog(app, asmDoc, selectedOccs.Count, minX, minY, minZ, maxX, maxY, maxZ)
+    RunUcsDialog(app, doc, compDef, selectionCount, minX, minY, minZ, maxX, maxY, maxZ)
 End Sub
 
 ' ============================================================================
@@ -92,7 +171,8 @@ End Sub
 
 Class UcsState
     Public App As Inventor.Application
-    Public AsmDoc As AssemblyDocument
+    Public Doc As Document
+    Public CompDef As Object ' AssemblyComponentDefinition or PartComponentDefinition
     Public PreviewUcs As UserCoordinateSystem
     Public MinX As Double
     Public MinY As Double
@@ -107,18 +187,18 @@ End Class
 ' Main Dialog
 ' ============================================================================
 
-Sub RunUcsDialog(app As Inventor.Application, asmDoc As AssemblyDocument, _
-                 occCount As Integer, _
+Sub RunUcsDialog(app As Inventor.Application, doc As Document, compDef As Object, _
+                 selCount As Integer, _
                  minX As Double, minY As Double, minZ As Double, _
                  maxX As Double, maxY As Double, maxZ As Double)
     
-    Dim asmDef As AssemblyComponentDefinition = asmDoc.ComponentDefinition
     Dim tg As TransientGeometry = app.TransientGeometry
     
     ' Create state object
     Dim state As New UcsState()
     state.App = app
-    state.AsmDoc = asmDoc
+    state.Doc = doc
+    state.CompDef = compDef
     state.MinX = minX
     state.MinY = minY
     state.MinZ = minZ
@@ -130,7 +210,7 @@ Sub RunUcsDialog(app As Inventor.Application, asmDoc As AssemblyDocument, _
     
     ' Generate unique default name
     Dim baseName As String = "UCS"
-    Dim ucsName As String = GenerateUniqueName(asmDef, baseName)
+    Dim ucsName As String = GenerateUniqueName(compDef, baseName)
     
     ' Create preview UCS at default position (Min, Min, Min with default orientation)
     Dim defaultOrigin As Point = tg.CreatePoint(minX, minY, minZ)
@@ -138,7 +218,7 @@ Sub RunUcsDialog(app As Inventor.Application, asmDoc As AssemblyDocument, _
     Dim yAxis As Vector = tg.CreateVector(0, 1, 0)
     Dim zAxis As Vector = tg.CreateVector(0, 0, 1)
     
-    state.PreviewUcs = CreateUcs(app, asmDef, "_Preview_UCS", defaultOrigin, xAxis, yAxis, zAxis)
+    state.PreviewUcs = CreateUcs(app, compDef, "_Preview_UCS", defaultOrigin, xAxis, yAxis, zAxis)
     
     If state.PreviewUcs Is Nothing Then
         Logger.Error("Koordinaadid: Failed to create preview UCS")
@@ -168,7 +248,7 @@ Sub RunUcsDialog(app As Inventor.Application, asmDoc As AssemblyDocument, _
     
     ' --- Selection count ---
     Dim lblCount As New System.Windows.Forms.Label()
-    lblCount.Text = "Valitud elemente: " & occCount.ToString()
+    lblCount.Text = "Valitud elemente: " & selCount.ToString()
     lblCount.Left = 15
     lblCount.Top = yPos
     lblCount.Width = 300
@@ -676,7 +756,7 @@ Function VectorToAxisName(v As Vector) As String
     Return "(" & v.X.ToString("0.00") & ", " & v.Y.ToString("0.00") & ", " & v.Z.ToString("0.00") & ")"
 End Function
 
-Function CreateUcs(app As Inventor.Application, asmDef As AssemblyComponentDefinition, _
+Function CreateUcs(app As Inventor.Application, compDef As Object, _
                    ucsName As String, origin As Point, xAxis As Vector, yAxis As Vector, zAxis As Vector) As UserCoordinateSystem
     Try
         Dim tg As TransientGeometry = app.TransientGeometry
@@ -685,11 +765,12 @@ Function CreateUcs(app As Inventor.Application, asmDef As AssemblyComponentDefin
         Dim m As Matrix = tg.CreateMatrix()
         m.SetCoordinateSystem(origin, xAxis, yAxis, zAxis)
         
-        ' Create UCS definition and add
-        Dim ucsDef As UserCoordinateSystemDefinition = asmDef.UserCoordinateSystems.CreateDefinition
+        ' Create UCS definition and add (works for both Assembly and Part component definitions)
+        Dim ucsSystems As UserCoordinateSystems = CType(compDef.UserCoordinateSystems, UserCoordinateSystems)
+        Dim ucsDef As UserCoordinateSystemDefinition = ucsSystems.CreateDefinition
         ucsDef.Transformation = m
         
-        Dim ucs As UserCoordinateSystem = asmDef.UserCoordinateSystems.Add(ucsDef)
+        Dim ucs As UserCoordinateSystem = ucsSystems.Add(ucsDef)
         ucs.Name = ucsName
         
         Return ucs
@@ -699,13 +780,14 @@ Function CreateUcs(app As Inventor.Application, asmDef As AssemblyComponentDefin
     End Try
 End Function
 
-Function GenerateUniqueName(asmDef As AssemblyComponentDefinition, baseName As String) As String
+Function GenerateUniqueName(compDef As Object, baseName As String) As String
     Dim index As Integer = 1
     Dim candidateName As String = baseName & "_" & index.ToString()
     
-    ' Check existing UCS names
+    ' Check existing UCS names (works for both Assembly and Part component definitions)
     Dim existingNames As New System.Collections.Generic.HashSet(Of String)
-    For Each ucs As UserCoordinateSystem In asmDef.UserCoordinateSystems
+    Dim ucsSystems As UserCoordinateSystems = CType(compDef.UserCoordinateSystems, UserCoordinateSystems)
+    For Each ucs As UserCoordinateSystem In ucsSystems
         existingNames.Add(ucs.Name)
     Next
     
