@@ -92,7 +92,7 @@ Sub Main()
     Next
     
     If orphans.Count > 0 Then
-        confirmMsg &= vbCrLf & "Hoiatus — " & orphans.Count & " detaili ilma kehata:" & vbCrLf
+        confirmMsg &= vbCrLf & "Hoiatus - " & orphans.Count & " detaili ilma kehata:" & vbCrLf
         For Each orphan As MakeComponentsLib.OrphanPartInfo In orphans
             confirmMsg &= "• " & System.IO.Path.GetFileName(orphan.PartPath) & vbCrLf
         Next

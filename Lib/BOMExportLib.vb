@@ -46,6 +46,7 @@ Public Module BOMExportLib
     Private Const kDrawAssocType As String = "BB_DrawingType"
     Private Const kDrawAssocType1to1 As String = "1:1"
     Private m_DrawingCache As New Dictionary(Of String, BOMDrawingInfo)(StringComparer.OrdinalIgnoreCase)
+    Private m_CAMDrawingCache As CAMDrawingLib.DrawingCache = Nothing
     Public Const DEFAULT_VERBOSE_LOGGING As Boolean = False
     Private m_VerboseLogging As Boolean = DEFAULT_VERBOSE_LOGGING
 
@@ -390,6 +391,13 @@ Public Module BOMExportLib
             ActivateModelState(asmDoc, primaryModelState, logLines, logger)
         End If
         m_DrawingCache.Clear()
+        
+        ' Build CAMDrawingLib cache for fast drawing lookups across entire project
+        Dim asmFolder As String = System.IO.Path.GetDirectoryName(asmDoc.FullFileName)
+        Dim projectPath As String = UtilsLib.GetProjectPath(asmFolder)
+        If String.IsNullOrEmpty(projectPath) Then projectPath = asmFolder
+        Dim app As Inventor.Application = asmDoc.Parent
+        m_CAMDrawingCache = CAMDrawingLib.BuildDrawingCache(projectPath, app)
 
         Dim oView As BOMView = Nothing
         If Not GetBomView(asmDoc, usePartsOnlyBomView, oView) Then
@@ -1007,8 +1015,31 @@ Public Module BOMExportLib
     Private Function FindDrawingInfo(partNumber As String, asmDoc As AssemblyDocument, srcDoc As Document, logLines As List(Of String), logger As Object) As BOMDrawingInfo
         Dim result As New BOMDrawingInfo()
         Try
-            ' 1) Check open drawings first (fast path)
             Dim app As Inventor.Application = asmDoc.Parent
+            
+            ' Use CAMDrawingLib cache for fast lookup across entire project
+            If m_CAMDrawingCache IsNot Nothing Then
+                Dim foundPath As String = CAMDrawingLib.FindDrawingFromCache(m_CAMDrawingCache, partNumber, kDrawAssocType1to1)
+                If Not String.IsNullOrEmpty(foundPath) Then
+                    Dim drawDoc As DrawingDocument = Nothing
+                    Dim openedByUs As Boolean = False
+                    Try
+                        drawDoc = OpenOrGetDrawingDoc(app, foundPath, openedByUs)
+                        If drawDoc IsNot Nothing Then
+                            FillDrawingInfo(drawDoc, result)
+                            result.Found = True
+                            VLog("BOMExport: Found 1:1 drawing for part " & partNumber & " -> " & result.FileName, logLines, logger)
+                        End If
+                    Finally
+                        If openedByUs AndAlso drawDoc IsNot Nothing Then
+                            Try : drawDoc.Close(True) : Catch : End Try
+                        End If
+                    End Try
+                    Return result
+                End If
+            End If
+            
+            ' Fallback: Check open drawings if cache miss
             For Each d As Document In app.Documents
                 If d.DocumentType = DocumentTypeEnum.kDrawingDocumentObject Then
                     Dim dd As DrawingDocument = CType(d, DrawingDocument)
@@ -1020,39 +1051,6 @@ Public Module BOMExportLib
                     End If
                 End If
             Next
-
-            ' 2) Search from part folder up to assembly folder boundary (depth-first)
-            Dim startFolder As String = ""
-            Dim limitFolder As String = ""
-            Try : startFolder = System.IO.Path.GetDirectoryName(srcDoc.FullFileName) : Catch : End Try
-            Try : limitFolder = System.IO.Path.GetDirectoryName(asmDoc.FullFileName) : Catch : End Try
-            If String.IsNullOrEmpty(startFolder) OrElse Not System.IO.Directory.Exists(startFolder) Then
-                startFolder = limitFolder
-            End If
-            If String.IsNullOrEmpty(limitFolder) OrElse Not System.IO.Directory.Exists(limitFolder) Then
-                limitFolder = startFolder
-            End If
-            If String.IsNullOrEmpty(startFolder) OrElse String.IsNullOrEmpty(limitFolder) Then
-                Return result
-            End If
-
-            Dim foundPath As String = FindDrawingPathOnDisk(partNumber, app, startFolder, limitFolder, logLines, logger)
-            If Not String.IsNullOrEmpty(foundPath) Then
-                Dim drawDoc As DrawingDocument = Nothing
-                Dim openedByUs As Boolean = False
-                Try
-                    drawDoc = OpenOrGetDrawingDoc(app, foundPath, openedByUs)
-                    If drawDoc IsNot Nothing Then
-                        FillDrawingInfo(drawDoc, result)
-                        result.Found = True
-                        VLog("BOMExport: Found disk 1:1 drawing for part " & partNumber & " -> " & result.FileName, logLines, logger)
-                    End If
-                Finally
-                    If openedByUs AndAlso drawDoc IsNot Nothing Then
-                        Try : drawDoc.Close(True) : Catch : End Try
-                    End If
-                End Try
-            End If
         Catch ex As Exception
             VLog("BOMExport: Drawing lookup error for part " & partNumber & ": " & ex.Message, logLines, logger)
         End Try
