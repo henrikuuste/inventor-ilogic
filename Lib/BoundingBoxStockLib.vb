@@ -621,11 +621,30 @@ Public Module BoundingBoxStockLib
 
         Try
             For Each body As SurfaceBody In partDoc.ComponentDefinition.SurfaceBodies
+                ' Sample vertices
                 For Each vertex As Vertex In body.Vertices
                     Dim pt As Point = vertex.Point
                     Dim proj As Double = pt.X * dirX + pt.Y * dirY + pt.Z * dirZ
                     If proj < minProj Then minProj = proj
                     If proj > maxProj Then maxProj = proj
+                Next
+                ' Sample edge points to capture curved geometry
+                For Each edg As Edge In body.Edges
+                    Try
+                        Dim eval As CurveEvaluator = edg.Evaluator
+                        Dim minP As Double = 0, maxP As Double = 0
+                        Call eval.GetParamExtents(minP, maxP)
+                        For i As Integer = 0 To 4
+                            Dim params(0) As Double
+                            params(0) = minP + (maxP - minP) * i / 4
+                            Dim coords(2) As Double
+                            Call eval.GetPointAtParam(params, coords)
+                            Dim proj As Double = coords(0) * dirX + coords(1) * dirY + coords(2) * dirZ
+                            If proj < minProj Then minProj = proj
+                            If proj > maxProj Then maxProj = proj
+                        Next
+                    Catch
+                    End Try
                 Next
             Next
         Catch
@@ -637,16 +656,36 @@ Public Module BoundingBoxStockLib
 
     ''' <summary>
     ''' Oriented extent along (dirX,dirY,dirZ) for a single surface body only (e.g. Pinnalaotus thickened solid).
+    ''' Samples vertices and edge points to handle curved geometry correctly.
     ''' </summary>
     Public Function GetOrientedExtentForSurfaceBody(ByVal body As SurfaceBody, ByVal dirX As Double, ByVal dirY As Double, ByVal dirZ As Double) As Double
         Dim minProj As Double = Double.MaxValue
         Dim maxProj As Double = Double.MinValue
         Try
+            ' Sample vertices
             For Each vertex As Vertex In body.Vertices
                 Dim pt As Point = vertex.Point
                 Dim proj As Double = pt.X * dirX + pt.Y * dirY + pt.Z * dirZ
                 If proj < minProj Then minProj = proj
                 If proj > maxProj Then maxProj = proj
+            Next
+            ' Sample edge points to capture curved geometry
+            For Each edg As Edge In body.Edges
+                Try
+                    Dim eval As CurveEvaluator = edg.Evaluator
+                    Dim minP As Double = 0, maxP As Double = 0
+                    Call eval.GetParamExtents(minP, maxP)
+                    For i As Integer = 0 To 4
+                        Dim params(0) As Double
+                        params(0) = minP + (maxP - minP) * i / 4
+                        Dim coords(2) As Double
+                        Call eval.GetPointAtParam(params, coords)
+                        Dim proj As Double = coords(0) * dirX + coords(1) * dirY + coords(2) * dirZ
+                        If proj < minProj Then minProj = proj
+                        If proj > maxProj Then maxProj = proj
+                    Next
+                Catch
+                End Try
             Next
         Catch
         End Try
@@ -863,6 +902,78 @@ Public Module BoundingBoxStockLib
             Catch
                 objName = txtWorkPlane
             End Try
+        Else
+            MessageBox.Show(txtSelectError, txtTitle)
+            Return ""
+        End If
+
+        planeDesc = objName & " (" & FormatVectorDesc(normalX, normalY, normalZ) & ")"
+        Return VectorToString(normalX, normalY, normalZ)
+    End Function
+
+    ''' <summary>
+    ''' Pick a planar face/work plane and return the normal vector. Also returns the parent body if a face was selected.
+    ''' </summary>
+    ''' <param name="pickedBody">Output: the SurfaceBody that contains the selected face (Nothing if work plane selected)</param>
+    Public Function PickPlaneForThicknessWithBody(ByVal app As Inventor.Application, ByRef planeDesc As String, _
+                                                   ByRef pickedBody As SurfaceBody, _
+                                                   Optional ByVal useEstonian As Boolean = False) As String
+        planeDesc = ""
+        pickedBody = Nothing
+
+        Dim txtPrompt As String = If(useEstonian, "Vali pind paksuse suuna määramiseks - ESC tühistamiseks", _
+                                     "Select a face to define the thickness direction - ESC to cancel")
+        Dim txtTitle As String = If(useEstonian, "Mõõdud", "Bounding Box Stock")
+        Dim txtFaceError As String = If(useEstonian, "Valitud pinnalt ei saanud normaali. Valige tasapinnaline pind.", _
+                                        "Could not get normal from selected face. Please select a planar face.")
+        Dim txtPlaneError As String = If(useEstonian, "Valitud töötasapinnalt ei saanud normaali.", _
+                                         "Could not get normal from selected work plane.")
+        Dim txtSelectError As String = If(useEstonian, "Valige pind või töötasapind.", _
+                                          "Please select a face or work plane.")
+        Dim txtFace As String = If(useEstonian, "Pind", "Face")
+        Dim txtWorkPlane As String = If(useEstonian, "Töötasapind", "Work Plane")
+        
+        Dim selFilter As SelectionFilterEnum = SelectionFilterEnum.kAllPlanarEntities
+        Dim selectedObj As Object = Nothing
+
+        Try
+            selectedObj = app.CommandManager.Pick(selFilter, txtPrompt)
+        Catch
+            Return ""
+        End Try
+
+        If selectedObj Is Nothing Then
+            Return ""
+        End If
+
+        Dim normalX As Double = 0, normalY As Double = 0, normalZ As Double = 0
+        Dim objName As String = ""
+
+        If TypeOf selectedObj Is Face Then
+            Dim face As Face = CType(selectedObj, Face)
+            If Not GetFaceNormal(face, normalX, normalY, normalZ) Then
+                MessageBox.Show(txtFaceError, txtTitle)
+                Return ""
+            End If
+            objName = txtFace
+            ' Get the parent body of the face
+            Try
+                pickedBody = CType(face.Parent, SurfaceBody)
+            Catch
+            End Try
+        ElseIf TypeOf selectedObj Is WorkPlane Then
+            Dim workPlane As WorkPlane = CType(selectedObj, WorkPlane)
+            If Not GetWorkPlaneNormal(workPlane, normalX, normalY, normalZ) Then
+                MessageBox.Show(txtPlaneError, txtTitle)
+                Return ""
+            End If
+            Try
+                objName = txtWorkPlane & ": " & workPlane.Name
+            Catch
+                objName = txtWorkPlane
+            End Try
+            ' No body for work plane
+            pickedBody = Nothing
         Else
             MessageBox.Show(txtSelectError, txtTitle)
             Return ""
@@ -1249,11 +1360,30 @@ Public Module BoundingBoxStockLib
         sb.AppendLine("")
         sb.AppendLine("    Try")
         sb.AppendLine("        For Each body As SurfaceBody In partDoc.ComponentDefinition.SurfaceBodies")
+        sb.AppendLine("            ' Sample vertices")
         sb.AppendLine("            For Each vertex As Vertex In body.Vertices")
         sb.AppendLine("                Dim pt As Point = vertex.Point")
         sb.AppendLine("                Dim proj As Double = pt.X * dirX + pt.Y * dirY + pt.Z * dirZ")
         sb.AppendLine("                If proj < minProj Then minProj = proj")
         sb.AppendLine("                If proj > maxProj Then maxProj = proj")
+        sb.AppendLine("            Next")
+        sb.AppendLine("            ' Sample edge points to capture curved geometry")
+        sb.AppendLine("            For Each edg As Edge In body.Edges")
+        sb.AppendLine("                Try")
+        sb.AppendLine("                    Dim ev As CurveEvaluator = edg.Evaluator")
+        sb.AppendLine("                    Dim minP As Double = 0, maxP As Double = 0")
+        sb.AppendLine("                    Call ev.GetParamExtents(minP, maxP)")
+        sb.AppendLine("                    For smp As Integer = 0 To 4")
+        sb.AppendLine("                        Dim params(0) As Double")
+        sb.AppendLine("                        params(0) = minP + (maxP - minP) * smp / 4")
+        sb.AppendLine("                        Dim crd(2) As Double")
+        sb.AppendLine("                        Call ev.GetPointAtParam(params, crd)")
+        sb.AppendLine("                        Dim eproj As Double = crd(0) * dirX + crd(1) * dirY + crd(2) * dirZ")
+        sb.AppendLine("                        If eproj < minProj Then minProj = eproj")
+        sb.AppendLine("                        If eproj > maxProj Then maxProj = eproj")
+        sb.AppendLine("                    Next")
+        sb.AppendLine("                Catch")
+        sb.AppendLine("                End Try")
         sb.AppendLine("            Next")
         sb.AppendLine("        Next")
         sb.AppendLine("    Catch")

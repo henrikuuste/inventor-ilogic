@@ -308,19 +308,49 @@ Public Module UnwrapLib
     
     ''' <summary>
     ''' Projected extent of one body along a direction (unit vector not required).
+    ''' Samples vertices and edge points to handle curved geometry correctly.
     ''' </summary>
     Public Function GetOrientedExtentForBody(body As SurfaceBody, dirX As Double, dirY As Double, dirZ As Double) As Double
         Dim minProj As Double = Double.MaxValue
         Dim maxProj As Double = Double.MinValue
+        
+        ' Helper to update min/max projections
+        Dim updateProj As Action(Of Double, Double, Double) = Sub(px As Double, py As Double, pz As Double)
+            Dim proj As Double = px * dirX + py * dirY + pz * dirZ
+            If proj < minProj Then minProj = proj
+            If proj > maxProj Then maxProj = proj
+        End Sub
+        
         Try
+            ' Sample vertices
             For Each vertex As Vertex In body.Vertices
                 Dim pt As Point = vertex.Point
-                Dim proj As Double = pt.X * dirX + pt.Y * dirY + pt.Z * dirZ
-                If proj < minProj Then minProj = proj
-                If proj > maxProj Then maxProj = proj
+                updateProj(pt.X, pt.Y, pt.Z)
+            Next
+            
+            ' Sample points along edges to capture curved geometry
+            For Each edge As Edge In body.Edges
+                Try
+                    Dim eval As CurveEvaluator = edge.Evaluator
+                    Dim minP As Double = 0, maxP As Double = 0
+                    Call eval.GetParamExtents(minP, maxP)
+                    
+                    ' Sample 5 points along each edge (including midpoint)
+                    Const SAMPLES As Integer = 5
+                    For i As Integer = 0 To SAMPLES - 1
+                        Dim params(0) As Double
+                        params(0) = minP + (maxP - minP) * i / (SAMPLES - 1)
+                        Dim coords(2) As Double
+                        Call eval.GetPointAtParam(params, coords)
+                        updateProj(coords(0), coords(1), coords(2))
+                    Next
+                Catch
+                    ' Fall back to edge start/end vertices (already captured above)
+                End Try
             Next
         Catch
         End Try
+        
         If minProj = Double.MaxValue Then Return 0
         Return maxProj - minProj
     End Function

@@ -13,12 +13,18 @@
 ' - Flip width/length
 ' - Pick a face for custom axis orientation
 '
-' Pinnalaotus (Unwrap) is detected from UnwrapFeatures, not from part SubType.
+' Pinnalaotus mode can be used:
+' 1. With UnwrapFeature: Telg defaults to Pinnalaotus, thickness from unwrap plane normal
+' 2. Without UnwrapFeature: User can select any solid body for measurements
+'
 ' If Unwrap exists, Telg defaults to Pinnalaotus but you can switch to Normal (gabariit)
 ' or Lehtmetall (flat pattern) when the part is sheet-metal subtype; choice is stored in BB_DimensionSource.
 ' Pinnalaotus thickness axis defaults to the unwrap flat surface plane normal; W/L come from that basis on
 ' the measurement body. If no planar unwrap face is found, falls back to smallest-extent heuristic on the body.
 ' Use "Vali pind" if the automatic thickness direction is wrong.
+'
+' Without Unwrap: User can still select Pinnalaotus mode and pick a solid body to measure.
+' Dimensions will be calculated from that body (smallest extent = thickness).
 '
 ' Sheet metal without Unwrap uses flat pattern for dimensions (Telg locked to Lehtmetall).
 ' Pure Pinnalaotus uses unwrap+thicken for dimensions.
@@ -138,10 +144,19 @@ Sub Main()
                     Logger.Info("Mõõdud: Pinnalaotus body not found for '" & partNames(pickRowIndex) & "', prompting user")
                     pinnBody = PromptForPinnalaotusBody(partDoc)
                     If pinnBody Is Nothing Then
-                        ' User cancelled body selection
+                        ' User cancelled body selection - revert to Normal mode
+                        customAxisDescs(pickRowIndex) = ""
+                        thicknessAxes(pickRowIndex) = ""
+                        widthAxes(pickRowIndex) = ""
+                        lengthAxes(pickRowIndex) = ""
+                        AppendNormalPartAxisListsInPlace(partDoc, thicknessAxes, widthAxes, lengthAxes, customAxisDescs, pickRowIndex)
                         pickRowIndex = -1
                         Continue Do
                     End If
+                    ' Body selected - recalculate axes from body
+                    RecalculatePinnalaotusAxesFromBody(partDoc, pinnBody, thicknessAxes, widthAxes, lengthAxes, pickRowIndex)
+                    pickRowIndex = -1
+                    Continue Do
                 End If
             End If
             
@@ -149,7 +164,21 @@ Sub Main()
 
             Try
                 Dim planeDesc As String = ""
-                Dim pickedVector As String = BoundingBoxStockLib.PickPlaneForThickness(app, planeDesc, True)
+                Dim pickedBody As SurfaceBody = Nothing
+                Dim pickedVector As String = ""
+                
+                ' For Pinnalaotus mode, use the function that also captures the body
+                If customAxisDescs(pickRowIndex) = "Pinnalaotus" Then
+                    pickedVector = BoundingBoxStockLib.PickPlaneForThicknessWithBody(app, planeDesc, pickedBody, True)
+                    
+                    ' If a body was picked, store it as the measurement body
+                    If pickedVector <> "" AndAlso pickedBody IsNot Nothing Then
+                        UnwrapLib.SetManufacturedSolidBodyNameProperty(partDoc, pickedBody.Name)
+                        Logger.Info("Mõõdud: Selected body for Pinnalaotus: " & pickedBody.Name)
+                    End If
+                Else
+                    pickedVector = BoundingBoxStockLib.PickPlaneForThickness(app, planeDesc, True)
+                End If
                 
                 If pickedVector <> "" Then
                     thicknessAxes(pickRowIndex) = pickedVector
@@ -167,8 +196,8 @@ Sub Main()
                     Dim widthExtent As Double
                     Dim lengthExtent As Double
                     If customAxisDescs(pickRowIndex) = "Pinnalaotus" Then
-                        ' Use autodetect for Pinnalaotus body - never fall back to all-body measurement
-                        Dim measBody As SurfaceBody = TryAutoDetectPinnalaotusBody(partDoc)
+                        ' Use the picked body or auto-detected body for measurement
+                        Dim measBody As SurfaceBody = If(pickedBody, TryAutoDetectPinnalaotusBody(partDoc))
                         If measBody IsNot Nothing Then
                             widthExtent = UnwrapLib.GetOrientedExtentForBody(measBody, wx, wy, wz)
                             lengthExtent = UnwrapLib.GetOrientedExtentForBody(measBody, lx, ly, lz)
@@ -313,6 +342,92 @@ Sub AppendNormalPartAxisLists(ByVal partDoc As PartDocument, _
 End Sub
 
 ' ============================================================================
+' Update existing list entries with normal part axis values (in-place)
+' ============================================================================
+Sub AppendNormalPartAxisListsInPlace(ByVal partDoc As PartDocument, _
+                                     ByVal thicknessAxes As List(Of String), _
+                                     ByVal widthAxes As List(Of String), _
+                                     ByVal lengthAxes As List(Of String), _
+                                     ByVal customAxisDescs As List(Of String), _
+                                     ByVal idx As Integer)
+    Dim thicknessAxis As String = ""
+    Dim widthAxis As String = ""
+    Dim lengthAxis As String = ""
+    Dim customAxisDesc As String = ""
+    
+    Dim xSize As Double = 0, ySize As Double = 0, zSize As Double = 0
+    BoundingBoxStockLib.GetBoundingBoxSizes(partDoc, xSize, ySize, zSize)
+    
+    If Not BoundingBoxStockLib.AutoDetectAxesFromGeometry(partDoc, thicknessAxis, widthAxis, lengthAxis) Then
+        BoundingBoxStockLib.AutoDetectAxes(xSize, ySize, zSize, thicknessAxis, widthAxis, lengthAxis)
+    End If
+    
+    If BoundingBoxStockLib.IsVectorFormat(thicknessAxis) Then
+        Dim tx As Double = 0, ty As Double = 0, tz As Double = 0
+        BoundingBoxStockLib.ParseVectorComponents(thicknessAxis, tx, ty, tz)
+        customAxisDesc = "Auto (" & BoundingBoxStockLib.FormatVectorDesc(tx, ty, tz) & ")"
+    End If
+    
+    thicknessAxes(idx) = thicknessAxis
+    widthAxes(idx) = widthAxis
+    lengthAxes(idx) = lengthAxis
+    customAxisDescs(idx) = customAxisDesc
+End Sub
+
+' ============================================================================
+' Recalculate Pinnalaotus axes from a specific body (smallest extent = thickness)
+' ============================================================================
+Sub RecalculatePinnalaotusAxesFromBody(ByVal partDoc As PartDocument, _
+                                        ByVal body As SurfaceBody, _
+                                        ByVal thicknessAxes As List(Of String), _
+                                        ByVal widthAxes As List(Of String), _
+                                        ByVal lengthAxes As List(Of String), _
+                                        ByVal idx As Integer)
+    Try
+        ' Check for unwrap normal first
+        Dim unwrapF As UnwrapFeature = UnwrapLib.GetUnwrapFeature(partDoc)
+        Dim nx As Double = 0, ny As Double = 0, nz As Double = 0
+        Dim gotUnwrapNormal As Boolean = (unwrapF IsNot Nothing AndAlso UnwrapLib.TryGetUnwrapFlatSurfaceNormal(unwrapF, nx, ny, nz))
+        
+        If gotUnwrapNormal Then
+            ' Use unwrap surface normal as thickness direction
+            Dim tx As Double = nx, ty As Double = ny, tz As Double = nz
+            Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
+            Dim lx As Double = 0, ly As Double = 0, lz As Double = 0
+            BoundingBoxStockLib.ComputePerpendicularVectors(tx, ty, tz, wx, wy, wz, lx, ly, lz)
+            Dim wExt As Double = UnwrapLib.GetOrientedExtentForBody(body, wx, wy, wz)
+            Dim lExt As Double = UnwrapLib.GetOrientedExtentForBody(body, lx, ly, lz)
+            thicknessAxes(idx) = BoundingBoxStockLib.VectorToString(tx, ty, tz)
+            If lExt >= wExt Then
+                widthAxes(idx) = BoundingBoxStockLib.VectorToString(wx, wy, wz)
+                lengthAxes(idx) = BoundingBoxStockLib.VectorToString(lx, ly, lz)
+            Else
+                widthAxes(idx) = BoundingBoxStockLib.VectorToString(lx, ly, lz)
+                lengthAxes(idx) = BoundingBoxStockLib.VectorToString(wx, wy, wz)
+            End If
+        Else
+            ' No unwrap - use axis-aligned bounding box, smallest extent = thickness
+            Dim tg As String = "", wg As String = "", lg As String = ""
+            If BoundingBoxStockLib.AutoDetectAxesFromSurfaceBody(body, tg, wg, lg) Then
+                thicknessAxes(idx) = BoundingBoxStockLib.PrincipalAxisToVectorString(tg)
+                widthAxes(idx) = BoundingBoxStockLib.PrincipalAxisToVectorString(wg)
+                lengthAxes(idx) = BoundingBoxStockLib.PrincipalAxisToVectorString(lg)
+            Else
+                ' Fallback to X/Y/Z
+                thicknessAxes(idx) = "Z"
+                widthAxes(idx) = "X"
+                lengthAxes(idx) = "Y"
+            End If
+        End If
+    Catch ex As Exception
+        Logger.Warn("Mõõdud: Error calculating axes from body: " & ex.Message)
+        thicknessAxes(idx) = "Z"
+        widthAxes(idx) = "X"
+        lengthAxes(idx) = "Y"
+    End Try
+End Sub
+
+' ============================================================================
 ' Collect part data and auto-detect axes
 ' ============================================================================
 Sub CollectPartData(ByVal partDoc As PartDocument, _
@@ -333,8 +448,15 @@ Sub CollectPartData(ByVal partDoc As PartDocument, _
     If desc <> "" Then displayName &= " - " & desc
     partNames.Add(displayName)
     
-    If UnwrapLib.HasUnwrapFeature(partDoc) Then
-        Dim src As String = BoundingBoxStockLib.GetCustomPropertyValue(partDoc, UnwrapLib.PROP_DIMENSION_SOURCE, "")
+    ' Check dimension source and handle Pinnalaotus mode (works with or without Unwrap)
+    Dim hasUnwrap As Boolean = UnwrapLib.HasUnwrapFeature(partDoc)
+    Dim src As String = BoundingBoxStockLib.GetCustomPropertyValue(partDoc, UnwrapLib.PROP_DIMENSION_SOURCE, "")
+    Dim storedBodyName As String = UnwrapLib.GetManufacturedSolidBodyNameProperty(partDoc)
+    
+    ' Check if previously configured for Pinnalaotus (has stored body name)
+    Dim hasPinnalaotusConfig As Boolean = hasUnwrap OrElse (src = UnwrapLib.DIMENSION_SOURCE_PINNALAOTUS AndAlso Not String.IsNullOrWhiteSpace(storedBodyName))
+    
+    If hasUnwrap Then
         If src = UnwrapLib.DIMENSION_SOURCE_LEHTMETALL AndAlso IsSheetMetalPart(partDoc) Then
             thicknessAxes.Add("")
             widthAxes.Add("")
@@ -348,8 +470,10 @@ Sub CollectPartData(ByVal partDoc As PartDocument, _
             selectedFlags.Add(True)
             Exit Sub
         End If
-        
-        ' Default: Pinnalaotus (saved source empty, Pinnalaotus, or unknown)
+    End If
+    
+    ' Pinnalaotus mode - with Unwrap feature OR with stored body configuration
+    If hasPinnalaotusConfig Then
         Dim tAx As String = ""
         Dim wAx As String = ""
         Dim lAx As String = ""
@@ -362,7 +486,7 @@ Sub CollectPartData(ByVal partDoc As PartDocument, _
             Dim lx As Double = 0, ly As Double = 0, lz As Double = 0
             BoundingBoxStockLib.ParseVectorComponents(tAx, tx, ty, tz)
             BoundingBoxStockLib.ComputePerpendicularVectors(tx, ty, tz, wx, wy, wz, lx, ly, lz)
-            ' Use autodetect for correct Pinnalaotus body - never fall back to all-body measurement
+            ' Use autodetect for correct Pinnalaotus body
             Dim measBody As SurfaceBody = TryAutoDetectPinnalaotusBody(partDoc)
             Dim wExt As Double = 0, lExt As Double = 0
             If measBody IsNot Nothing Then
@@ -385,13 +509,13 @@ Sub CollectPartData(ByVal partDoc As PartDocument, _
                 lAx = BoundingBoxStockLib.VectorToString(wx, wy, wz)
             End If
         ElseIf Not (BoundingBoxStockLib.IsVectorFormat(tAx) AndAlso BoundingBoxStockLib.IsVectorFormat(wAx)) Then
-            ' Prefer unwrap flat surface plane normal as thickness; fallback = smallest-extent heuristic on measurement body
-            ' Use autodetect for correct body
+            ' Auto-detect axes from measurement body
             Dim measBodyAD As SurfaceBody = TryAutoDetectPinnalaotusBody(partDoc)
             Dim unwrapF As UnwrapFeature = UnwrapLib.GetUnwrapFeature(partDoc)
             Dim nx As Double = 0, ny As Double = 0, nz As Double = 0
             Dim gotUnwrapNormal As Boolean = (unwrapF IsNot Nothing AndAlso UnwrapLib.TryGetUnwrapFlatSurfaceNormal(unwrapF, nx, ny, nz))
             If gotUnwrapNormal AndAlso measBodyAD IsNot Nothing Then
+                ' Use unwrap surface normal as thickness direction
                 Dim tx As Double = nx, ty As Double = ny, tz As Double = nz
                 Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
                 Dim lx As Double = 0, ly As Double = 0, lz As Double = 0
@@ -407,6 +531,7 @@ Sub CollectPartData(ByVal partDoc As PartDocument, _
                     lAx = BoundingBoxStockLib.VectorToString(wx, wy, wz)
                 End If
             ElseIf measBodyAD IsNot Nothing Then
+                ' No unwrap normal - use smallest extent as thickness
                 Dim tg As String = "", wg As String = "", lg As String = ""
                 If BoundingBoxStockLib.AutoDetectAxesFromSurfaceBody(measBodyAD, tg, wg, lg) Then
                     tAx = BoundingBoxStockLib.PrincipalAxisToVectorString(tg)
@@ -521,25 +646,31 @@ End Function
 ' ============================================================================
 ' Auto-detect or prompt for Pinnalaotus measurement body
 ' Similar logic to Pinnalaotuse vaated.vb - finds the correct body to measure
+' Works with or without UnwrapFeature - can use any solid body
 ' ============================================================================
 Function TryAutoDetectPinnalaotusBody(ByVal partDoc As PartDocument) As SurfaceBody
-    ' 1. Try stored property first
-    Dim resolved As SurfaceBody = UnwrapLib.ResolveManufacturedSolidBody(partDoc)
-    If resolved IsNot Nothing Then Return resolved
+    ' 1. Try stored property first (works with or without Unwrap)
+    Dim propName As String = UnwrapLib.GetManufacturedSolidBodyNameProperty(partDoc)
+    If Not String.IsNullOrWhiteSpace(propName) Then
+        Dim resolved As SurfaceBody = UnwrapLib.FindSurfaceBodyByName(partDoc.ComponentDefinition, propName)
+        If resolved IsNot Nothing Then Return resolved
+    End If
     
-    ' 2. Try Thicken output
+    ' 2. Try Thicken output (if Unwrap exists)
     Dim thickBody As SurfaceBody = UnwrapLib.TryGetThickenManufacturedSolidBody(partDoc)
     If thickBody IsNot Nothing Then Return thickBody
     
-    ' 3. Find first non-unwrap-surface solid body (like Pinnalaotuse vaated.vb)
+    ' 3. Find first non-unwrap-surface solid body
     Dim unwrapFeat As UnwrapFeature = UnwrapLib.GetUnwrapFeature(partDoc)
-    If unwrapFeat Is Nothing Then Return Nothing
+    Dim unwrapSurf As SurfaceBody = Nothing
+    If unwrapFeat IsNot Nothing Then
+        unwrapSurf = UnwrapLib.GetUnwrappedSurfaceBody(unwrapFeat)
+    End If
     
-    Dim unwrapSurf As SurfaceBody = UnwrapLib.GetUnwrappedSurfaceBody(unwrapFeat)
     Dim compDef As PartComponentDefinition = partDoc.ComponentDefinition
     
     For Each body As SurfaceBody In compDef.SurfaceBodies
-        ' Skip the unwrap surface
+        ' Skip the unwrap surface if present
         If unwrapSurf IsNot Nothing Then
             Try
                 If ReferenceEquals(body, unwrapSurf) OrElse _
@@ -564,6 +695,7 @@ End Function
 
 ''' <summary>
 ''' Show body selection dialog for Pinnalaotus when autodetect fails.
+''' Works with or without UnwrapFeature - allows selecting any solid body.
 ''' Returns the selected body or Nothing if cancelled.
 ''' </summary>
 Function PromptForPinnalaotusBody(ByVal partDoc As PartDocument) As SurfaceBody
@@ -574,17 +706,29 @@ Function PromptForPinnalaotusBody(ByVal partDoc As PartDocument) As SurfaceBody
     Dim unwrapSurf As SurfaceBody = Nothing
     If unwrapFeat IsNot Nothing Then unwrapSurf = UnwrapLib.GetUnwrappedSurfaceBody(unwrapFeat)
     
+    ' Collect only solid bodies (have volume)
     For Each b As SurfaceBody In compDef.SurfaceBodies
-        bodies.Add(b)
+        Try
+            If b.Volume(0.01) > 0 Then bodies.Add(b)
+        Catch
+        End Try
     Next
     
     If bodies.Count = 0 Then
-        MessageBox.Show("Detailis pole ühtegi keha.", "Mõõdud")
+        MessageBox.Show("Detailis pole ühtegi tahkkeha.", "Mõõdud")
         Return Nothing
     End If
     
+    ' If only one solid body exists, use it automatically
+    If bodies.Count = 1 Then
+        Dim onlyBody As SurfaceBody = bodies(0)
+        UnwrapLib.SetManufacturedSolidBodyNameProperty(partDoc, onlyBody.Name)
+        Logger.Info("Mõõdud: Auto-selected single solid body: " & onlyBody.Name)
+        Return onlyBody
+    End If
+    
     Dim frm As New System.Windows.Forms.Form()
-    frm.Text = "Mõõdud — vali toodetud keha"
+    frm.Text = "Mõõdud — vali mõõdetav keha"
     frm.FormBorderStyle = FormBorderStyle.FixedDialog
     frm.StartPosition = FormStartPosition.CenterScreen
     frm.MinimizeBox = False
@@ -597,8 +741,13 @@ Function PromptForPinnalaotusBody(ByVal partDoc As PartDocument) As SurfaceBody
     lbl.Top = 12
     lbl.Width = 400
     lbl.Height = 48
-    lbl.Text = "Pinnalaotuse keha automaatne tuvastamine ebaõnnestus." & vbCrLf &
-               "Vali toodetud lame keha (Thicken või Extrude)."
+    If unwrapFeat IsNot Nothing Then
+        lbl.Text = "Pinnalaotuse keha automaatne tuvastamine ebaõnnestus." & vbCrLf &
+                   "Vali toodetud lame keha (Thicken või Extrude)."
+    Else
+        lbl.Text = "Vali tahkkeha, mille mõõtmeid arvutatakse." & vbCrLf &
+                   "Paksuse telg määratakse väikseima gabariidi järgi."
+    End If
     frm.Controls.Add(lbl)
     
     Dim cb As New System.Windows.Forms.ComboBox()
@@ -611,7 +760,7 @@ Function PromptForPinnalaotusBody(ByVal partDoc As PartDocument) As SurfaceBody
     Next
     frm.Controls.Add(cb)
     
-    ' Default to first non-unwrap body
+    ' Default to first non-unwrap solid body
     Dim defaultIdx As Integer = 0
     For i As Integer = 0 To bodies.Count - 1
         If unwrapSurf Is Nothing Then Exit For
@@ -657,7 +806,7 @@ Function PromptForPinnalaotusBody(ByVal partDoc As PartDocument) As SurfaceBody
     
     Dim chosen As SurfaceBody = bodies(selIdx)
     
-    ' Warn if user selected the unwrap surface
+    ' Warn if user selected the unwrap surface (only relevant when unwrap exists)
     If unwrapSurf IsNot Nothing Then
         Try
             If ReferenceEquals(chosen, unwrapSurf) OrElse _
@@ -909,6 +1058,16 @@ Function ShowBatchDialog(ByVal app As Inventor.Application, _
             customAxisDescs(idx) = "Lehtmetall"
             UpdateRowDisplayValues(dgv.Rows(e.RowIndex), partDocs(idx), thicknessAxes(idx), widthAxes(idx), lengthAxes(idx), customAxisDescs(idx))
         ElseIf newAxis = "Pinnalaotus" Then
+            ' Pinnalaotus works with or without Unwrap - prompt for body if needed
+            Dim pinnBody As SurfaceBody = TryAutoDetectPinnalaotusBody(partDocs(idx))
+            If pinnBody Is Nothing Then
+                ' Need to prompt for body selection - close dialog and trigger pick
+                SyncGridToLists(dgv, selectedFlags)
+                frm.Tag = idx
+                frm.DialogResult = DialogResult.Retry
+                frm.Close()
+                Exit Sub
+            End If
             thicknessAxes(idx) = ""
             widthAxes(idx) = ""
             lengthAxes(idx) = ""
@@ -1024,17 +1183,49 @@ Sub UpdateRowDisplayValues(ByVal row As DataGridViewRow, ByVal partDoc As PartDo
     Dim widthValue As Double = 0
     Dim lengthValue As Double = 0
     
-    ' Pinnalaotus only when selected (Unwrap may exist but user chose Normal or Lehtmetall)
+    ' Pinnalaotus: works with Unwrap+Thicken OR standalone body
     If customAxisDesc = "Pinnalaotus" Then
         Dim pt As Double = 0, pw As Double = 0, pl As Double = 0
+        
+        ' First try the classic Unwrap+Thicken path
         If UnwrapLib.GetPinnalaotusDimensions(partDoc, pt, pw, pl, thicknessAxis, widthAxis, lengthAxis) Then
             thicknessValue = pt
             widthValue = pw
             lengthValue = pl
-        ElseIf UnwrapLib.TryGetUnwrapSurfacePreviewExtents(partDoc, pw, pl) Then
-            thicknessValue = 0
-            widthValue = pw
-            lengthValue = pl
+        Else
+            ' No Unwrap or Thicken - try to use stored body directly
+            Dim pinnBody As SurfaceBody = TryAutoDetectPinnalaotusBody(partDoc)
+            If pinnBody IsNot Nothing Then
+                If BoundingBoxStockLib.IsVectorFormat(thicknessAxis) AndAlso BoundingBoxStockLib.IsVectorFormat(widthAxis) Then
+                    ' Use oriented measurement with stored axes
+                    Dim tx As Double = 0, ty As Double = 0, tz As Double = 0
+                    Dim wx As Double = 0, wy As Double = 0, wz As Double = 0
+                    Dim lx As Double = 0, ly As Double = 0, lz As Double = 0
+                    BoundingBoxStockLib.ParseVectorComponents(thicknessAxis, tx, ty, tz)
+                    BoundingBoxStockLib.ParseVectorComponents(widthAxis, wx, wy, wz)
+                    lx = ty * wz - tz * wy
+                    ly = tz * wx - tx * wz
+                    lz = tx * wy - ty * wx
+                    thicknessValue = UnwrapLib.GetOrientedExtentForBody(pinnBody, tx, ty, tz)
+                    widthValue = UnwrapLib.GetOrientedExtentForBody(pinnBody, wx, wy, wz)
+                    lengthValue = UnwrapLib.GetOrientedExtentForBody(pinnBody, lx, ly, lz)
+                Else
+                    ' Autodetect axes from body bounding box (smallest = thickness)
+                    Dim box As Box = pinnBody.RangeBox
+                    Dim sx As Double = Math.Abs(box.MaxPoint.X - box.MinPoint.X)
+                    Dim sy As Double = Math.Abs(box.MaxPoint.Y - box.MinPoint.Y)
+                    Dim sz As Double = Math.Abs(box.MaxPoint.Z - box.MinPoint.Z)
+                    Dim sorted() As Double = {sx, sy, sz}
+                    System.Array.Sort(sorted)
+                    thicknessValue = sorted(0)
+                    widthValue = sorted(1)
+                    lengthValue = sorted(2)
+                End If
+            ElseIf UnwrapLib.TryGetUnwrapSurfacePreviewExtents(partDoc, pw, pl) Then
+                thicknessValue = 0
+                widthValue = pw
+                lengthValue = pl
+            End If
         End If
     ElseIf String.IsNullOrEmpty(thicknessAxis) AndAlso IsSheetMetalPart(partDoc) Then
         ' Sheet metal: get dimensions from flat pattern
