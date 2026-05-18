@@ -60,6 +60,22 @@ Public Module CAMDrawingLib
     ' Backward compatibility alias
     Public Const DIMENSION_OFFSET As Double = DEFAULT_DIMENSION_OFFSET
     
+    ' Default projected views to create (all 5 orthographic projections)
+    ' Base view is always created; these are the projections from base
+    Public ReadOnly DEFAULT_PROJECTED_VIEWS As String() = {"Top", "Bottom", "Left", "Right", "Back"}
+    
+    ' Standard set without back view (4 projections)
+    Public ReadOnly PROJECTED_VIEWS_NO_BACK As String() = {"Top", "Bottom", "Left", "Right"}
+    
+    ' Helper to check if a view should be created
+    Private Function ShouldCreateView(viewName As String, viewsToCreate() As String) As Boolean
+        If viewsToCreate Is Nothing Then Return True
+        For Each v As String In viewsToCreate
+            If v.Equals(viewName, StringComparison.OrdinalIgnoreCase) Then Return True
+        Next
+        Return False
+    End Function
+    
     ' ============================================================================
     ' AttributeSet Constants for Tagging Auto-Generated Content
     ' Used to identify dimensions/views created by automation for smart updates
@@ -249,7 +265,8 @@ Public Module CAMDrawingLib
                                                    partDoc As PartDocument, _
                                                    app As Inventor.Application, _
                                                    views As List(Of DrawingView), _
-                                                   dimSpace As Double) As List(Of DrawingView)
+                                                   dimSpace As Double, _
+                                                   Optional viewsToCreate() As String = Nothing) As List(Of DrawingView)
         ' Get actual drawing view dimensions (in cm, at 1:1 scale)
         ' Use the view's Width and Height properties which reflect the actual on-sheet size
         Dim viewWidth As Double = baseView.Width    ' Horizontal extent on sheet (cm)
@@ -261,71 +278,87 @@ Public Module CAMDrawingLib
         
         UtilsLib.LogInfo("CAMDrawingLib: View dimensions on sheet: " & (viewWidth * 10).ToString("F1") & " x " & (viewHeight * 10).ToString("F1") & " mm, thickness: " & (thickness * 10).ToString("F2") & " mm")
         
+        ' Default to all views if not specified
+        If viewsToCreate Is Nothing Then viewsToCreate = DEFAULT_PROJECTED_VIEWS
+        
         Dim baseX As Double = baseView.Position.X
         Dim baseY As Double = baseView.Position.Y
+        Dim edgeCount As Integer = 0
         
-        ' Add Front view (above base - looking at edge)
-        Try
-            Dim frontY As Double = baseY + viewHeight / 2 + dimSpace + thickness / 2
-            Dim frontView As DrawingView = sheet.DrawingViews.AddProjectedView( _
-                baseView, _
-                app.TransientGeometry.CreatePoint2d(baseX, frontY), _
-                DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
-                Nothing)
-            Try : frontView.Name = "Front" : Catch : End Try
-            views.Add(frontView)
-            UtilsLib.LogInfo("CAMDrawingLib: Front edge view created")
-        Catch ex As Exception
-            UtilsLib.LogWarn("CAMDrawingLib: Failed to create Front view: " & ex.Message)
-        End Try
+        ' Add Front view (above base - looking at edge) - corresponds to "Top" in regular layout
+        If ShouldCreateView("Top", viewsToCreate) Then
+            Try
+                Dim frontY As Double = baseY + viewHeight / 2 + dimSpace + thickness / 2
+                Dim frontView As DrawingView = sheet.DrawingViews.AddProjectedView( _
+                    baseView, _
+                    app.TransientGeometry.CreatePoint2d(baseX, frontY), _
+                    DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
+                    Nothing)
+                Try : frontView.Name = "Front" : Catch : End Try
+                views.Add(frontView)
+                edgeCount += 1
+                UtilsLib.LogInfo("CAMDrawingLib: Front edge view created")
+            Catch ex As Exception
+                UtilsLib.LogWarn("CAMDrawingLib: Failed to create Front view: " & ex.Message)
+            End Try
+        End If
         
         ' Add Back view (below base - opposite edge)
-        Try
-            Dim backY As Double = baseY - viewHeight / 2 - dimSpace - thickness / 2
-            Dim backView As DrawingView = sheet.DrawingViews.AddProjectedView( _
-                baseView, _
-                app.TransientGeometry.CreatePoint2d(baseX, backY), _
-                DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
-                Nothing)
-            Try : backView.Name = "Back" : Catch : End Try
-            views.Add(backView)
-            UtilsLib.LogInfo("CAMDrawingLib: Back edge view created")
-        Catch ex As Exception
-            UtilsLib.LogWarn("CAMDrawingLib: Failed to create Back view: " & ex.Message)
-        End Try
+        If ShouldCreateView("Back", viewsToCreate) Then
+            Try
+                Dim backY As Double = baseY - viewHeight / 2 - dimSpace - thickness / 2
+                Dim backView As DrawingView = sheet.DrawingViews.AddProjectedView( _
+                    baseView, _
+                    app.TransientGeometry.CreatePoint2d(baseX, backY), _
+                    DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
+                    Nothing)
+                Try : backView.Name = "Back" : Catch : End Try
+                views.Add(backView)
+                edgeCount += 1
+                UtilsLib.LogInfo("CAMDrawingLib: Back edge view created")
+            Catch ex As Exception
+                UtilsLib.LogWarn("CAMDrawingLib: Failed to create Back view: " & ex.Message)
+            End Try
+        End If
         
         ' Add Left view (left of base - looking at edge)
-        Try
-            Dim leftX As Double = baseX - viewWidth / 2 - dimSpace - thickness / 2
-            Dim leftView As DrawingView = sheet.DrawingViews.AddProjectedView( _
-                baseView, _
-                app.TransientGeometry.CreatePoint2d(leftX, baseY), _
-                DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
-                Nothing)
-            Try : leftView.Name = "Left" : Catch : End Try
-            views.Add(leftView)
-            UtilsLib.LogInfo("CAMDrawingLib: Left edge view created")
-        Catch ex As Exception
-            UtilsLib.LogWarn("CAMDrawingLib: Failed to create Left view: " & ex.Message)
-        End Try
+        If ShouldCreateView("Left", viewsToCreate) Then
+            Try
+                Dim leftX As Double = baseX - viewWidth / 2 - dimSpace - thickness / 2
+                Dim leftView As DrawingView = sheet.DrawingViews.AddProjectedView( _
+                    baseView, _
+                    app.TransientGeometry.CreatePoint2d(leftX, baseY), _
+                    DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
+                    Nothing)
+                Try : leftView.Name = "Left" : Catch : End Try
+                views.Add(leftView)
+                edgeCount += 1
+                UtilsLib.LogInfo("CAMDrawingLib: Left edge view created")
+            Catch ex As Exception
+                UtilsLib.LogWarn("CAMDrawingLib: Failed to create Left view: " & ex.Message)
+            End Try
+        End If
         
         ' Add Right view (right of base - opposite edge)
-        Try
-            Dim rightX As Double = baseX + viewWidth / 2 + dimSpace + thickness / 2
-            Dim rightView As DrawingView = sheet.DrawingViews.AddProjectedView( _
-                baseView, _
-                app.TransientGeometry.CreatePoint2d(rightX, baseY), _
-                DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
-                Nothing)
-            Try : rightView.Name = "Right" : Catch : End Try
-            views.Add(rightView)
-            UtilsLib.LogInfo("CAMDrawingLib: Right edge view created")
-        Catch ex As Exception
-            UtilsLib.LogWarn("CAMDrawingLib: Failed to create Right view: " & ex.Message)
-        End Try
+        If ShouldCreateView("Right", viewsToCreate) Then
+            Try
+                Dim rightX As Double = baseX + viewWidth / 2 + dimSpace + thickness / 2
+                Dim rightView As DrawingView = sheet.DrawingViews.AddProjectedView( _
+                    baseView, _
+                    app.TransientGeometry.CreatePoint2d(rightX, baseY), _
+                    DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
+                    Nothing)
+                Try : rightView.Name = "Right" : Catch : End Try
+                views.Add(rightView)
+                edgeCount += 1
+                UtilsLib.LogInfo("CAMDrawingLib: Right edge view created")
+            Catch ex As Exception
+                UtilsLib.LogWarn("CAMDrawingLib: Failed to create Right view: " & ex.Message)
+            End Try
+        End If
         
         ' No Bottom view needed - for flat pattern, bottom is identical to top (Flat Pattern)
-        UtilsLib.LogInfo("CAMDrawingLib: Flat pattern views complete (5 total: Flat Pattern + 4 edges)")
+        UtilsLib.LogInfo("CAMDrawingLib: Flat pattern views complete (" & (edgeCount + 1) & " total: Flat Pattern + " & edgeCount & " edges)")
         
         Return views
     End Function
@@ -1322,7 +1355,8 @@ Public Module CAMDrawingLib
                                 app As Inventor.Application, _
                                 Optional dimOffsetCm As Double = DEFAULT_DIMENSION_OFFSET, _
                                 Optional viewGapCm As Double = DEFAULT_VIEW_GAP, _
-                                Optional forcePinnalaotusDvr As Boolean = False) As List(Of DrawingView)
+                                Optional forcePinnalaotusDvr As Boolean = False, _
+                                Optional viewsToCreate() As String = Nothing) As List(Of DrawingView)
         
         ' Get part dimensions for positioning (Pinnalaotus DVR: use measurement body, not full multibody extents)
         Dim partBox As Box = partDoc.ComponentDefinition.RangeBox
@@ -1383,11 +1417,11 @@ Public Module CAMDrawingLib
             Dim dimSpace As Double = CalculateViewSpacing(partDoc, dimOffsetCm, viewGapCm)
             Dim views As New List(Of DrawingView)
             views.Add(baseView)
-            Return AddFlatPatternProjectedViews(sheet, baseView, partDoc, app, views, dimSpace)
+            Return AddFlatPatternProjectedViews(sheet, baseView, partDoc, app, views, dimSpace, viewsToCreate)
         End If
         
         ' For regular parts: add all projected views using shared function
-        Return AddViewsToExistingBase(sheet, baseView, partDoc, app, dimOffsetCm, viewGapCm)
+        Return AddViewsToExistingBase(sheet, baseView, partDoc, app, dimOffsetCm, viewGapCm, viewsToCreate)
     End Function
     
     ' Create a base view with the specified orientation.
@@ -1645,13 +1679,14 @@ Public Module CAMDrawingLib
     ''' <summary>
     ''' Ordered list Front (base), Top, Bottom, Left, Right, Back for the part when present.
     ''' </summary>
-    Public Function CollectOrthographicViewsForPart(sheet As Sheet, partDoc As PartDocument) As List(Of DrawingView)
+    Public Function CollectOrthographicViewsForPart(sheet As Sheet, partDoc As PartDocument, _
+                                                     Optional viewsToCollect() As String = Nothing) As List(Of DrawingView)
         Dim result As New List(Of DrawingView)
         Dim baseV As DrawingView = FindOrthographicBaseViewForPart(sheet, partDoc)
         If baseV Is Nothing Then Return result
         result.Add(baseV)
-        Dim names As String() = {"Top", "Bottom", "Left", "Right", "Back"}
-        For Each nm As String In names
+        If viewsToCollect Is Nothing Then viewsToCollect = DEFAULT_PROJECTED_VIEWS
+        For Each nm As String In viewsToCollect
             Dim found As DrawingView = FindViewByName(sheet, nm)
             If found IsNot Nothing AndAlso DrawingViewReferencesPart(found, partDoc) Then result.Add(found)
         Next
@@ -1691,9 +1726,11 @@ Public Module CAMDrawingLib
                                                 partDoc As PartDocument, _
                                                 app As Inventor.Application, _
                                                 Optional dimOffsetCm As Double = DEFAULT_DIMENSION_OFFSET, _
-                                                Optional viewGapCm As Double = DEFAULT_VIEW_GAP)
+                                                Optional viewGapCm As Double = DEFAULT_VIEW_GAP, _
+                                                Optional viewsToCreate() As String = Nothing)
         If baseView Is Nothing Then Return
         If baseView.IsFlatPatternView Then Return
+        If viewsToCreate Is Nothing Then viewsToCreate = DEFAULT_PROJECTED_VIEWS
         
         Dim dimSpace As Double = CalculateViewSpacing(partDoc, dimOffsetCm, viewGapCm)
         Dim baseX As Double = baseView.Position.X
@@ -1701,7 +1738,7 @@ Public Module CAMDrawingLib
         Dim baseWidth As Double = baseView.Width
         Dim baseHeight As Double = baseView.Height
         
-        If FindViewByName(sheet, "Top") Is Nothing Then
+        If ShouldCreateView("Top", viewsToCreate) AndAlso FindViewByName(sheet, "Top") Is Nothing Then
             Try
                 Dim topY As Double = baseY + baseHeight / 2 + dimSpace + baseWidth / 2
                 Dim topView As DrawingView = sheet.DrawingViews.AddProjectedView( _
@@ -1717,7 +1754,7 @@ Public Module CAMDrawingLib
         End If
         
         Dim bottomView As DrawingView = FindViewByName(sheet, "Bottom")
-        If bottomView Is Nothing Then
+        If ShouldCreateView("Bottom", viewsToCreate) AndAlso bottomView Is Nothing Then
             Try
                 Dim bottomY As Double = baseY - baseHeight / 2 - dimSpace - baseWidth / 2
                 bottomView = sheet.DrawingViews.AddProjectedView( _
@@ -1732,7 +1769,7 @@ Public Module CAMDrawingLib
             End Try
         End If
         
-        If FindViewByName(sheet, "Left") Is Nothing Then
+        If ShouldCreateView("Left", viewsToCreate) AndAlso FindViewByName(sheet, "Left") Is Nothing Then
             Try
                 Dim leftX As Double = baseX - baseWidth / 2 - dimSpace - baseHeight / 2
                 Dim leftView As DrawingView = sheet.DrawingViews.AddProjectedView( _
@@ -1747,7 +1784,7 @@ Public Module CAMDrawingLib
             End Try
         End If
         
-        If FindViewByName(sheet, "Right") Is Nothing Then
+        If ShouldCreateView("Right", viewsToCreate) AndAlso FindViewByName(sheet, "Right") Is Nothing Then
             Try
                 Dim rightX As Double = baseX + baseWidth / 2 + dimSpace + baseHeight / 2
                 Dim rightView As DrawingView = sheet.DrawingViews.AddProjectedView( _
@@ -1762,20 +1799,22 @@ Public Module CAMDrawingLib
             End Try
         End If
         
-        bottomView = FindViewByName(sheet, "Bottom")
-        If FindViewByName(sheet, "Back") Is Nothing AndAlso bottomView IsNot Nothing Then
-            Try
-                Dim backY As Double = bottomView.Position.Y - bottomView.Height / 2 - dimSpace - baseHeight / 2
-                Dim backView As DrawingView = sheet.DrawingViews.AddProjectedView( _
-                    bottomView, app.TransientGeometry.CreatePoint2d(baseX, backY), _
-                    DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, Nothing)
-                Try : backView.Name = "Back" : Catch : End Try
-                Dim actualBackY As Double = bottomView.Position.Y - bottomView.Height / 2 - dimSpace - backView.Height / 2
-                backView.Position = app.TransientGeometry.CreatePoint2d(baseX, actualBackY)
-                UtilsLib.LogInfo("CAMDrawingLib: Added missing Back view")
-            Catch ex As Exception
-                UtilsLib.LogWarn("CAMDrawingLib: Failed to add Back view: " & ex.Message)
-            End Try
+        If ShouldCreateView("Back", viewsToCreate) Then
+            bottomView = FindViewByName(sheet, "Bottom")
+            If FindViewByName(sheet, "Back") Is Nothing AndAlso bottomView IsNot Nothing Then
+                Try
+                    Dim backY As Double = bottomView.Position.Y - bottomView.Height / 2 - dimSpace - baseHeight / 2
+                    Dim backView As DrawingView = sheet.DrawingViews.AddProjectedView( _
+                        bottomView, app.TransientGeometry.CreatePoint2d(baseX, backY), _
+                        DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, Nothing)
+                    Try : backView.Name = "Back" : Catch : End Try
+                    Dim actualBackY As Double = bottomView.Position.Y - bottomView.Height / 2 - dimSpace - backView.Height / 2
+                    backView.Position = app.TransientGeometry.CreatePoint2d(baseX, actualBackY)
+                    UtilsLib.LogInfo("CAMDrawingLib: Added missing Back view")
+                Catch ex As Exception
+                    UtilsLib.LogWarn("CAMDrawingLib: Failed to add Back view: " & ex.Message)
+                End Try
+            End If
         End If
     End Sub
     
@@ -1789,7 +1828,11 @@ Public Module CAMDrawingLib
                                                        drawDoc As DrawingDocument, _
                                                        Optional dimOffsetCm As Double = DEFAULT_DIMENSION_OFFSET, _
                                                        Optional viewGapCm As Double = DEFAULT_VIEW_GAP, _
-                                                       Optional forcePinnalaotusDvr As Boolean = False) As List(Of DrawingView)
+                                                       Optional forcePinnalaotusDvr As Boolean = False, _
+                                                       Optional viewsToCreate() As String = Nothing) As List(Of DrawingView)
+        ' Default to all views if not specified
+        If viewsToCreate Is Nothing Then viewsToCreate = DEFAULT_PROJECTED_VIEWS
+        
         Try
             partDoc.Activate()
         Catch
@@ -1797,21 +1840,21 @@ Public Module CAMDrawingLib
         
         If HasCompleteOrthographicLayoutForPart(sheet, partDoc) Then
             SyncPinnalaotusDesignViewsOnSheet(sheet, partDoc, drawDoc, forcePinnalaotusDvr)
-            Return CollectOrthographicViewsForPart(sheet, partDoc)
+            Return CollectOrthographicViewsForPart(sheet, partDoc, viewsToCreate)
         End If
         
         Dim baseView As DrawingView = FindOrthographicBaseViewForPart(sheet, partDoc)
         If baseView IsNot Nothing Then
-            AddMissingOrthographicProjections(sheet, baseView, partDoc, app, dimOffsetCm, viewGapCm)
+            AddMissingOrthographicProjections(sheet, baseView, partDoc, app, dimOffsetCm, viewGapCm, viewsToCreate)
             SyncPinnalaotusDesignViewsOnSheet(sheet, partDoc, drawDoc, forcePinnalaotusDvr)
-            Return CollectOrthographicViewsForPart(sheet, partDoc)
+            Return CollectOrthographicViewsForPart(sheet, partDoc, viewsToCreate)
         End If
         
         If sheet.DrawingViews.Count > 0 Then
             UtilsLib.LogWarn("CAMDrawingLib: No orthographic base found for this part on a non-empty sheet; adding full CAM view set.")
         End If
         
-        Dim created As List(Of DrawingView) = AddAllViews(sheet, partDoc, app, dimOffsetCm, viewGapCm, forcePinnalaotusDvr)
+        Dim created As List(Of DrawingView) = AddAllViews(sheet, partDoc, app, dimOffsetCm, viewGapCm, forcePinnalaotusDvr, viewsToCreate)
         SyncPinnalaotusDesignViewsOnSheet(sheet, partDoc, drawDoc, forcePinnalaotusDvr)
         Return created
     End Function
@@ -2667,6 +2710,169 @@ Public Module CAMDrawingLib
     ' Drawing type constants
     Public Const DRAWING_TYPE_1TO1 As String = "1:1"
     
+    ' ============================================================================
+    ' Drawing Cache - Build once, lookup many times
+    ' ============================================================================
+    
+    ' Entry in the drawing cache
+    Public Class DrawingCacheEntry
+        Public FullPath As String = ""
+        Public SourcePartNumber As String = ""
+        Public DrawingType As String = ""
+    End Class
+    
+    ' Cache of drawings indexed by BB_SourcePartNumber
+    ' Key: SourcePartNumber, Value: List of DrawingCacheEntry (could have multiple types)
+    Public Class DrawingCache
+        Private m_Entries As New Dictionary(Of String, List(Of DrawingCacheEntry))(StringComparer.OrdinalIgnoreCase)
+        Private m_ScanCount As Integer = 0
+        
+        Public ReadOnly Property Count As Integer
+            Get
+                Return m_Entries.Count
+            End Get
+        End Property
+        
+        Public ReadOnly Property ScannedFiles As Integer
+            Get
+                Return m_ScanCount
+            End Get
+        End Property
+        
+        Public Sub Add(entry As DrawingCacheEntry)
+            If entry Is Nothing OrElse String.IsNullOrEmpty(entry.SourcePartNumber) Then Return
+            
+            If Not m_Entries.ContainsKey(entry.SourcePartNumber) Then
+                m_Entries(entry.SourcePartNumber) = New List(Of DrawingCacheEntry)()
+            End If
+            m_Entries(entry.SourcePartNumber).Add(entry)
+        End Sub
+        
+        Public Sub IncrementScanCount()
+            m_ScanCount += 1
+        End Sub
+        
+        ' Find drawing by part number and optional type filter
+        Public Function Find(partNumber As String, Optional drawingType As String = "") As String
+            If String.IsNullOrEmpty(partNumber) Then Return ""
+            If Not m_Entries.ContainsKey(partNumber) Then Return ""
+            
+            Dim entries As List(Of DrawingCacheEntry) = m_Entries(partNumber)
+            For Each entry As DrawingCacheEntry In entries
+                If String.IsNullOrEmpty(drawingType) OrElse entry.DrawingType = drawingType Then
+                    Return entry.FullPath
+                End If
+            Next
+            Return ""
+        End Function
+        
+        ' Check if a drawing exists for a part number
+        Public Function HasDrawing(partNumber As String, Optional drawingType As String = "") As Boolean
+            Return Not String.IsNullOrEmpty(Find(partNumber, drawingType))
+        End Function
+    End Class
+    
+    ' Build a cache of all drawings in a folder tree
+    ' Scans all .idw files and extracts BB_SourcePartNumber and BB_DrawingType
+    Public Function BuildDrawingCache(searchRoot As String, app As Inventor.Application) As DrawingCache
+        Dim cache As New DrawingCache()
+        
+        If String.IsNullOrEmpty(searchRoot) OrElse Not System.IO.Directory.Exists(searchRoot) Then
+            UtilsLib.LogWarn("CAMDrawingLib: Cannot build cache - folder does not exist: " & searchRoot)
+            Return cache
+        End If
+        
+        UtilsLib.LogInfo("CAMDrawingLib: Building drawing cache from " & searchRoot & "...")
+        
+        ' First add all open drawings to cache (fast, no file I/O)
+        For Each doc As Document In app.Documents
+            If doc.DocumentType = DocumentTypeEnum.kDrawingDocumentObject Then
+                Dim drawDoc As DrawingDocument = CType(doc, DrawingDocument)
+                If String.IsNullOrEmpty(drawDoc.FullDocumentName) Then Continue For
+                If drawDoc.FullDocumentName.IndexOf("\OldVersions\", StringComparison.OrdinalIgnoreCase) >= 0 Then Continue For
+                
+                ' Only include if within search root
+                If drawDoc.FullDocumentName.StartsWith(searchRoot, StringComparison.OrdinalIgnoreCase) Then
+                    Dim entry As New DrawingCacheEntry()
+                    entry.FullPath = drawDoc.FullDocumentName
+                    entry.SourcePartNumber = GetPartNumberFromDrawing(drawDoc)
+                    entry.DrawingType = GetDrawingType(drawDoc)
+                    
+                    If Not String.IsNullOrEmpty(entry.SourcePartNumber) Then
+                        cache.Add(entry)
+                    End If
+                End If
+            End If
+        Next
+        
+        ' Then scan disk for additional drawings
+        ScanFolderForDrawings(searchRoot, app, cache)
+        
+        UtilsLib.LogInfo("CAMDrawingLib: Cache built - " & cache.Count & " unique part numbers from " & cache.ScannedFiles & " files")
+        Return cache
+    End Function
+    
+    ' Recursively scan a folder for .idw files
+    Private Sub ScanFolderForDrawings(folderPath As String, app As Inventor.Application, cache As DrawingCache)
+        If String.IsNullOrEmpty(folderPath) Then Return
+        If Not System.IO.Directory.Exists(folderPath) Then Return
+        If folderPath.IndexOf("\OldVersions", StringComparison.OrdinalIgnoreCase) >= 0 Then Return
+        
+        Try
+            ' Scan .idw files in current folder
+            Dim files() As String = System.IO.Directory.GetFiles(folderPath, "*.idw", System.IO.SearchOption.TopDirectoryOnly)
+            For Each filePath As String In files
+                If filePath.IndexOf("\OldVersions\", StringComparison.OrdinalIgnoreCase) >= 0 Then Continue For
+                
+                cache.IncrementScanCount()
+                
+                ' Check if already in cache (from open documents)
+                Dim alreadyCached As Boolean = False
+                For Each doc As Document In app.Documents
+                    If doc.FullDocumentName.Equals(filePath, StringComparison.OrdinalIgnoreCase) Then
+                        alreadyCached = True
+                        Exit For
+                    End If
+                Next
+                If alreadyCached Then Continue For
+                
+                ' Open, extract properties, close
+                Try
+                    Dim drawDoc As DrawingDocument = CType(app.Documents.Open(filePath, False), DrawingDocument)
+                    
+                    Dim entry As New DrawingCacheEntry()
+                    entry.FullPath = filePath
+                    entry.SourcePartNumber = GetPartNumberFromDrawing(drawDoc)
+                    entry.DrawingType = GetDrawingType(drawDoc)
+                    
+                    drawDoc.Close(True)
+                    
+                    If Not String.IsNullOrEmpty(entry.SourcePartNumber) Then
+                        cache.Add(entry)
+                    End If
+                Catch ex As Exception
+                    UtilsLib.LogWarn("CAMDrawingLib: Error reading " & System.IO.Path.GetFileName(filePath) & ": " & ex.Message)
+                End Try
+            Next
+            
+            ' Recurse into subfolders
+            Dim subDirs() As String = System.IO.Directory.GetDirectories(folderPath)
+            For Each subDir As String In subDirs
+                ScanFolderForDrawings(subDir, app, cache)
+            Next
+            
+        Catch ex As Exception
+            ' Ignore access errors for individual folders
+        End Try
+    End Sub
+    
+    ' Find drawing using cache (fast lookup)
+    Public Function FindDrawingFromCache(cache As DrawingCache, partNumber As String, _
+                                          Optional drawingType As String = "") As String
+        If cache Is Nothing Then Return ""
+        Return cache.Find(partNumber, drawingType)
+    End Function
+    
     ' Get Part Number from a part document (from Design Tracking Properties)
     Public Function GetPartNumber(partDoc As PartDocument) As String
         Try
@@ -3003,7 +3209,8 @@ Public Module CAMDrawingLib
                                             partDoc As PartDocument, _
                                             app As Inventor.Application, _
                                             Optional dimOffsetCm As Double = DEFAULT_DIMENSION_OFFSET, _
-                                            Optional viewGapCm As Double = DEFAULT_VIEW_GAP) As List(Of DrawingView)
+                                            Optional viewGapCm As Double = DEFAULT_VIEW_GAP, _
+                                            Optional viewsToCreate() As String = Nothing) As List(Of DrawingView)
         Dim views As New List(Of DrawingView)
         views.Add(baseView)
         
@@ -3019,93 +3226,104 @@ Public Module CAMDrawingLib
         
         UtilsLib.LogInfo("CAMDrawingLib: Base view: " & baseView.Name & " at (" & FormatNumber(baseX * 10, 1) & ", " & FormatNumber(baseY * 10, 1) & ")")
         
+        ' Default to all views if not specified
+        If viewsToCreate Is Nothing Then viewsToCreate = DEFAULT_PROJECTED_VIEWS
+        
         ' Check if this is a flat pattern view (sheet metal)
         If baseView.IsFlatPatternView Then
             UtilsLib.LogInfo("CAMDrawingLib: Base view is flat pattern - adding edge views only")
-            Return AddFlatPatternProjectedViews(sheet, baseView, partDoc, app, views, dimSpace)
+            Return AddFlatPatternProjectedViews(sheet, baseView, partDoc, app, views, dimSpace, viewsToCreate)
         End If
         
         ' Add Top view (above base)
-        Try
-            Dim topY As Double = baseY + baseHeight / 2 + dimSpace + baseWidth / 2
-            Dim topView As DrawingView = sheet.DrawingViews.AddProjectedView( _
-                baseView, _
-                app.TransientGeometry.CreatePoint2d(baseX, topY), _
-                DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
-                Nothing)
-            Try : topView.Name = "Top" : Catch : End Try
-            
-            ' Reposition based on actual view size
-            Dim actualTopY As Double = baseY + baseHeight / 2 + dimSpace + topView.Height / 2
-            topView.Position = app.TransientGeometry.CreatePoint2d(baseX, actualTopY)
-            
-            views.Add(topView)
-            UtilsLib.LogInfo("CAMDrawingLib: Top view created")
-        Catch ex As Exception
-            UtilsLib.LogWarn("CAMDrawingLib: Failed to create Top view: " & ex.Message)
-        End Try
+        If ShouldCreateView("Top", viewsToCreate) Then
+            Try
+                Dim topY As Double = baseY + baseHeight / 2 + dimSpace + baseWidth / 2
+                Dim topView As DrawingView = sheet.DrawingViews.AddProjectedView( _
+                    baseView, _
+                    app.TransientGeometry.CreatePoint2d(baseX, topY), _
+                    DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
+                    Nothing)
+                Try : topView.Name = "Top" : Catch : End Try
+                
+                ' Reposition based on actual view size
+                Dim actualTopY As Double = baseY + baseHeight / 2 + dimSpace + topView.Height / 2
+                topView.Position = app.TransientGeometry.CreatePoint2d(baseX, actualTopY)
+                
+                views.Add(topView)
+                UtilsLib.LogInfo("CAMDrawingLib: Top view created")
+            Catch ex As Exception
+                UtilsLib.LogWarn("CAMDrawingLib: Failed to create Top view: " & ex.Message)
+            End Try
+        End If
         
         ' Add Bottom view (below base)
         Dim bottomView As DrawingView = Nothing
-        Try
-            Dim bottomY As Double = baseY - baseHeight / 2 - dimSpace - baseWidth / 2
-            bottomView = sheet.DrawingViews.AddProjectedView( _
-                baseView, _
-                app.TransientGeometry.CreatePoint2d(baseX, bottomY), _
-                DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
-                Nothing)
-            Try : bottomView.Name = "Bottom" : Catch : End Try
-            
-            Dim actualBottomY As Double = baseY - baseHeight / 2 - dimSpace - bottomView.Height / 2
-            bottomView.Position = app.TransientGeometry.CreatePoint2d(baseX, actualBottomY)
-            
-            views.Add(bottomView)
-            UtilsLib.LogInfo("CAMDrawingLib: Bottom view created")
-        Catch ex As Exception
-            UtilsLib.LogWarn("CAMDrawingLib: Failed to create Bottom view: " & ex.Message)
-        End Try
+        If ShouldCreateView("Bottom", viewsToCreate) Then
+            Try
+                Dim bottomY As Double = baseY - baseHeight / 2 - dimSpace - baseWidth / 2
+                bottomView = sheet.DrawingViews.AddProjectedView( _
+                    baseView, _
+                    app.TransientGeometry.CreatePoint2d(baseX, bottomY), _
+                    DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
+                    Nothing)
+                Try : bottomView.Name = "Bottom" : Catch : End Try
+                
+                Dim actualBottomY As Double = baseY - baseHeight / 2 - dimSpace - bottomView.Height / 2
+                bottomView.Position = app.TransientGeometry.CreatePoint2d(baseX, actualBottomY)
+                
+                views.Add(bottomView)
+                UtilsLib.LogInfo("CAMDrawingLib: Bottom view created")
+            Catch ex As Exception
+                UtilsLib.LogWarn("CAMDrawingLib: Failed to create Bottom view: " & ex.Message)
+            End Try
+        End If
         
         ' Add Left view (left of base)
-        Try
-            Dim leftX As Double = baseX - baseWidth / 2 - dimSpace - baseHeight / 2
-            Dim leftView As DrawingView = sheet.DrawingViews.AddProjectedView( _
-                baseView, _
-                app.TransientGeometry.CreatePoint2d(leftX, baseY), _
-                DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
-                Nothing)
-            Try : leftView.Name = "Left" : Catch : End Try
-            
-            Dim actualLeftX As Double = baseX - baseWidth / 2 - dimSpace - leftView.Width / 2
-            leftView.Position = app.TransientGeometry.CreatePoint2d(actualLeftX, baseY)
-            
-            views.Add(leftView)
-            UtilsLib.LogInfo("CAMDrawingLib: Left view created")
-        Catch ex As Exception
-            UtilsLib.LogWarn("CAMDrawingLib: Failed to create Left view: " & ex.Message)
-        End Try
+        If ShouldCreateView("Left", viewsToCreate) Then
+            Try
+                Dim leftX As Double = baseX - baseWidth / 2 - dimSpace - baseHeight / 2
+                Dim leftView As DrawingView = sheet.DrawingViews.AddProjectedView( _
+                    baseView, _
+                    app.TransientGeometry.CreatePoint2d(leftX, baseY), _
+                    DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
+                    Nothing)
+                Try : leftView.Name = "Left" : Catch : End Try
+                
+                Dim actualLeftX As Double = baseX - baseWidth / 2 - dimSpace - leftView.Width / 2
+                leftView.Position = app.TransientGeometry.CreatePoint2d(actualLeftX, baseY)
+                
+                views.Add(leftView)
+                UtilsLib.LogInfo("CAMDrawingLib: Left view created")
+            Catch ex As Exception
+                UtilsLib.LogWarn("CAMDrawingLib: Failed to create Left view: " & ex.Message)
+            End Try
+        End If
         
         ' Add Right view (right of base)
-        Try
-            Dim rightX As Double = baseX + baseWidth / 2 + dimSpace + baseHeight / 2
-            Dim rightView As DrawingView = sheet.DrawingViews.AddProjectedView( _
-                baseView, _
-                app.TransientGeometry.CreatePoint2d(rightX, baseY), _
-                DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
-                Nothing)
-            Try : rightView.Name = "Right" : Catch : End Try
-            
-            Dim actualRightX As Double = baseX + baseWidth / 2 + dimSpace + rightView.Width / 2
-            rightView.Position = app.TransientGeometry.CreatePoint2d(actualRightX, baseY)
-            
-            views.Add(rightView)
-            UtilsLib.LogInfo("CAMDrawingLib: Right view created")
-        Catch ex As Exception
-            UtilsLib.LogWarn("CAMDrawingLib: Failed to create Right view: " & ex.Message)
-        End Try
+        If ShouldCreateView("Right", viewsToCreate) Then
+            Try
+                Dim rightX As Double = baseX + baseWidth / 2 + dimSpace + baseHeight / 2
+                Dim rightView As DrawingView = sheet.DrawingViews.AddProjectedView( _
+                    baseView, _
+                    app.TransientGeometry.CreatePoint2d(rightX, baseY), _
+                    DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle, _
+                    Nothing)
+                Try : rightView.Name = "Right" : Catch : End Try
+                
+                Dim actualRightX As Double = baseX + baseWidth / 2 + dimSpace + rightView.Width / 2
+                rightView.Position = app.TransientGeometry.CreatePoint2d(actualRightX, baseY)
+                
+                views.Add(rightView)
+                UtilsLib.LogInfo("CAMDrawingLib: Right view created")
+            Catch ex As Exception
+                UtilsLib.LogWarn("CAMDrawingLib: Failed to create Right view: " & ex.Message)
+            End Try
+        End If
         
         ' Add Back view (below Bottom view)
         ' Projecting from Bottom preserves scale and uses vertical layout
-        If bottomView IsNot Nothing Then
+        If ShouldCreateView("Back", viewsToCreate) AndAlso bottomView IsNot Nothing Then
             Try
                 Dim backY As Double = bottomView.Position.Y - bottomView.Height / 2 - dimSpace - baseHeight / 2
                 Dim backView As DrawingView = sheet.DrawingViews.AddProjectedView( _

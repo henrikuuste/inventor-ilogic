@@ -21,11 +21,12 @@ Public Module FileSearchLib
         Return path.Split(System.IO.Path.DirectorySeparatorChar).Length
     End Function
     
-    ' Calculate minimum search depth (vaultRoot + 2 levels)
-    ' Search will not go above this depth
+    ' Calculate minimum search depth (vaultRoot + 1 level)
+    ' This allows searching across sibling aluselements within the same project
+    ' (e.g., part in Nurk can find drawing in Selg KT)
     Public Function GetMinSearchDepth(vaultRoot As String) As Integer
         If String.IsNullOrEmpty(vaultRoot) Then Return 2
-        Return GetPathDepth(vaultRoot) + 2
+        Return GetPathDepth(vaultRoot) + 1
     End Function
     
     ' Check if a folder path should be skipped (OldVersions, etc.)

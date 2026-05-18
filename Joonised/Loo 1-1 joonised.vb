@@ -39,6 +39,18 @@ Imports System.Windows.Forms
 Imports Inventor
 
 Sub Main()
+    ' ========================================================================
+    ' Configuration - customize drawing creation behavior
+    ' ========================================================================
+    ' Projected views to create (base view is always created)
+    ' Use CAMDrawingLib.DEFAULT_PROJECTED_VIEWS for all views: {"Top", "Bottom", "Left", "Right", "Back"}
+    ' Use CAMDrawingLib.PROJECTED_VIEWS_NO_BACK for no back view: {"Top", "Bottom", "Left", "Right"}
+    Dim VIEWS_TO_CREATE() As String = CAMDrawingLib.PROJECTED_VIEWS_NO_BACK
+    
+    ' Set to True to add extent dimensions to all views
+    Const INCLUDE_EXTENT_DIMENSIONS As Boolean = False
+    ' ========================================================================
+    
     If Not AppRuntime.Initialize(ThisApplication) Then Return
     
     Dim app As Inventor.Application = ThisApplication
@@ -79,13 +91,14 @@ Sub Main()
         workspaceRoot = VaultNumberingLib.DetectWorkspaceRoot(vaultConn, docFolder)
     End If
     
-    ' Collect part data: List of (PartDocument, PartNumber, DisplayName, HasDrawing, Selected)
+    ' Collect part data: List of (PartDocument, PartNumber, DisplayName, HasDrawing, Selected, AluselementName)
     ' Using parallel lists instead of custom class to avoid iLogic type exposure issues
     Dim partDocs As New List(Of PartDocument)
     Dim partNumbers As New List(Of String)
     Dim displayNames As New List(Of String)
     Dim hasDrawings As New List(Of Boolean)
     Dim selectedFlags As New List(Of Boolean)
+    Dim aluselementNames As New List(Of String)
     
     If docType = DocumentTypeEnum.kPartDocumentObject Then
         ' Single part
@@ -95,6 +108,7 @@ Sub Main()
         displayNames.Add(GetDescription(partDoc))
         hasDrawings.Add(False)
         selectedFlags.Add(True)
+        aluselementNames.Add(GetAluselementName(partDoc.FullDocumentName))
     Else
         ' Assembly - get unique parts from occurrences
         Dim asmDoc As AssemblyDocument = CType(doc, AssemblyDocument)
@@ -122,6 +136,12 @@ Sub Main()
         
         For Each occ As ComponentOccurrence In occurrencesToProcess
             Try
+                ' Skip suppressed parts (respects current model state)
+                If occ.Suppressed Then Continue For
+                
+                ' Skip BOM Reference parts (not included in Bill of Materials)
+                If occ.BOMStructure = BOMStructureEnum.kReferenceBOMStructure Then Continue For
+                
                 If occ.DefinitionDocumentType = DocumentTypeEnum.kPartDocumentObject Then
                     Dim partPath As String = occ.ReferencedFileDescriptor.FullFileName
                     If Not partPaths.Contains(partPath) Then
@@ -132,6 +152,7 @@ Sub Main()
                         displayNames.Add(GetDescription(partDoc))
                         hasDrawings.Add(False)
                         selectedFlags.Add(True)
+                        aluselementNames.Add(GetAluselementName(partPath))
                     End If
                 End If
             Catch
@@ -156,19 +177,18 @@ Sub Main()
         existingDrawingPaths.Add("")
     Next
     
-    ' Search for existing drawings using depth-first search
-    ' vaultRoot = project folder (search boundary), startPath = document folder (starting point)
+    ' Build drawing cache once for fast lookups
     Dim projectPath As String = UtilsLib.GetProjectPath(outputFolder)
     Dim vaultRoot As String = If(Not String.IsNullOrEmpty(projectPath), projectPath, outputFolder)
-    UtilsLib.LogInfo("Loo 1:1 joonised: Drawing search - start: " & outputFolder & ", limit: " & vaultRoot)
+    UtilsLib.LogInfo("Loo 1:1 joonised: Building drawing cache from: " & vaultRoot)
     
-    ' Check for existing 1:1 drawings (in open documents and on disk)
+    Dim drawingCache As CAMDrawingLib.DrawingCache = CAMDrawingLib.BuildDrawingCache(vaultRoot, app)
+    
+    ' Check for existing 1:1 drawings using cache (fast lookups)
     For i As Integer = 0 To partDocs.Count - 1
         If Not String.IsNullOrEmpty(partNumbers(i)) Then
-            ' Get part's folder as start path for depth-first search
-            Dim partFolder As String = System.IO.Path.GetDirectoryName(partDocs(i).FullDocumentName)
-            Dim foundPath As String = CAMDrawingLib.FindDrawingForPart( _
-                partNumbers(i), vaultRoot, app, CAMDrawingLib.DRAWING_TYPE_1TO1, True, partFolder)
+            Dim foundPath As String = CAMDrawingLib.FindDrawingFromCache( _
+                drawingCache, partNumbers(i), CAMDrawingLib.DRAWING_TYPE_1TO1)
             
             If Not String.IsNullOrEmpty(foundPath) Then
                 hasDrawings(i) = True
@@ -182,7 +202,7 @@ Sub Main()
     
     Dim frm As New System.Windows.Forms.Form()
     frm.Text = "Loo 1:1 joonised"
-    frm.Width = 800
+    frm.Width = 900
     frm.Height = 500
     frm.StartPosition = FormStartPosition.CenterScreen
     frm.FormBorderStyle = FormBorderStyle.Sizable
@@ -206,7 +226,7 @@ Sub Main()
     dgv.Name = "dgvParts"
     dgv.Left = 10
     dgv.Top = currentY
-    dgv.Width = 760
+    dgv.Width = 860
     dgv.Height = 280
     dgv.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right Or AnchorStyles.Bottom
     dgv.AllowUserToAddRows = False
@@ -239,6 +259,14 @@ Sub Main()
     colName.ReadOnly = True
     dgv.Columns.Add(colName)
     
+    ' Column: Aluselement
+    Dim colAluselement As New DataGridViewTextBoxColumn()
+    colAluselement.Name = "colAluselement"
+    colAluselement.HeaderText = "Aluselement"
+    colAluselement.Width = 120
+    colAluselement.ReadOnly = True
+    dgv.Columns.Add(colAluselement)
+    
     ' Column: Action (ComboBox)
     Dim colAction As New DataGridViewComboBoxColumn()
     colAction.Name = "colAction"
@@ -247,11 +275,11 @@ Sub Main()
     colAction.FlatStyle = FlatStyle.Flat
     dgv.Columns.Add(colAction)
     
-    ' Column: Existing Drawing (shows filename if exists)
+    ' Column: Existing Drawing (shows relative path from product family root)
     Dim colDrawing As New DataGridViewTextBoxColumn()
     colDrawing.Name = "colDrawing"
     colDrawing.HeaderText = "Olemasolev joonis"
-    colDrawing.Width = 270
+    colDrawing.Width = 220
     colDrawing.ReadOnly = True
     dgv.Columns.Add(colDrawing)
     
@@ -264,6 +292,7 @@ Sub Main()
         dgv.Rows(rowIndex).Cells("colSelected").Value = selectedFlags(i) AndAlso Not hasDrawings(i)
         dgv.Rows(rowIndex).Cells("colPartNum").Value = If(String.IsNullOrEmpty(partNumbers(i)), "(puudub)", partNumbers(i))
         dgv.Rows(rowIndex).Cells("colName").Value = displayNames(i)
+        dgv.Rows(rowIndex).Cells("colAluselement").Value = aluselementNames(i)
         
         ' Set up combo box items based on whether drawing exists
         Dim actionCell As DataGridViewComboBoxCell = CType(dgv.Rows(rowIndex).Cells("colAction"), DataGridViewComboBoxCell)
@@ -271,8 +300,8 @@ Sub Main()
             actionCell.Items.Add("Uuenda")
             actionCell.Items.Add("Loo uus")
             actionCell.Value = "Uuenda"
-            ' Show existing drawing filename
-            dgv.Rows(rowIndex).Cells("colDrawing").Value = System.IO.Path.GetFileName(existingDrawingPaths(i))
+            ' Show existing drawing path relative to product family structure
+            dgv.Rows(rowIndex).Cells("colDrawing").Value = GetProductFamilyRelativePath(existingDrawingPaths(i))
         Else
             actionCell.Items.Add("Loo uus")
             actionCell.Value = "Loo uus"
@@ -366,14 +395,14 @@ Sub Main()
     txtOutput.Text = outputFolder
     txtOutput.Left = 95
     txtOutput.Top = currentY
-    txtOutput.Width = 620
+    txtOutput.Width = 720
     txtOutput.ReadOnly = True
     txtOutput.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
     frm.Controls.Add(txtOutput)
     
     Dim btnBrowseOutput As New System.Windows.Forms.Button()
     btnBrowseOutput.Text = "..."
-    btnBrowseOutput.Left = 720
+    btnBrowseOutput.Left = 820
     btnBrowseOutput.Top = currentY
     btnBrowseOutput.Width = 40
     btnBrowseOutput.Height = 23
@@ -395,7 +424,7 @@ Sub Main()
     ' OK/Cancel buttons
     Dim btnOK As New System.Windows.Forms.Button()
     btnOK.Text = "Käivita"
-    btnOK.Left = 590
+    btnOK.Left = 690
     btnOK.Top = currentY
     btnOK.Width = 100
     btnOK.Height = 28
@@ -406,7 +435,7 @@ Sub Main()
     
     Dim btnCancel As New System.Windows.Forms.Button()
     btnCancel.Text = "Tühista"
-    btnCancel.Left = 695
+    btnCancel.Left = 795
     btnCancel.Top = currentY
     btnCancel.Width = 70
     btnCancel.Height = 28
@@ -502,11 +531,16 @@ Sub Main()
             ' Sync properties from part to drawing
             CAMDrawingLib.CopyPropertiesToDrawing(partDoc, existingDrawDoc)
             ' Ensure orthographic views exist and Pinnalaotus (manufactured) DVR is applied when applicable
-            CAMDrawingLib.EnsureOrthographicCamViewsForPart(existingSheet, partDoc, app, existingDrawDoc)
+            Dim existingViews As List(Of DrawingView) = CAMDrawingLib.EnsureOrthographicCamViewsForPart( _
+                existingSheet, partDoc, app, existingDrawDoc, _
+                viewsToCreate := VIEWS_TO_CREATE)
+            
             ' Reposition views (geometry may have changed)
             CAMDrawingLib.RepositionViews(existingSheet, app)
             ' Update tagged extent dimensions
-            CAMDrawingLib.UpdateTaggedExtentDimensions(existingDrawDoc, existingSheet, app)
+            If INCLUDE_EXTENT_DIMENSIONS Then
+                CAMDrawingLib.UpdateTaggedExtentDimensions(existingDrawDoc, existingSheet, app)
+            End If
             ' Fit sheet to content
             CAMDrawingLib.FitSheetToContent(existingSheet, app)
             ' Save
@@ -533,14 +567,19 @@ Sub Main()
         ' Set drawing association (copies properties + sets BB_SourcePartNumber)
         CAMDrawingLib.SetDrawingAssociation(newDrawDoc, partDoc)
         ' Reuse existing orthographic views when present; otherwise create (shared with Pinnalaotuse vaated)
-        Dim views As List(Of DrawingView) = CAMDrawingLib.EnsureOrthographicCamViewsForPart(newSheet, partDoc, app, newDrawDoc)
+        Dim views As List(Of DrawingView) = CAMDrawingLib.EnsureOrthographicCamViewsForPart( _
+            newSheet, partDoc, app, newDrawDoc, _
+            viewsToCreate := VIEWS_TO_CREATE)
+        
         ' Tag views as auto-generated (for future smart updates)
         For Each view As DrawingView In views
             CAMDrawingLib.TagAutoGeneratedView(view)
         Next
         
         ' Add extent dimensions to all views (dimensions are auto-tagged)
-        CAMDrawingLib.AddExtentDimensionsToViews(newSheet, views, app)
+        If INCLUDE_EXTENT_DIMENSIONS Then
+            CAMDrawingLib.AddExtentDimensionsToViews(newSheet, views, app)
+        End If
         ' Fit sheet to content with 50% padding
         CAMDrawingLib.FitSheetToContent(newSheet, app, 0.5)
         ' Generate filename based on part name (Vault will assign number on save)
@@ -583,4 +622,49 @@ Function GetDescription(partDoc As PartDocument) As String
     Catch
     End Try
     Return partDoc.DisplayName
+End Function
+
+Function GetAluselementName(filePath As String) As String
+    ' Extract the aluselement name from file path
+    ' Expected structure: .../Aluselemendid/<ElementName>/...
+    Try
+        Dim normalizedPath As String = filePath.Replace("/", "\")
+        Dim parts() As String = normalizedPath.Split("\"c)
+        
+        For i As Integer = 0 To parts.Length - 2
+            If parts(i).Equals("Aluselemendid", StringComparison.OrdinalIgnoreCase) Then
+                ' Return the folder name immediately after "Aluselemendid"
+                Return parts(i + 1)
+            End If
+        Next
+    Catch
+    End Try
+    Return ""
+End Function
+
+Function GetProductFamilyRelativePath(filePath As String) As String
+    ' Extract relative path starting from product family folder structure
+    ' Known root folders: Aluselemendid, Elemendid, Algmaterjal, Moodulid, Alusmoodulid, Ühine
+    Try
+        Dim normalizedPath As String = filePath.Replace("/", "\")
+        Dim parts() As String = normalizedPath.Split("\"c)
+        
+        Dim rootFolders() As String = {"Aluselemendid", "Elemendid", "Algmaterjal", "Moodulid", "Alusmoodulid", "Ühine"}
+        
+        For i As Integer = 0 To parts.Length - 1
+            For Each rootFolder As String In rootFolders
+                If parts(i).Equals(rootFolder, StringComparison.OrdinalIgnoreCase) Then
+                    ' Return path from this folder onwards
+                    Dim relativeParts As New List(Of String)
+                    For j As Integer = i To parts.Length - 1
+                        relativeParts.Add(parts(j))
+                    Next
+                    Return String.Join("\", relativeParts.ToArray())
+                End If
+            Next
+        Next
+    Catch
+    End Try
+    ' Fallback to filename only
+    Return System.IO.Path.GetFileName(filePath)
 End Function
