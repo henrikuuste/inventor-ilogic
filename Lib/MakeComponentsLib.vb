@@ -239,11 +239,43 @@ Public Module MakeComponentsLib
     
     ' Save body data to master document properties
     ' Paths are stored relative to projectRoot for portability across workstations
+    ' SAFETY: Non-empty paths in existing data are preserved if new path is empty
     Public Sub SaveBodyDataToMaster(masterDoc As PartDocument, _
                                     bodies As System.Collections.Generic.List(Of BodyInfo), _
                                     projectRoot As String)
         Try
             Dim userProps As PropertySet = masterDoc.PropertySets.Item("Inventor User Defined Properties")
+            
+            ' SAFETY CHECK: Load existing paths before clearing
+            ' This prevents accidental loss of body-to-part links
+            Dim existingPaths As New System.Collections.Generic.Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
+            Dim existingCustomFolders As New System.Collections.Generic.Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
+            
+            Try
+                Dim oldCountStr As String = GetPropertyValue(userProps, PROP_PREFIX & "Count", "0")
+                Dim oldCount As Integer = 0
+                Integer.TryParse(oldCountStr, oldCount)
+                
+                For j As Integer = 0 To oldCount - 1
+                    Dim oldPrefix As String = PROP_PREFIX & j.ToString() & "_"
+                    Dim oldName As String = GetPropertyValue(userProps, oldPrefix & "Name", "")
+                    Dim oldPath As String = GetPropertyValue(userProps, oldPrefix & "Part", "")
+                    Dim oldCustom As String = GetPropertyValue(userProps, oldPrefix & "OutCustom", "")
+                    
+                    If Not String.IsNullOrEmpty(oldName) AndAlso Not String.IsNullOrEmpty(oldPath) Then
+                        existingPaths(oldName) = oldPath
+                    End If
+                    If Not String.IsNullOrEmpty(oldName) AndAlso Not String.IsNullOrEmpty(oldCustom) Then
+                        existingCustomFolders(oldName) = oldCustom
+                    End If
+                Next
+                
+                If existingPaths.Count > 0 Then
+                    UtilsLib.LogInfo("MakeComponentsLib: Loaded " & existingPaths.Count & " existing path(s) for safety check")
+                End If
+            Catch
+                ' Ignore errors reading existing data
+            End Try
             
             ' Clear old properties
             ClearBodyProperties(userProps)
@@ -252,6 +284,7 @@ Public Module MakeComponentsLib
             SetOrAddProperty(userProps, PROP_PREFIX & "Count", bodies.Count.ToString())
             
             ' Save each body's data
+            Dim preservedCount As Integer = 0
             For i As Integer = 0 To bodies.Count - 1
                 Dim bi As BodyInfo = bodies(i)
                 Dim prefix As String = PROP_PREFIX & i.ToString() & "_"
@@ -264,12 +297,30 @@ Public Module MakeComponentsLib
                 SetOrAddProperty(userProps, prefix & "SM", If(bi.ConvertToSheetMetal, "1", "0"))
                 SetOrAddProperty(userProps, prefix & "Mat", bi.MaterialName)
                 SetOrAddProperty(userProps, prefix & "OutRoute", bi.OutputRoute)
-                SetOrAddProperty(userProps, prefix & "OutCustom", ToRelativeProjectPath(bi.CustomOutputFolder, projectRoot))
+                
+                ' SAFETY: Preserve existing custom folder if new one is empty
+                Dim customFolder As String = bi.CustomOutputFolder
+                If String.IsNullOrEmpty(customFolder) AndAlso existingCustomFolders.ContainsKey(bi.Name) Then
+                    customFolder = ToAbsoluteProjectPath(existingCustomFolders(bi.Name), projectRoot)
+                End If
+                SetOrAddProperty(userProps, prefix & "OutCustom", ToRelativeProjectPath(customFolder, projectRoot))
                 
                 ' Convert absolute path to relative for storage
-                Dim relativePath As String = ToRelativeProjectPath(bi.CreatedPartPath, projectRoot)
+                ' SAFETY: If new path is empty but we had an existing path, preserve the existing path
+                Dim pathToSave As String = bi.CreatedPartPath
+                If String.IsNullOrEmpty(pathToSave) AndAlso existingPaths.ContainsKey(bi.Name) Then
+                    pathToSave = ToAbsoluteProjectPath(existingPaths(bi.Name), projectRoot)
+                    preservedCount += 1
+                    UtilsLib.LogWarn("MakeComponentsLib: PRESERVED existing path for '" & bi.Name & "' (would have been lost)")
+                End If
+                
+                Dim relativePath As String = ToRelativeProjectPath(pathToSave, projectRoot)
                 SetOrAddProperty(userProps, prefix & "Part", relativePath)
             Next
+            
+            If preservedCount > 0 Then
+                UtilsLib.LogWarn("MakeComponentsLib: Safety check preserved " & preservedCount & " existing path(s) from being cleared")
+            End If
             
             UtilsLib.LogInfo("MakeComponentsLib: Saved data for " & bodies.Count & " bodies to master")
         Catch ex As Exception

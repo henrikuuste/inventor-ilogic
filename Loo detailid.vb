@@ -118,20 +118,9 @@ Sub Main()
     End If
     
     ' Get all bodies with detected axes
-    Dim allBodies As List(Of MakeComponentsLib.BodyInfo) = MakeComponentsLib.GetBodiesWithAxes(masterDoc)
-    
-    ' Filter to selected bodies if any were selected
-    Dim bodies As List(Of MakeComponentsLib.BodyInfo)
-    If selectedBodyNames.Count > 0 Then
-        bodies = New List(Of MakeComponentsLib.BodyInfo)
-        For Each bi As MakeComponentsLib.BodyInfo In allBodies
-            If selectedBodyNames.Contains(bi.Name) Then
-                bodies.Add(bi)
-            End If
-        Next
-    Else
-        bodies = allBodies
-    End If
+    ' IMPORTANT: We always work with ALL bodies to preserve existing links
+    ' The Selected property controls which bodies are processed for part creation
+    Dim bodies As List(Of MakeComponentsLib.BodyInfo) = MakeComponentsLib.GetBodiesWithAxes(masterDoc)
     
     ' Load stored settings from master document
     Dim storedData As List(Of MakeComponentsLib.StoredBodyData) = _
@@ -153,6 +142,16 @@ Sub Main()
     
     If storedData.Count > 0 Then
         MakeComponentsLib.ApplyStoredDataToBodies(bodies, storedData, masterFolder, vaultRoot, projectRoot)
+    End If
+    
+    ' If user pre-selected specific bodies, mark only those as Selected (for processing)
+    ' This overrides the default behavior where existing parts have Selected=False
+    ' Bodies not in the selection will have Selected=False but keep their stored data
+    If selectedBodyNames.Count > 0 Then
+        For Each bi As MakeComponentsLib.BodyInfo In bodies
+            bi.Selected = selectedBodyNames.Contains(bi.Name)
+        Next
+        UtilsLib.LogInfo("Loo detailid: Pre-selection applied - " & selectedBodyNames.Count & " body(ies) selected")
     End If
     
     ' Load general settings (template, subfolder, project, assembly)
